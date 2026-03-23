@@ -9,9 +9,13 @@
   git checkout dev && git pull origin dev && git checkout -b feature/my-feature
   ```
 - PRs for features/fixes target `dev`. PRs from `dev` to `master` are release merges.
-- When creating a pull request that fixes issues, always include `Fixes #X` (or `Closes #X`) in the **PR description body** (not just in commit messages), so GitHub auto-closes the issues on merge.
+- **IMPORTANT: `Fixes #X` / `Closes #X` only goes in the `dev` → `master` release PR**, not in feature/fix → dev PRs. GitHub only auto-closes issues when merged into the **default branch (master)**. Feature PRs into `dev` should reference issues with `Relates to #X` instead.
 - Put each `Fixes` on its own line (comma-separated may not auto-close all issues):
   ```
+  # feature/fix PR → dev (does NOT close issues):
+  Relates to #5 — Bug: Pantone type filter ignored when searching by hex value
+
+  # dev → master release PR (CLOSES issues):
   Fixes #5 — Bug: Pantone type filter ignored when searching by hex value
   Fixes #6 — Bug: Toast messages can stack and interfere
   ```
