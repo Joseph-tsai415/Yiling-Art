@@ -1318,7 +1318,6 @@
     <div class="container">
         <h1>🎨 Brand Color Palette Generator</h1>
         <p class="subtitle">Create harmonized palettes with Pantone matching for print</p>
-        <p class="subtitle" style="margin-top: -24px; font-size: 0.75rem;">v3.1</p>
 
         <div class="main-grid">
             <!-- Left Panel - Input -->
@@ -3425,5 +3424,9 @@
     </script>
     <!-- Floating comparison overlay (separate layer, fully opaque) -->
     <div id="compareOverlay" class="pantone-compare-overlay"></div>
+    <div style="position: fixed; bottom: 8px; left: 12px; font-size: 0.7rem; color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
+        <span style="pointer-events: none;">v3.1</span>
+        <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener" style="color: var(--text-muted); text-decoration: none; opacity: 0.7; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">GitHub</a>
+    </div>
 </body>
 </html>
