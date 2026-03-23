@@ -105,4 +105,10 @@ The page header uses your palette colors in a golden-ratio-inspired proportion b
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch strategy, PR guidelines, and development workflow.
+
+---
+
 *Generated with the Brand Color Palette Generator — a zero-install designer tool for color matching, accessibility, and print production.*
