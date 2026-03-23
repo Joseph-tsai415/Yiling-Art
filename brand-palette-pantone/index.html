@@ -2591,14 +2591,21 @@
             });
         });
 
+        let sliderSaveTimeout;
         document.getElementById('saturationSlider').addEventListener('input', (e) => {
             document.getElementById('satValue').textContent = `${e.target.value}%`;
-            try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
+            clearTimeout(sliderSaveTimeout);
+            sliderSaveTimeout = setTimeout(() => {
+                try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
+            }, 500);
         });
 
         document.getElementById('brightnessSlider').addEventListener('input', (e) => {
             document.getElementById('brightValue').textContent = `${e.target.value}%`;
-            try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
+            clearTimeout(sliderSaveTimeout);
+            sliderSaveTimeout = setTimeout(() => {
+                try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
+            }, 500);
         });
 
         document.getElementById('generateBtn').addEventListener('click', () => {
