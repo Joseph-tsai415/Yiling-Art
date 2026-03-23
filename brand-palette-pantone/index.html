@@ -344,9 +344,19 @@
             transition: all 0.3s ease;
         }
 
-        .add-color-btn:hover {
+        .add-color-btn:hover:not(:disabled) {
             border-color: #4982cf;
             color: #4982cf;
+        }
+
+        .add-color-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .hex-input.invalid {
+            border-color: #f87171 !important;
+            box-shadow: 0 0 0 1px #f87171;
         }
 
         /* Presets */
@@ -1534,7 +1544,7 @@
         let colorIdCounter = 0;
 
         function saveColors() {
-            try { localStorage.setItem('bpg-colors', JSON.stringify(userColors.map(c => c.hex))); } catch(e) {}
+            try { localStorage.setItem('bpg-colors', JSON.stringify(userColors.map(c => c.hex))); } catch(e) { console.warn('Failed to save colors to localStorage:', e.message); }
         }
 
         async function copyToClipboard(text) {
@@ -2063,6 +2073,10 @@
 
         // UI Functions
         function addColor(hex = null) {
+            if (userColors.length >= 8) {
+                showToast('Maximum 8 colors allowed');
+                return;
+            }
             const id = colorIdCounter++;
             const color = hex || getRandomColor();
             userColors.push({ id, hex: color });
@@ -2109,6 +2123,10 @@
             addBtn.className = 'add-color-btn';
             addBtn.innerHTML = '+';
             addBtn.onclick = () => addColor();
+            if (userColors.length >= 8) {
+                addBtn.disabled = true;
+                addBtn.title = 'Maximum 8 colors allowed';
+            }
             container.appendChild(addBtn);
 
             // Events
@@ -2128,7 +2146,13 @@
                         const id = parseInt(e.target.dataset.id);
                         updateColor(id, val);
                         e.target.closest('.color-item').querySelector('.color-picker').value = val;
+                        e.target.classList.remove('invalid');
+                    } else if (val.length > 1) {
+                        e.target.classList.add('invalid');
                     }
+                });
+                input.addEventListener('blur', (e) => {
+                    e.target.classList.remove('invalid');
                 });
             });
 
@@ -2540,7 +2564,7 @@
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.mood-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                try { localStorage.setItem('bpg-mood', btn.dataset.mood); } catch(e) {}
+                try { localStorage.setItem('bpg-mood', btn.dataset.mood); } catch(e) { console.warn('Failed to save mood to localStorage:', e.message); }
             });
         });
 
@@ -2617,6 +2641,10 @@
         // PDF Export — Professional Design Report
         function exportPdf(sections) {
             sections = sections || { cover:true, specs:true, pantone:true, accessibility:true, application:true, reference:true };
+            if (!window.jspdf) {
+                showToast('PDF library failed to load. Please check your internet connection and reload the page.');
+                return;
+            }
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
             const pw = 210, ph = 297, mx = 18, mxr = 192;
@@ -3497,7 +3525,7 @@
 
             // Need at least one section
             const anySelected = Object.values(sections).some(v => v);
-            if (!anySelected) { alert('Please select at least one section.'); return; }
+            if (!anySelected) { showToast('Please select at least one section.'); return; }
 
             const btn = document.getElementById('pdfGenerateBtn');
             btn.disabled = true;
@@ -3509,7 +3537,7 @@
                     exportPdf(sections);
                 } catch (e) {
                     console.error('PDF export error:', e);
-                    alert('PDF export failed. Please ensure colors are generated first.');
+                    showToast('PDF export failed. Please ensure colors are generated first.');
                 }
                 btn.disabled = false;
                 btn.textContent = 'Generate PDF';
@@ -3529,7 +3557,7 @@
             const isLight = root.classList.toggle('light-mode');
             document.getElementById('themeIcon').textContent = isLight ? '🌙' : '☀️';
             document.getElementById('themeToggle').title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
-            try { localStorage.setItem('bpg-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+            try { localStorage.setItem('bpg-theme', isLight ? 'light' : 'dark'); } catch(e) { console.warn('Failed to save theme to localStorage:', e.message); }
         });
 
         // Initialize — restore persisted state
