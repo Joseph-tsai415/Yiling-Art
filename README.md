@@ -2,6 +2,8 @@
 
 A lightweight, single-file HTML tool for designers to generate harmonious color palettes, find the closest Pantone matches, analyze WCAG accessibility, and export professional PDF reports — all running entirely in the browser with zero installation.
 
+**[Live Demo](https://joseph-tsai415.github.io/Yiling-Art/brand-palette-pantone/)**
+
 ---
 
 ## Features
