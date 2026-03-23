@@ -149,6 +149,60 @@
             .main-grid {
                 grid-template-columns: 1fr;
             }
+            .panel-right {
+                height: auto;
+                max-height: none;
+                min-height: 400px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 12px 8px;
+            }
+            h1 {
+                font-size: 1.4rem;
+            }
+            .panel {
+                padding: 12px;
+                border-radius: 12px;
+            }
+            .tabs {
+                flex-wrap: wrap;
+            }
+            .tab-btn {
+                font-size: 0.75rem;
+                padding: 8px 6px;
+            }
+            .colors-container {
+                min-height: 70px;
+                padding: 8px;
+                gap: 8px;
+            }
+            .presets-row {
+                gap: 6px;
+            }
+            .preset-btn {
+                font-size: 0.7rem;
+                padding: 6px 8px;
+            }
+            .mood-buttons {
+                gap: 6px;
+            }
+            .mood-btn {
+                font-size: 0.7rem;
+                padding: 6px 8px;
+            }
+            .generate-btn {
+                font-size: 0.85rem;
+                padding: 12px;
+            }
+            .pantone-search {
+                flex-direction: column;
+            }
+            .pantone-search select {
+                width: 100%;
+            }
         }
 
         .panel {
@@ -1457,6 +1511,9 @@
         // Combine all Pantone colors
         const allPantone = [...pantoneCoated, ...pantoneUncoated];
 
+        // Pre-compute Lab values for all Pantone colors for faster matching
+        const pantoneLabCache = new Map();
+
         // State
         let userColors = [];
         let currentPalettes = [];
@@ -1643,14 +1700,17 @@
         }
 
         // Find closest Pantone colors with Lab breakdown
-        function findClosestPantone(hex, count = 3) {
+        function findClosestPantone(hex, count = 3, sourceColors = allPantone) {
             const rgb1 = hexToRgb(hex);
             const lab1 = rgbToLab(rgb1.r, rgb1.g, rgb1.b);
-            const matches = allPantone.map(p => {
-                const rgb2 = hexToRgb(p.hex);
-                const lab2 = rgbToLab(rgb2.r, rgb2.g, rgb2.b);
+            const matches = sourceColors.map(p => {
+                let lab2 = pantoneLabCache.get(p.hex);
+                if (!lab2) {
+                    const rgb2 = hexToRgb(p.hex);
+                    lab2 = rgbToLab(rgb2.r, rgb2.g, rgb2.b);
+                    pantoneLabCache.set(p.hex, lab2);
+                }
                 const delta = ciede2000(lab1.l, lab1.a, lab1.b, lab2.l, lab2.a, lab2.b);
-                // Compute individual L/C/H differences for breakdown
                 const c1 = Math.sqrt(lab1.a * lab1.a + lab1.b * lab1.b);
                 const c2 = Math.sqrt(lab2.a * lab2.a + lab2.b * lab2.b);
                 const h1 = Math.atan2(lab1.b, lab1.a) * 180 / Math.PI;
@@ -1668,7 +1728,6 @@
                     labMatch: lab2
                 };
             }).sort((a, b) => a.delta - b.delta);
-
             return matches.slice(0, count);
         }
 
