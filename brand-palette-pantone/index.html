@@ -595,11 +595,11 @@
         .breakdown-ok { color: var(--bd-ok); }
         .breakdown-poor { color: var(--bd-poor); }
         /* Quality badge backgrounds */
-        .q-exact-badge { background: color-mix(in srgb, var(--q-exact) 15%, transparent); color: var(--q-exact); }
-        .q-excellent-badge { background: color-mix(in srgb, var(--q-excellent) 15%, transparent); color: var(--q-excellent); }
-        .q-good-badge { background: color-mix(in srgb, var(--q-good) 15%, transparent); color: var(--q-good); }
-        .q-acceptable-badge { background: color-mix(in srgb, var(--q-acceptable) 15%, transparent); color: var(--q-acceptable); }
-        .q-poor-badge { background: color-mix(in srgb, var(--q-poor) 15%, transparent); color: var(--q-poor); }
+        .q-exact-badge { background: rgba(74, 222, 128, 0.15); background: color-mix(in srgb, var(--q-exact) 15%, transparent); color: var(--q-exact); }
+        .q-excellent-badge { background: rgba(134, 239, 172, 0.15); background: color-mix(in srgb, var(--q-excellent) 15%, transparent); color: var(--q-excellent); }
+        .q-good-badge { background: rgba(250, 204, 21, 0.15); background: color-mix(in srgb, var(--q-good) 15%, transparent); color: var(--q-good); }
+        .q-acceptable-badge { background: rgba(251, 146, 60, 0.15); background: color-mix(in srgb, var(--q-acceptable) 15%, transparent); color: var(--q-acceptable); }
+        .q-poor-badge { background: rgba(248, 113, 113, 0.15); background: color-mix(in srgb, var(--q-poor) 15%, transparent); color: var(--q-poor); }
         /* Legend dot backgrounds */
         .q-exact-bg { background: var(--q-exact); }
         .q-excellent-bg { background: var(--q-excellent); }
@@ -1362,7 +1362,7 @@
             color: var(--text-secondary);
         }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
     <!-- Dark/Light mode toggle -->
@@ -1526,7 +1526,7 @@
                 r: parseInt(result[1], 16),
                 g: parseInt(result[2], 16),
                 b: parseInt(result[3], 16)
-            } : null;
+            } : { r: 0, g: 0, b: 0 };
         }
 
         function rgbToCmyk(r, g, b) {
@@ -1816,7 +1816,7 @@
             // Search by hex
             if (q.startsWith('#') || /^[0-9a-f]{6}$/i.test(q)) {
                 const searchHex = q.startsWith('#') ? q : '#' + q;
-                return findClosestPantone(searchHex, 20);
+                return findClosestPantone(searchHex, 20, colors);
             }
 
             // Search by color family name (yellow, blue, red, etc.)
@@ -2482,11 +2482,15 @@
             showToast('Pantone list copied!');
         }
 
+        let toastTimer = null;
         function showToast(message) {
             const toast = document.getElementById('copyToast');
+            if (toastTimer) clearTimeout(toastTimer);
+            toast.classList.remove('show');
+            void toast.offsetHeight;
             toast.textContent = message;
             toast.classList.add('show');
-            setTimeout(() => toast.classList.remove('show'), 2000);
+            toastTimer = setTimeout(() => { toast.classList.remove('show'); toastTimer = null; }, 2000);
         }
 
         function loadPreset(colors) {
