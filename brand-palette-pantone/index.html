@@ -2505,7 +2505,7 @@
             if (!container) return;
             
             container.innerHTML = families.map(f => `
-                <div class="color-family-btn" style="background: ${f.color}" title="${f.name}" data-search="${f.search}">
+                <div class="color-family-btn" style="background: ${f.color}; color: ${getContrastColor(f.color)}" title="${f.name}" data-search="${f.search}">
                     <span>${f.name}</span>
                 </div>
             `).join('');
