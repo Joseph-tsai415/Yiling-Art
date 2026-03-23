@@ -344,9 +344,19 @@
             transition: all 0.3s ease;
         }
 
-        .add-color-btn:hover {
+        .add-color-btn:hover:not(:disabled) {
             border-color: #4982cf;
             color: #4982cf;
+        }
+
+        .add-color-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .hex-input.invalid {
+            border-color: #f87171 !important;
+            box-shadow: 0 0 0 1px #f87171;
         }
 
         /* Presets */
@@ -1384,16 +1394,16 @@
         <span class="theme-toggle-icon" id="themeIcon">☀️</span>
     </button>
     <div class="container">
-        <h1>🎨 Brand Color Palette Generator</h1>
+        <h1><span aria-hidden="true">🎨</span> Brand Color Palette Generator</h1>
         <p class="subtitle">Create harmonized palettes with Pantone matching for print</p>
 
         <div class="main-grid">
             <!-- Left Panel - Input -->
             <div class="panel panel-left">
-                <div class="section-title"><span class="icon">🎯</span> Your Brand Colors</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">🎯</span> Your Brand Colors</div>
                 <div class="colors-container" id="colorsContainer"></div>
                 
-                <div class="section-title"><span class="icon">⚡</span> Quick Presets</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">⚡</span> Quick Presets</div>
                 <div class="presets-row">
                     <button class="preset-btn" data-colors="#965fa6,#4982cf">
                         <span class="preset-colors">
@@ -1424,7 +1434,7 @@
                     </button>
                 </div>
 
-                <div class="section-title"><span class="icon">🎭</span> Mood</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">🎭</span> Mood</div>
                 <div class="mood-buttons">
                     <button class="mood-btn active" data-mood="harmonious">🎵 Harmonious</button>
                     <button class="mood-btn" data-mood="vibrant">⚡ Vibrant</button>
@@ -1434,7 +1444,7 @@
                     <button class="mood-btn" data-mood="dramatic">🎭 Dramatic</button>
                 </div>
 
-                <div class="section-title"><span class="icon">🎚️</span> Adjustments</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">🎚️</span> Adjustments</div>
                 <div class="slider-group">
                     <div class="slider-label">
                         <span>Saturation</span>
@@ -1463,12 +1473,12 @@
                         <button class="pdf-export-btn" id="exportPdfBtn" title="Export color report as PDF">📄 PDF</button>
                         <div class="pdf-section-panel" id="pdfSectionPanel">
                             <div class="pdf-panel-title">PDF Sections</div>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="cover"><span class="sec-icon">📋</span><span class="sec-label">Cover Page</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="specs"><span class="sec-icon">🎨</span><span class="sec-label">Color Specifications</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="pantone"><span class="sec-icon">🔍</span><span class="sec-label">Pantone Matching</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="accessibility"><span class="sec-icon">♿</span><span class="sec-label">Accessibility & Contrast</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="application"><span class="sec-icon">💡</span><span class="sec-label">Color Application Guide</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="reference"><span class="sec-icon">📖</span><span class="sec-label">Reference Guide</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="cover"><span class="sec-icon" aria-hidden="true">📋</span><span class="sec-label">Cover Page</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="specs"><span class="sec-icon" aria-hidden="true">🎨</span><span class="sec-label">Color Specifications</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="pantone"><span class="sec-icon" aria-hidden="true">🔍</span><span class="sec-label">Pantone Matching</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="accessibility"><span class="sec-icon" aria-hidden="true">♿</span><span class="sec-label">Accessibility & Contrast</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="application"><span class="sec-icon" aria-hidden="true">💡</span><span class="sec-label">Color Application Guide</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="reference"><span class="sec-icon" aria-hidden="true">📖</span><span class="sec-label">Reference Guide</span></label>
                             <div class="pdf-panel-actions">
                                 <button class="pdf-toggle-all-btn" id="pdfToggleAll">Toggle All</button>
                                 <button class="pdf-generate-btn" id="pdfGenerateBtn">Generate PDF</button>
@@ -1534,12 +1544,12 @@
         let colorIdCounter = 0;
 
         function saveColors() {
-            try { localStorage.setItem('bpg-colors', JSON.stringify(userColors.map(c => c.hex))); } catch(e) {}
+            try { localStorage.setItem('bpg-colors', JSON.stringify(userColors.map(c => c.hex))); } catch(e) { console.warn('Failed to save colors to localStorage:', e.message); }
         }
 
         async function copyToClipboard(text) {
             try {
-                await copyToClipboard(text);
+                await navigator.clipboard.writeText(text);
             } catch(e) {
                 try {
                     const ta = document.createElement('textarea');
@@ -2063,6 +2073,10 @@
 
         // UI Functions
         function addColor(hex = null) {
+            if (userColors.length >= 8) {
+                showToast('Maximum 8 colors allowed');
+                return;
+            }
             const id = colorIdCounter++;
             const color = hex || getRandomColor();
             userColors.push({ id, hex: color });
@@ -2109,6 +2123,10 @@
             addBtn.className = 'add-color-btn';
             addBtn.innerHTML = '+';
             addBtn.onclick = () => addColor();
+            if (userColors.length >= 8) {
+                addBtn.disabled = true;
+                addBtn.title = 'Maximum 8 colors allowed';
+            }
             container.appendChild(addBtn);
 
             // Events
@@ -2128,7 +2146,13 @@
                         const id = parseInt(e.target.dataset.id);
                         updateColor(id, val);
                         e.target.closest('.color-item').querySelector('.color-picker').value = val;
+                        e.target.classList.remove('invalid');
+                    } else if (val.length > 1) {
+                        e.target.classList.add('invalid');
                     }
+                });
+                input.addEventListener('blur', (e) => {
+                    e.target.classList.remove('invalid');
                 });
             });
 
@@ -2481,7 +2505,7 @@
             if (!container) return;
             
             container.innerHTML = families.map(f => `
-                <div class="color-family-btn" style="background: ${f.color}" title="${f.name}" data-search="${f.search}">
+                <div class="color-family-btn" style="background: ${f.color}; color: ${getContrastColor(f.color)}" title="${f.name}" data-search="${f.search}">
                     <span>${f.name}</span>
                 </div>
             `).join('');
@@ -2540,7 +2564,7 @@
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.mood-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                try { localStorage.setItem('bpg-mood', btn.dataset.mood); } catch(e) {}
+                try { localStorage.setItem('bpg-mood', btn.dataset.mood); } catch(e) { console.warn('Failed to save mood to localStorage:', e.message); }
             });
         });
 
@@ -2567,14 +2591,21 @@
             });
         });
 
+        let sliderSaveTimeout;
         document.getElementById('saturationSlider').addEventListener('input', (e) => {
             document.getElementById('satValue').textContent = `${e.target.value}%`;
-            try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
+            clearTimeout(sliderSaveTimeout);
+            sliderSaveTimeout = setTimeout(() => {
+                try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
+            }, 500);
         });
 
         document.getElementById('brightnessSlider').addEventListener('input', (e) => {
             document.getElementById('brightValue').textContent = `${e.target.value}%`;
-            try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
+            clearTimeout(sliderSaveTimeout);
+            sliderSaveTimeout = setTimeout(() => {
+                try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
+            }, 500);
         });
 
         document.getElementById('generateBtn').addEventListener('click', () => {
@@ -2617,6 +2648,10 @@
         // PDF Export — Professional Design Report
         function exportPdf(sections) {
             sections = sections || { cover:true, specs:true, pantone:true, accessibility:true, application:true, reference:true };
+            if (!window.jspdf) {
+                showToast('PDF library failed to load. Please check your internet connection and reload the page.');
+                return;
+            }
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
             const pw = 210, ph = 297, mx = 18, mxr = 192;
@@ -3470,15 +3505,59 @@
 
         // PDF Section Panel logic
         const pdfPanel = document.getElementById('pdfSectionPanel');
-        document.getElementById('exportPdfBtn').addEventListener('click', (e) => {
+        const exportPdfBtn = document.getElementById('exportPdfBtn');
+
+        function pdfPanelKeyHandler(e) {
+            const focusable = [...pdfPanel.querySelectorAll('input, button')];
+            if (!focusable.length) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closePdfPanel();
+                return;
+            }
+            if (e.key === 'Tab') {
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey) {
+                    if (document.activeElement === first) {
+                        e.preventDefault();
+                        last.focus();
+                    }
+                } else {
+                    if (document.activeElement === last) {
+                        e.preventDefault();
+                        first.focus();
+                    }
+                }
+            }
+        }
+
+        function openPdfPanel() {
+            pdfPanel.classList.add('show');
+            const focusable = pdfPanel.querySelectorAll('input, button');
+            if (focusable.length) focusable[0].focus();
+            pdfPanel.addEventListener('keydown', pdfPanelKeyHandler);
+        }
+
+        function closePdfPanel() {
+            pdfPanel.classList.remove('show');
+            pdfPanel.removeEventListener('keydown', pdfPanelKeyHandler);
+            exportPdfBtn.focus();
+        }
+
+        exportPdfBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            pdfPanel.classList.toggle('show');
+            if (pdfPanel.classList.contains('show')) {
+                closePdfPanel();
+            } else {
+                openPdfPanel();
+            }
         });
 
         // Close panel when clicking outside
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.pdf-export-wrap')) {
-                pdfPanel.classList.remove('show');
+                closePdfPanel();
             }
         });
 
@@ -3497,19 +3576,19 @@
 
             // Need at least one section
             const anySelected = Object.values(sections).some(v => v);
-            if (!anySelected) { alert('Please select at least one section.'); return; }
+            if (!anySelected) { showToast('Please select at least one section.'); return; }
 
             const btn = document.getElementById('pdfGenerateBtn');
             btn.disabled = true;
             btn.textContent = 'Generating...';
-            pdfPanel.classList.remove('show');
+            closePdfPanel();
 
             setTimeout(() => {
                 try {
                     exportPdf(sections);
                 } catch (e) {
                     console.error('PDF export error:', e);
-                    alert('PDF export failed. Please ensure colors are generated first.');
+                    showToast('PDF export failed. Please ensure colors are generated first.');
                 }
                 btn.disabled = false;
                 btn.textContent = 'Generate PDF';
@@ -3529,7 +3608,7 @@
             const isLight = root.classList.toggle('light-mode');
             document.getElementById('themeIcon').textContent = isLight ? '🌙' : '☀️';
             document.getElementById('themeToggle').title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
-            try { localStorage.setItem('bpg-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+            try { localStorage.setItem('bpg-theme', isLight ? 'light' : 'dark'); } catch(e) { console.warn('Failed to save theme to localStorage:', e.message); }
         });
 
         // Initialize — restore persisted state
@@ -3564,9 +3643,17 @@
             }
         })();
         renderPopularColors();
+
+        // Pre-compute Pantone Lab values during idle time for faster matching
+        (window.requestIdleCallback || setTimeout)(() => {
+            allPantone.forEach(p => {
+                const rgb = hexToRgb(p.hex);
+                pantoneLabCache.set(p.hex, rgbToLab(rgb.r, rgb.g, rgb.b));
+            });
+        });
     </script>
     <!-- Floating comparison overlay (separate layer, fully opaque) -->
-    <div id="compareOverlay" class="pantone-compare-overlay"></div>
+    <div id="compareOverlay" class="pantone-compare-overlay" role="dialog" aria-modal="false" aria-label="Pantone color comparison"></div>
     <div style="position: fixed; bottom: 8px; left: 12px; font-size: 0.7rem; color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
         <span style="pointer-events: none;">v3.1</span>
         <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener" style="color: var(--text-muted); text-decoration: none; opacity: 0.7; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">GitHub</a>
