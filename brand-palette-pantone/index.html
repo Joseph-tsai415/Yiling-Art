@@ -1394,16 +1394,16 @@
         <span class="theme-toggle-icon" id="themeIcon">☀️</span>
     </button>
     <div class="container">
-        <h1>🎨 Brand Color Palette Generator</h1>
+        <h1><span aria-hidden="true">🎨</span> Brand Color Palette Generator</h1>
         <p class="subtitle">Create harmonized palettes with Pantone matching for print</p>
 
         <div class="main-grid">
             <!-- Left Panel - Input -->
             <div class="panel panel-left">
-                <div class="section-title"><span class="icon">🎯</span> Your Brand Colors</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">🎯</span> Your Brand Colors</div>
                 <div class="colors-container" id="colorsContainer"></div>
                 
-                <div class="section-title"><span class="icon">⚡</span> Quick Presets</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">⚡</span> Quick Presets</div>
                 <div class="presets-row">
                     <button class="preset-btn" data-colors="#965fa6,#4982cf">
                         <span class="preset-colors">
@@ -1434,7 +1434,7 @@
                     </button>
                 </div>
 
-                <div class="section-title"><span class="icon">🎭</span> Mood</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">🎭</span> Mood</div>
                 <div class="mood-buttons">
                     <button class="mood-btn active" data-mood="harmonious">🎵 Harmonious</button>
                     <button class="mood-btn" data-mood="vibrant">⚡ Vibrant</button>
@@ -1444,7 +1444,7 @@
                     <button class="mood-btn" data-mood="dramatic">🎭 Dramatic</button>
                 </div>
 
-                <div class="section-title"><span class="icon">🎚️</span> Adjustments</div>
+                <div class="section-title"><span class="icon" aria-hidden="true">🎚️</span> Adjustments</div>
                 <div class="slider-group">
                     <div class="slider-label">
                         <span>Saturation</span>
@@ -1473,12 +1473,12 @@
                         <button class="pdf-export-btn" id="exportPdfBtn" title="Export color report as PDF">📄 PDF</button>
                         <div class="pdf-section-panel" id="pdfSectionPanel">
                             <div class="pdf-panel-title">PDF Sections</div>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="cover"><span class="sec-icon">📋</span><span class="sec-label">Cover Page</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="specs"><span class="sec-icon">🎨</span><span class="sec-label">Color Specifications</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="pantone"><span class="sec-icon">🔍</span><span class="sec-label">Pantone Matching</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="accessibility"><span class="sec-icon">♿</span><span class="sec-label">Accessibility & Contrast</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="application"><span class="sec-icon">💡</span><span class="sec-label">Color Application Guide</span></label>
-                            <label class="pdf-section-item"><input type="checkbox" checked data-section="reference"><span class="sec-icon">📖</span><span class="sec-label">Reference Guide</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="cover"><span class="sec-icon" aria-hidden="true">📋</span><span class="sec-label">Cover Page</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="specs"><span class="sec-icon" aria-hidden="true">🎨</span><span class="sec-label">Color Specifications</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="pantone"><span class="sec-icon" aria-hidden="true">🔍</span><span class="sec-label">Pantone Matching</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="accessibility"><span class="sec-icon" aria-hidden="true">♿</span><span class="sec-label">Accessibility & Contrast</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="application"><span class="sec-icon" aria-hidden="true">💡</span><span class="sec-label">Color Application Guide</span></label>
+                            <label class="pdf-section-item"><input type="checkbox" checked data-section="reference"><span class="sec-icon" aria-hidden="true">📖</span><span class="sec-label">Reference Guide</span></label>
                             <div class="pdf-panel-actions">
                                 <button class="pdf-toggle-all-btn" id="pdfToggleAll">Toggle All</button>
                                 <button class="pdf-generate-btn" id="pdfGenerateBtn">Generate PDF</button>
@@ -3505,15 +3505,59 @@
 
         // PDF Section Panel logic
         const pdfPanel = document.getElementById('pdfSectionPanel');
-        document.getElementById('exportPdfBtn').addEventListener('click', (e) => {
+        const exportPdfBtn = document.getElementById('exportPdfBtn');
+
+        function pdfPanelKeyHandler(e) {
+            const focusable = [...pdfPanel.querySelectorAll('input, button')];
+            if (!focusable.length) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closePdfPanel();
+                return;
+            }
+            if (e.key === 'Tab') {
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey) {
+                    if (document.activeElement === first) {
+                        e.preventDefault();
+                        last.focus();
+                    }
+                } else {
+                    if (document.activeElement === last) {
+                        e.preventDefault();
+                        first.focus();
+                    }
+                }
+            }
+        }
+
+        function openPdfPanel() {
+            pdfPanel.classList.add('show');
+            const focusable = pdfPanel.querySelectorAll('input, button');
+            if (focusable.length) focusable[0].focus();
+            pdfPanel.addEventListener('keydown', pdfPanelKeyHandler);
+        }
+
+        function closePdfPanel() {
+            pdfPanel.classList.remove('show');
+            pdfPanel.removeEventListener('keydown', pdfPanelKeyHandler);
+            exportPdfBtn.focus();
+        }
+
+        exportPdfBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            pdfPanel.classList.toggle('show');
+            if (pdfPanel.classList.contains('show')) {
+                closePdfPanel();
+            } else {
+                openPdfPanel();
+            }
         });
 
         // Close panel when clicking outside
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.pdf-export-wrap')) {
-                pdfPanel.classList.remove('show');
+                closePdfPanel();
             }
         });
 
@@ -3537,7 +3581,7 @@
             const btn = document.getElementById('pdfGenerateBtn');
             btn.disabled = true;
             btn.textContent = 'Generating...';
-            pdfPanel.classList.remove('show');
+            closePdfPanel();
 
             setTimeout(() => {
                 try {
