@@ -1767,26 +1767,22 @@
             
             if (familyKey) {
                 const family = colorFamilies[familyKey];
-                return colors.filter(p => {
-                    // Check keywords
+                const keywordMatches = [];
+                const hueMatches = [];
+                colors.forEach(p => {
                     if (family.keywords.some(kw => p.pantone.toLowerCase().includes(kw))) {
-                        return true;
+                        keywordMatches.push(p);
+                    } else if (getColorFamily(p.hex) === familyKey) {
+                        hueMatches.push(p);
                     }
-                    
-                    // Check by analyzing the actual color
-                    const colorFamily = getColorFamily(p.hex);
-                    if (colorFamily === familyKey) {
-                        return true;
-                    }
-                    
-                    return false;
-                }).slice(0, 50);
+                });
+                return [...keywordMatches, ...hueMatches];
             }
 
             // Search by name/number
-            return colors.filter(p => 
+            return colors.filter(p =>
                 p.pantone.toLowerCase().includes(q)
-            ).slice(0, 50);
+            );
         }
 
         // Color adjustment
@@ -2306,60 +2302,68 @@
                         <span class="browse-count">${browseColors.length} colors</span>
                     </div>
                 `;
-                renderBrowseBatch(container, browseColors, 0, browseColors.length);
+                const BROWSE_BATCH = 60;
+                renderBrowseBatch(container, browseColors, 0, Math.min(BROWSE_BATCH, browseColors.length));
+                if (browseColors.length > BROWSE_BATCH) {
+                    let shown = BROWSE_BATCH;
+                    const loadMoreBtn = document.createElement('button');
+                    loadMoreBtn.className = 'generate-btn';
+                    loadMoreBtn.style.cssText = 'margin: 12px auto; display: block; padding: 8px 24px; font-size: 0.85rem;';
+                    loadMoreBtn.textContent = `Load more (${browseColors.length - shown} remaining)`;
+                    container.appendChild(loadMoreBtn);
+                    loadMoreBtn.addEventListener('click', () => {
+                        const next = Math.min(shown + BROWSE_BATCH, browseColors.length);
+                        loadMoreBtn.remove();
+                        renderBrowseBatch(container, browseColors, shown, next);
+                        shown = next;
+                        if (shown < browseColors.length) {
+                            loadMoreBtn.textContent = `Load more (${browseColors.length - shown} remaining)`;
+                            container.appendChild(loadMoreBtn);
+                        }
+                    });
+                }
                 renderPopularColors();
                 return;
             }
             
             if (results.length === 0) {
+                const safeQuery = query.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
                 container.innerHTML = `
                     <div class="empty-state">
-                        <p>No matches for "${query}"</p>
+                        <p>No matches for "${safeQuery}"</p>
                         <p class="hint">Try a different search term</p>
                     </div>
                 `;
                 return;
             }
 
-            container.innerHTML = results.map(p => {
-                // Format the Pantone name nicely (e.g., "black-c" -> "Black C")
-                const displayName = p.pantone
-                    .split('-')
-                    .map((part, i, arr) => {
-                        // Last part is usually c or u (coated/uncoated)
-                        if (i === arr.length - 1 && (part === 'c' || part === 'u')) {
-                            return part.toUpperCase();
-                        }
-                        // Capitalize first letter of other parts
-                        return part.charAt(0).toUpperCase() + part.slice(1);
-                    })
-                    .join(' ');
-                
-                // Get color values
-                const rgb = hexToRgb(p.hex);
-                const cmyk = rgbToCmyk(rgb.r, rgb.g, rgb.b);
-                const isCoated = p.pantone.endsWith('-c');
-                const typeBadge = isCoated ? 'Coated' : 'Uncoated';
-                
-                return `
-                    <div class="pantone-grid-item" data-hex="${p.hex}" data-name="${p.pantone}">
-                        <div class="swatch" style="background: ${p.hex}"></div>
-                        <div class="name">PANTONE ${displayName}<span class="type-badge">${typeBadge}</span></div>
-                        <div class="color-values">
-                            <div><span class="label">HEX</span> ${p.hex.toUpperCase()}</div>
-                            <div><span class="label">RGB</span> ${rgb.r}, ${rgb.g}, ${rgb.b}</div>
-                            <div><span class="label">CMYK</span> ${cmyk.c}, ${cmyk.m}, ${cmyk.y}, ${cmyk.k}</div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
+            const BATCH_SIZE = 60;
+            container.innerHTML = `
+                <div class="browse-header">
+                    <span class="browse-title">Search Results</span>
+                    <span class="browse-count">${results.length} colors</span>
+                </div>
+            `;
+            renderBrowseBatch(container, results, 0, Math.min(BATCH_SIZE, results.length));
 
-            container.querySelectorAll('.pantone-grid-item').forEach(el => {
-                el.addEventListener('click', () => {
-                    navigator.clipboard.writeText(`PANTONE ${el.dataset.name.toUpperCase()} (${el.dataset.hex})`);
-                    showToast(`Copied PANTONE ${el.dataset.name.toUpperCase()}`);
+            if (results.length > BATCH_SIZE) {
+                let shown = BATCH_SIZE;
+                const loadMoreBtn = document.createElement('button');
+                loadMoreBtn.className = 'generate-btn';
+                loadMoreBtn.style.cssText = 'margin: 12px auto; display: block; padding: 8px 24px; font-size: 0.85rem;';
+                loadMoreBtn.textContent = `Load more (${results.length - shown} remaining)`;
+                container.appendChild(loadMoreBtn);
+                loadMoreBtn.addEventListener('click', () => {
+                    const next = Math.min(shown + BATCH_SIZE, results.length);
+                    loadMoreBtn.remove();
+                    renderBrowseBatch(container, results, shown, next);
+                    shown = next;
+                    if (shown < results.length) {
+                        loadMoreBtn.textContent = `Load more (${results.length - shown} remaining)`;
+                        container.appendChild(loadMoreBtn);
+                    }
                 });
-            });
+            }
         }
         
         function renderPopularColors() {
