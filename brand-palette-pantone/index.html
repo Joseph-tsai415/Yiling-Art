@@ -2567,14 +2567,21 @@
             });
         });
 
+        let sliderSaveTimeout;
         document.getElementById('saturationSlider').addEventListener('input', (e) => {
             document.getElementById('satValue').textContent = `${e.target.value}%`;
-            try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
+            clearTimeout(sliderSaveTimeout);
+            sliderSaveTimeout = setTimeout(() => {
+                try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
+            }, 500);
         });
 
         document.getElementById('brightnessSlider').addEventListener('input', (e) => {
             document.getElementById('brightValue').textContent = `${e.target.value}%`;
-            try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
+            clearTimeout(sliderSaveTimeout);
+            sliderSaveTimeout = setTimeout(() => {
+                try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
+            }, 500);
         });
 
         document.getElementById('generateBtn').addEventListener('click', () => {
@@ -3564,6 +3571,14 @@
             }
         })();
         renderPopularColors();
+
+        // Pre-compute Pantone Lab values during idle time for faster matching
+        (window.requestIdleCallback || setTimeout)(() => {
+            allPantone.forEach(p => {
+                const rgb = hexToRgb(p.hex);
+                pantoneLabCache.set(p.hex, rgbToLab(rgb.r, rgb.g, rgb.b));
+            });
+        });
     </script>
     <!-- Floating comparison overlay (separate layer, fully opaque) -->
     <div id="compareOverlay" class="pantone-compare-overlay"></div>
