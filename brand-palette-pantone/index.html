@@ -1549,7 +1549,7 @@
 
         async function copyToClipboard(text) {
             try {
-                await copyToClipboard(text);
+                await navigator.clipboard.writeText(text);
             } catch(e) {
                 try {
                     const ta = document.createElement('textarea');
@@ -3594,7 +3594,7 @@
         renderPopularColors();
     </script>
     <!-- Floating comparison overlay (separate layer, fully opaque) -->
-    <div id="compareOverlay" class="pantone-compare-overlay"></div>
+    <div id="compareOverlay" class="pantone-compare-overlay" role="dialog" aria-modal="false" aria-label="Pantone color comparison"></div>
     <div style="position: fixed; bottom: 8px; left: 12px; font-size: 0.7rem; color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
         <span style="pointer-events: none;">v3.1</span>
         <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener" style="color: var(--text-muted); text-decoration: none; opacity: 0.7; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">GitHub</a>
