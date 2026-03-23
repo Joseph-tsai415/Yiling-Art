@@ -3592,6 +3592,14 @@
             }
         })();
         renderPopularColors();
+
+        // Pre-compute Pantone Lab values during idle time for faster matching
+        (window.requestIdleCallback || setTimeout)(() => {
+            allPantone.forEach(p => {
+                const rgb = hexToRgb(p.hex);
+                pantoneLabCache.set(p.hex, rgbToLab(rgb.r, rgb.g, rgb.b));
+            });
+        });
     </script>
     <!-- Floating comparison overlay (separate layer, fully opaque) -->
     <div id="compareOverlay" class="pantone-compare-overlay"></div>
