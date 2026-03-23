@@ -1533,6 +1533,26 @@
         let currentPalettes = [];
         let colorIdCounter = 0;
 
+        function saveColors() {
+            try { localStorage.setItem('bpg-colors', JSON.stringify(userColors.map(c => c.hex))); } catch(e) {}
+        }
+
+        async function copyToClipboard(text) {
+            try {
+                await copyToClipboard(text);
+            } catch(e) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.cssText = 'position:fixed;left:-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                } catch(e2) {}
+            }
+        }
+
         // Color utility functions
         function hexToRgb(hex) {
             const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -2047,16 +2067,18 @@
             const color = hex || getRandomColor();
             userColors.push({ id, hex: color });
             renderColors();
+            saveColors();
         }
 
         function removeColor(id) {
             userColors = userColors.filter(c => c.id !== id);
             renderColors();
+            saveColors();
         }
 
         function updateColor(id, hex) {
             const color = userColors.find(c => c.id === id);
-            if (color) color.hex = hex;
+            if (color) { color.hex = hex; saveColors(); }
         }
 
         function getRandomColor() {
@@ -2169,7 +2191,7 @@
                 el.addEventListener('click', () => {
                     const name = el.dataset.name;
                     const hex = el.dataset.hex;
-                    navigator.clipboard.writeText(`PANTONE ${name.toUpperCase()} (${hex})`);
+                    copyToClipboard(`PANTONE ${name.toUpperCase()} (${hex})`);
                     showToast(`Copied PANTONE ${name.toUpperCase()}`);
                 });
             });
@@ -2317,7 +2339,7 @@
 
             container.querySelectorAll('.palette-color').forEach(el => {
                 el.addEventListener('click', () => {
-                    navigator.clipboard.writeText(el.dataset.hex);
+                    copyToClipboard(el.dataset.hex);
                     showToast(`Copied ${el.dataset.hex.toUpperCase()}`);
                 });
             });
@@ -2347,7 +2369,7 @@
                         <div><span class="label">CMYK</span> ${cmyk.c}, ${cmyk.m}, ${cmyk.y}, ${cmyk.k}</div>
                     </div>`;
                 el.addEventListener('click', () => {
-                    navigator.clipboard.writeText(`PANTONE ${p.pantone.toUpperCase()} (${p.hex})`);
+                    copyToClipboard(`PANTONE ${p.pantone.toUpperCase()} (${p.hex})`);
                     showToast(`Copied PANTONE ${p.pantone.toUpperCase()}`);
                 });
                 fragment.appendChild(el);
@@ -2477,13 +2499,13 @@
 
         function copyPalette(idx) {
             const colors = currentPalettes[idx].colors.join(', ');
-            navigator.clipboard.writeText(colors);
+            copyToClipboard(colors);
             showToast('Palette copied!');
         }
 
         function copyCss(idx) {
             const css = currentPalettes[idx].colors.map((c, i) => `  --color-${i + 1}: ${c};`).join('\n');
-            navigator.clipboard.writeText(`:root {\n${css}\n}`);
+            copyToClipboard(`:root {\n${css}\n}`);
             showToast('CSS copied!');
         }
 
@@ -2492,7 +2514,7 @@
                 const match = findClosestPantone(c, 1)[0];
                 return `${c} → PANTONE ${match.pantone.toUpperCase()}`;
             }).join('\n');
-            navigator.clipboard.writeText(pantoneList);
+            copyToClipboard(pantoneList);
             showToast('Pantone list copied!');
         }
 
@@ -2518,6 +2540,7 @@
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.mood-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
+                try { localStorage.setItem('bpg-mood', btn.dataset.mood); } catch(e) {}
             });
         });
 
@@ -2546,10 +2569,12 @@
 
         document.getElementById('saturationSlider').addEventListener('input', (e) => {
             document.getElementById('satValue').textContent = `${e.target.value}%`;
+            try { localStorage.setItem('bpg-saturation', e.target.value); } catch(e2) {}
         });
 
         document.getElementById('brightnessSlider').addEventListener('input', (e) => {
             document.getElementById('brightValue').textContent = `${e.target.value}%`;
+            try { localStorage.setItem('bpg-brightness', e.target.value); } catch(e2) {}
         });
 
         document.getElementById('generateBtn').addEventListener('click', () => {
@@ -3504,11 +3529,40 @@
             const isLight = root.classList.toggle('light-mode');
             document.getElementById('themeIcon').textContent = isLight ? '🌙' : '☀️';
             document.getElementById('themeToggle').title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
+            try { localStorage.setItem('bpg-theme', isLight ? 'light' : 'dark'); } catch(e) {}
         });
 
-        // Initialize
-        addColor('#965fa6');
-        addColor('#4982cf');
+        // Initialize — restore persisted state
+        (function restoreState() {
+            try {
+                const theme = localStorage.getItem('bpg-theme');
+                if (theme === 'light') {
+                    document.documentElement.classList.add('light-mode');
+                    document.getElementById('themeIcon').textContent = '🌙';
+                    document.getElementById('themeToggle').title = 'Switch to dark mode';
+                }
+                const mood = localStorage.getItem('bpg-mood');
+                if (mood) {
+                    document.querySelectorAll('.mood-btn').forEach(b => {
+                        b.classList.toggle('active', b.dataset.mood === mood);
+                    });
+                }
+                const sat = localStorage.getItem('bpg-saturation');
+                const bright = localStorage.getItem('bpg-brightness');
+                if (sat !== null) { document.getElementById('saturationSlider').value = sat; document.getElementById('satValue').textContent = sat + '%'; }
+                if (bright !== null) { document.getElementById('brightnessSlider').value = bright; document.getElementById('brightValue').textContent = bright + '%'; }
+                const savedColors = localStorage.getItem('bpg-colors');
+                if (savedColors) {
+                    JSON.parse(savedColors).forEach(hex => addColor(hex));
+                } else {
+                    addColor('#965fa6');
+                    addColor('#4982cf');
+                }
+            } catch(e) {
+                addColor('#965fa6');
+                addColor('#4982cf');
+            }
+        })();
         renderPopularColors();
     </script>
     <!-- Floating comparison overlay (separate layer, fully opaque) -->
