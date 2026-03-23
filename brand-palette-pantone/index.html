@@ -75,6 +75,11 @@
             box-sizing: border-box;
         }
 
+        *:focus-visible {
+            outline: 2px solid #4982cf;
+            outline-offset: 2px;
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, var(--bg-gradient-1) 0%, var(--bg-gradient-2) 100%);
@@ -148,6 +153,60 @@
         @media (max-width: 900px) {
             .main-grid {
                 grid-template-columns: 1fr;
+            }
+            .panel-right {
+                height: auto;
+                max-height: none;
+                min-height: 400px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 12px 8px;
+            }
+            h1 {
+                font-size: 1.4rem;
+            }
+            .panel {
+                padding: 12px;
+                border-radius: 12px;
+            }
+            .tabs {
+                flex-wrap: wrap;
+            }
+            .tab-btn {
+                font-size: 0.75rem;
+                padding: 8px 6px;
+            }
+            .colors-container {
+                min-height: 70px;
+                padding: 8px;
+                gap: 8px;
+            }
+            .presets-row {
+                gap: 6px;
+            }
+            .preset-btn {
+                font-size: 0.7rem;
+                padding: 6px 8px;
+            }
+            .mood-buttons {
+                gap: 6px;
+            }
+            .mood-btn {
+                font-size: 0.7rem;
+                padding: 6px 8px;
+            }
+            .generate-btn {
+                font-size: 0.85rem;
+                padding: 12px;
+            }
+            .pantone-search {
+                flex-direction: column;
+            }
+            .pantone-search select {
+                width: 100%;
             }
         }
 
@@ -256,7 +315,8 @@
             transition: opacity 0.2s ease;
         }
 
-        .color-item:hover .remove-color {
+        .color-item:hover .remove-color,
+        .color-item:focus-within .remove-color {
             opacity: 1;
         }
 
@@ -1307,6 +1367,14 @@
         :root.light-mode .compare-why-summary {
             color: var(--text-secondary);
         }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
@@ -1372,14 +1440,14 @@
                         <span>Saturation</span>
                         <span id="satValue">0%</span>
                     </div>
-                    <input type="range" class="slider" id="saturationSlider" min="-50" max="50" value="0">
+                    <input type="range" class="slider" id="saturationSlider" min="-50" max="50" value="0" aria-label="Saturation adjustment">
                 </div>
                 <div class="slider-group">
                     <div class="slider-label">
                         <span>Brightness</span>
                         <span id="brightValue">0%</span>
                     </div>
-                    <input type="range" class="slider" id="brightnessSlider" min="-50" max="50" value="0">
+                    <input type="range" class="slider" id="brightnessSlider" min="-50" max="50" value="0" aria-label="Brightness adjustment">
                 </div>
 
                 <button class="generate-btn" id="generateBtn">Generate Palettes & Find Pantone</button>
@@ -1387,10 +1455,10 @@
 
             <!-- Right Panel - Results -->
             <div class="panel panel-right">
-                <div class="tabs">
-                    <button class="tab-btn active" data-tab="pantone">🎨 Pantone Match</button>
-                    <button class="tab-btn" data-tab="palettes">📋 Palettes</button>
-                    <button class="tab-btn" data-tab="search">🔍 Search</button>
+                <div class="tabs" role="tablist" aria-label="Results">
+                    <button class="tab-btn active" data-tab="pantone" role="tab" aria-selected="true" aria-controls="pantone-tab">🎨 Pantone Match</button>
+                    <button class="tab-btn" data-tab="palettes" role="tab" aria-selected="false" aria-controls="palettes-tab">📋 Palettes</button>
+                    <button class="tab-btn" data-tab="search" role="tab" aria-selected="false" aria-controls="search-tab">🔍 Search</button>
                     <div class="pdf-export-wrap">
                         <button class="pdf-export-btn" id="exportPdfBtn" title="Export color report as PDF">📄 PDF</button>
                         <div class="pdf-section-panel" id="pdfSectionPanel">
@@ -1409,7 +1477,7 @@
                     </div>
                 </div>
 
-                <div class="tab-content active" id="pantone-tab">
+                <div class="tab-content active" id="pantone-tab" role="tabpanel">
                     <div class="pantone-results" id="pantoneResults">
                         <div class="empty-state">
                             <p>Add colors and click Generate to find matching Pantone colors</p>
@@ -1417,7 +1485,7 @@
                     </div>
                 </div>
 
-                <div class="tab-content" id="palettes-tab">
+                <div class="tab-content" id="palettes-tab" role="tabpanel">
                     <div id="palettesSection">
                         <div class="empty-state">
                             <p>Generated palettes will appear here</p>
@@ -1425,10 +1493,10 @@
                     </div>
                 </div>
 
-                <div class="tab-content" id="search-tab">
+                <div class="tab-content" id="search-tab" role="tabpanel">
                     <div class="pantone-search">
-                        <input type="text" id="pantoneSearchInput" placeholder="Search: yellow, 116, blue, #0072CE...">
-                        <select id="pantoneTypeSelect">
+                        <input type="text" id="pantoneSearchInput" placeholder="Search: yellow, 116, blue, #0072CE..." aria-label="Search Pantone colors">
+                        <select id="pantoneTypeSelect" aria-label="Filter by coating type">
                             <option value="all">All</option>
                             <option value="c">Coated</option>
                             <option value="u">Uncoated</option>
@@ -1446,7 +1514,7 @@
         </div>
     </div>
 
-    <div class="copy-toast" id="copyToast">Copied!</div>
+    <div class="copy-toast" id="copyToast" role="status" aria-live="polite">Copied!</div>
 
     <script>
         // Pantone color libraries (embedded for offline use)
@@ -1643,14 +1711,17 @@
         }
 
         // Find closest Pantone colors with Lab breakdown
-        function findClosestPantone(hex, count = 3) {
+        function findClosestPantone(hex, count = 3, sourceColors = allPantone) {
             const rgb1 = hexToRgb(hex);
             const lab1 = rgbToLab(rgb1.r, rgb1.g, rgb1.b);
-            const matches = allPantone.map(p => {
-                const rgb2 = hexToRgb(p.hex);
-                const lab2 = rgbToLab(rgb2.r, rgb2.g, rgb2.b);
+            const matches = sourceColors.map(p => {
+                let lab2 = pantoneLabCache.get(p.hex);
+                if (!lab2) {
+                    const rgb2 = hexToRgb(p.hex);
+                    lab2 = rgbToLab(rgb2.r, rgb2.g, rgb2.b);
+                    pantoneLabCache.set(p.hex, lab2);
+                }
                 const delta = ciede2000(lab1.l, lab1.a, lab1.b, lab2.l, lab2.a, lab2.b);
-                // Compute individual L/C/H differences for breakdown
                 const c1 = Math.sqrt(lab1.a * lab1.a + lab1.b * lab1.b);
                 const c2 = Math.sqrt(lab2.a * lab2.a + lab2.b * lab2.b);
                 const h1 = Math.atan2(lab1.b, lab1.a) * 180 / Math.PI;
@@ -1668,7 +1739,6 @@
                     labMatch: lab2
                 };
             }).sort((a, b) => a.delta - b.delta);
-
             return matches.slice(0, count);
         }
 
@@ -2452,9 +2522,10 @@
 
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
                 document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 btn.classList.add('active');
+                btn.setAttribute('aria-selected', 'true');
                 document.getElementById(btn.dataset.tab + '-tab').classList.add('active');
                 // Initialize search tab with full library when switching to it
                 if (btn.dataset.tab === 'search') {
@@ -3412,6 +3483,13 @@
                 btn.textContent = 'Generate PDF';
             }, 100);
         });
+
+        // Auto-detect color scheme on first visit
+        if (!localStorage.getItem('bpg-theme') && window.matchMedia('(prefers-color-scheme: light)').matches) {
+            document.documentElement.classList.add('light-mode');
+            document.getElementById('themeIcon').textContent = '🌙';
+            document.getElementById('themeToggle').title = 'Switch to dark mode';
+        }
 
         // Theme toggle
         document.getElementById('themeToggle').addEventListener('click', () => {
