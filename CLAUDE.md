@@ -1,5 +1,7 @@
 # Claude Code Rules
 
+**Always read and follow [CONTRIBUTING.md](CONTRIBUTING.md)** for the full development workflow, branch strategy, PR guidelines, and issue linking rules.
+
 ## Git Workflow
 
 - Do NOT include `Co-Authored-By` lines in commit messages.
