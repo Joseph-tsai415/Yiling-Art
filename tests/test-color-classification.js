@@ -15,12 +15,10 @@
 const fs = require('fs');
 const html = fs.readFileSync('./brand-palette-pantone/index.html', 'utf8');
 
-// --- Extract Pantone data ---
-const cMatch = html.match(/const pantoneCoated\s*=\s*(\[.*?\]);/s);
-const uMatch = html.match(/const pantoneUncoated\s*=\s*(\[.*?\]);/s);
-if (!cMatch || !uMatch) { console.error('FAIL: Could not parse Pantone data'); process.exit(1); }
-const pantoneCoated = eval(cMatch[1]);
-const pantoneUncoated = eval(uMatch[1]);
+// --- Load Pantone data from JSON ---
+const pantoneData = JSON.parse(fs.readFileSync('./brand-palette-pantone/pantone-colors.json', 'utf8'));
+const pantoneCoated = pantoneData.coated;
+const pantoneUncoated = pantoneData.uncoated;
 const allPantone = [...pantoneCoated, ...pantoneUncoated];
 
 // --- Extract functions from index.html (no duplication) ---
