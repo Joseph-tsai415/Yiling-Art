@@ -1846,24 +1846,24 @@
         // Get color family from hex
         function getColorFamily(hex) {
             const rgb = hexToRgb(hex);
-            const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-            const h = hsl.h;
-            const s = hsl.s;
-            const l = hsl.l;
+            const lab = rgbToLab(rgb.r, rgb.g, rgb.b);
+            const cStar = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
 
-            // Very low saturation = gray/black/white
-            if (s < 15) {
-                if (l < 20) return 'black';
-                if (l > 90) return 'white';
+            // Achromatic check using CIE LCH chroma (perceptually uniform)
+            if (cStar < 8) {
+                if (lab.l < 20) return 'black';
+                if (lab.l > 85) return 'white';
                 return 'gray';
             }
+
+            // Chromatic — use HSL hue for family classification
+            const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+            const h = hsl.h, s = hsl.s, l = hsl.l;
 
             // Low saturation warm tones = brown (dark orange/yellow hues)
             if (s < 65 && l < 45 && l > 15 && h >= 15 && h < 48) return 'brown';
 
-            // Determine by hue (based on workwithcolor.com ranges with transition zones merged)
-            // Red: 345-360 + 0-15 | Orange: 15-48 | Yellow: 48-70 | Green: 70-165
-            // Teal: 165-195 | Blue: 195-250 | Purple: 250-305 | Pink: 305-345
+            // Determine by hue
             if (h < 15 || h >= 345) return 'red';
             if (h < 48) return 'orange';
             if (h < 70) return 'yellow';
