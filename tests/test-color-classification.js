@@ -8,6 +8,8 @@
  *  3. No color should appear in a family whose keywords conflict
  *     with the color's own name (e.g. warm-gray must not appear in orange).
  *  4. All families combined must cover the full library (no orphans).
+ *
+ * Functions are extracted directly from index.html — no duplication needed.
  */
 
 const fs = require('fs');
@@ -21,66 +23,30 @@ const pantoneCoated = eval(cMatch[1]);
 const pantoneUncoated = eval(uMatch[1]);
 const allPantone = [...pantoneCoated, ...pantoneUncoated];
 
-// --- Color utilities (mirror the app's logic) ---
-function hexToRgb(hex) {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? {
-        r: parseInt(result[1], 16),
-        g: parseInt(result[2], 16),
-        b: parseInt(result[3], 16)
-    } : { r: 0, g: 0, b: 0 };
-}
-
-function rgbToHsl(r, g, b) {
-    r /= 255; g /= 255; b /= 255;
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    const d = mx - mn, l = (mx + mn) / 2;
-    let h = 0, s = 0;
-    if (d !== 0) {
-        s = d / (1 - Math.abs(2 * l - 1));
-        if (mx === r) h = 60 * ((g - b) / d % 6);
-        else if (mx === g) h = 60 * ((b - r) / d + 2);
-        else h = 60 * ((r - g) / d + 4);
+// --- Extract functions from index.html (no duplication) ---
+function extractFunction(name) {
+    // Match: "function name(...) { ... }" with balanced braces
+    const re = new RegExp(`function ${name}\\s*\\([^)]*\\)\\s*\\{`);
+    const match = re.exec(html);
+    if (!match) throw new Error(`Could not find function "${name}" in index.html`);
+    let depth = 0, start = match.index;
+    for (let i = match.index; i < html.length; i++) {
+        if (html[i] === '{') depth++;
+        if (html[i] === '}') { depth--; if (depth === 0) return html.slice(start, i + 1); }
     }
-    if (h < 0) h += 360;
-    return { h, s: s * 100, l: l * 100 };
+    throw new Error(`Could not parse function "${name}" — unbalanced braces`);
 }
 
-function getColorFamily(hex) {
-    const rgb = hexToRgb(hex);
-    const { h, s, l } = rgbToHsl(rgb.r, rgb.g, rgb.b);
-    if (s < 15) {
-        if (l < 20) return 'black';
-        if (l > 90) return 'white';
-        return 'gray';
-    }
-    if (s < 65 && l < 45 && l > 15 && h >= 15 && h < 48) return 'brown';
-    if (h < 15 || h >= 345) return 'red';
-    if (h < 48) return 'orange';
-    if (h < 70) return 'yellow';
-    if (h < 165) return 'green';
-    if (h < 195) return 'teal';
-    if (h < 250) return 'blue';
-    if (h < 305) return 'purple';
-    if (h < 345) return 'pink';
-    return 'gray';
-}
+// Extract and eval each function into this scope
+eval(extractFunction('hexToRgb'));
+eval(extractFunction('rgbToHsl'));
+eval(extractFunction('rgbToLab'));
+eval(extractFunction('getColorFamily'));
 
-// --- Color families (mirror the app) ---
-const colorFamilies = {
-    'yellow':  { keywords: ['yellow'] },
-    'orange':  { keywords: ['orange'] },
-    'red':     { keywords: ['red', 'warm-red', 'rubine'] },
-    'pink':    { keywords: ['pink', 'magenta', 'rhodamine', 'rose'] },
-    'purple':  { keywords: ['purple', 'violet'] },
-    'blue':    { keywords: ['blue', 'reflex-blue', 'process-blue'] },
-    'teal':    { keywords: ['teal', 'cyan'] },
-    'green':   { keywords: ['green'] },
-    'brown':   { keywords: ['brown'] },
-    'gray':    { keywords: ['gray', 'grey', 'cool-gray', 'warm-gray'] },
-    'black':   { keywords: ['black', 'neutral-black'] },
-    'white':   { keywords: ['white'] }
-};
+// Extract colorFamilies object
+const cfMatch = html.match(/const colorFamilies\s*=\s*(\{[\s\S]*?\n\s*\});/);
+if (!cfMatch) throw new Error('Could not find colorFamilies in index.html');
+const colorFamilies = eval('(' + cfMatch[1] + ')');
 
 // --- Build search results per family (same logic as app's searchPantone) ---
 function searchFamily(familyKey) {
@@ -180,10 +146,8 @@ Object.entries(familyResults).forEach(([familyKey, members]) => {
 
     members.forEach(pantoneName => {
         const name = pantoneName.toLowerCase();
-        // Check if this color's name contains another family's keyword
         const conflictKw = otherKeywords.find(kw => name.includes(kw));
         if (conflictKw) {
-            // It's OK if the color ALSO matches this family by keyword
             const ownKeywords = colorFamilies[familyKey].keywords;
             const matchesOwn = ownKeywords.some(kw => name.includes(kw));
             if (!matchesOwn) {
@@ -212,6 +176,14 @@ assert(!familyResults['orange'].has('warm-red-c'), 'warm-red-c should NOT be in 
 // bright-green should be in green
 const hasBrightGreen = [...familyResults['green']].some(n => n.includes('bright-green'));
 assert(hasBrightGreen, 'bright-green should be in green');
+// LCH-based regressions: pastels correctly classified
+assert(getColorFamily('#dbdcbf') === 'yellow', '9602-U (#dbdcbf) should be yellow (C*=15.1, chromatic)');
+assert(getColorFamily('#dadcea') === 'white', '7443-C (#dadcea) should be white (C*=7.3, achromatic)');
+assert(getColorFamily('#cfe2ee') === 'blue', '9420-U (#cfe2ee) should be blue (C*=8.9, chromatic)');
+assert(getColorFamily('#e5d7d6') === 'white', '7604-C (#e5d7d6) should be white (C*=5.1, was red)');
+// Very dark tinted colors correctly classified as black
+assert(getColorFamily('#19202a') === 'black', '532-C (#19202a) should be black (L*=12, C*=7.7)');
+assert(getColorFamily('#302923') === 'black', '4259-C (#302923) should be black (L*=17.2, C*=5.5)');
 
 // --- Test 7: Family sizes are reasonable ---
 console.log('--- Test 7: Family size sanity ---');
