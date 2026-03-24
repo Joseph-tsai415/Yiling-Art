@@ -84,9 +84,9 @@ function assert(condition, message) {
 
 // --- Test 1: Total color count ---
 console.log('--- Test 1: Data integrity ---');
-assert(allPantone.length === 5762, `Expected 5762 colors, got ${allPantone.length}`);
-assert(pantoneCoated.length === 2881, `Expected 2881 coated, got ${pantoneCoated.length}`);
-assert(pantoneUncoated.length === 2881, `Expected 2881 uncoated, got ${pantoneUncoated.length}`);
+assert(allPantone.length === 5772, `Expected 5772 colors, got ${allPantone.length}`);
+assert(pantoneCoated.length === 2886, `Expected 2886 coated, got ${pantoneCoated.length}`);
+assert(pantoneUncoated.length === 2886, `Expected 2886 uncoated, got ${pantoneUncoated.length}`);
 
 // --- Test 2: Every color has valid hex ---
 console.log('--- Test 2: Valid hex values ---');
