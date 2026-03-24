@@ -75,6 +75,15 @@
             box-sizing: border-box;
         }
 
+        *:focus {
+            outline: none;
+        }
+
+        input:focus, select:focus, textarea:focus, button:focus {
+            outline: none;
+            -webkit-appearance: none;
+        }
+
         *:focus-visible {
             outline: 2px solid #4982cf;
             outline-offset: 2px;
@@ -1071,6 +1080,11 @@
             border-radius: 8px;
             color: #fff;
             font-size: 0.9rem;
+            outline: none;
+        }
+
+        .pantone-search input:focus {
+            border-color: rgba(255, 255, 255, 0.4);
         }
 
         .pantone-search input::placeholder {
@@ -1084,6 +1098,16 @@
             border-radius: 8px;
             color: #fff;
             cursor: pointer;
+            outline: none;
+        }
+
+        .pantone-search select:focus {
+            border-color: rgba(255, 255, 255, 0.4);
+        }
+
+        .pantone-search select option {
+            background: #1a1a2e;
+            color: #fff;
         }
 
         .pantone-grid {
@@ -1282,6 +1306,10 @@
             background: var(--input-bg);
             border-color: var(--border-medium);
             color: var(--text-primary);
+        }
+        :root.light-mode .pantone-search select option {
+            background: #fff;
+            color: #1a1a2e;
         }
         :root.light-mode .generate-btn {
             color: #fff;
@@ -1870,13 +1898,21 @@
             
             if (familyKey) {
                 const family = colorFamilies[familyKey];
+                // Collect keywords from all OTHER families to exclude mismatches
+                const otherKeywords = Object.entries(colorFamilies)
+                    .filter(([k]) => k !== familyKey)
+                    .flatMap(([, v]) => v.keywords);
                 const keywordMatches = [];
                 const hueMatches = [];
                 colors.forEach(p => {
-                    if (family.keywords.some(kw => p.pantone.toLowerCase().includes(kw))) {
+                    const name = p.pantone.toLowerCase();
+                    if (family.keywords.some(kw => name.includes(kw))) {
                         keywordMatches.push(p);
                     } else if (getColorFamily(p.hex) === familyKey) {
-                        hueMatches.push(p);
+                        // Exclude if name matches another family's keyword
+                        if (!otherKeywords.some(kw => name.includes(kw))) {
+                            hueMatches.push(p);
+                        }
                     }
                 });
                 return [...keywordMatches, ...hueMatches];
@@ -2401,6 +2437,47 @@
             gridEl.appendChild(fragment);
         }
 
+        function setupLazyLoad(container, colors, batchSize) {
+            let shown = Math.min(batchSize, colors.length);
+            renderBrowseBatch(container, colors, 0, shown);
+            if (shown >= colors.length) return;
+
+            const sentinel = document.createElement('div');
+            sentinel.style.cssText = 'grid-column: 1 / -1; display: flex; justify-content: center; padding: 12px 0;';
+            const loadMoreBtn = document.createElement('button');
+            loadMoreBtn.className = 'generate-btn';
+            loadMoreBtn.style.cssText = 'padding: 8px 24px; font-size: 0.85rem;';
+            loadMoreBtn.textContent = `Load more (${colors.length - shown} remaining)`;
+            sentinel.appendChild(loadMoreBtn);
+            container.appendChild(sentinel);
+
+            function loadNext() {
+                if (shown >= colors.length) return;
+                const next = Math.min(shown + batchSize, colors.length);
+                sentinel.remove();
+                renderBrowseBatch(container, colors, shown, next);
+                shown = next;
+                if (shown < colors.length) {
+                    loadMoreBtn.textContent = `Load more (${colors.length - shown} remaining)`;
+                    container.appendChild(sentinel);
+                }
+            }
+
+            loadMoreBtn.addEventListener('click', loadNext);
+
+            if ('IntersectionObserver' in window) {
+                let loading = false;
+                const observer = new IntersectionObserver((entries) => {
+                    if (entries[0].isIntersecting && !loading) {
+                        loading = true;
+                        requestAnimationFrame(() => { loadNext(); loading = false; });
+                    }
+                }, { root: container.closest('.pantone-grid') || null, rootMargin: '100px', threshold: 0 });
+                // Delay observing so initial render settles first
+                setTimeout(() => observer.observe(sentinel), 200);
+            }
+        }
+
         function renderPantoneSearch(results, query = '') {
             const container = document.getElementById('pantoneGrid');
             
@@ -2421,26 +2498,7 @@
                         <span class="browse-count">${browseColors.length} colors</span>
                     </div>
                 `;
-                const BROWSE_BATCH = 60;
-                renderBrowseBatch(container, browseColors, 0, Math.min(BROWSE_BATCH, browseColors.length));
-                if (browseColors.length > BROWSE_BATCH) {
-                    let shown = BROWSE_BATCH;
-                    const loadMoreBtn = document.createElement('button');
-                    loadMoreBtn.className = 'generate-btn';
-                    loadMoreBtn.style.cssText = 'margin: 12px auto; display: block; padding: 8px 24px; font-size: 0.85rem;';
-                    loadMoreBtn.textContent = `Load more (${browseColors.length - shown} remaining)`;
-                    container.appendChild(loadMoreBtn);
-                    loadMoreBtn.addEventListener('click', () => {
-                        const next = Math.min(shown + BROWSE_BATCH, browseColors.length);
-                        loadMoreBtn.remove();
-                        renderBrowseBatch(container, browseColors, shown, next);
-                        shown = next;
-                        if (shown < browseColors.length) {
-                            loadMoreBtn.textContent = `Load more (${browseColors.length - shown} remaining)`;
-                            container.appendChild(loadMoreBtn);
-                        }
-                    });
-                }
+                setupLazyLoad(container, browseColors, 60);
                 renderPopularColors();
                 return;
             }
@@ -2456,33 +2514,13 @@
                 return;
             }
 
-            const BATCH_SIZE = 60;
             container.innerHTML = `
                 <div class="browse-header">
                     <span class="browse-title">Search Results</span>
                     <span class="browse-count">${results.length} colors</span>
                 </div>
             `;
-            renderBrowseBatch(container, results, 0, Math.min(BATCH_SIZE, results.length));
-
-            if (results.length > BATCH_SIZE) {
-                let shown = BATCH_SIZE;
-                const loadMoreBtn = document.createElement('button');
-                loadMoreBtn.className = 'generate-btn';
-                loadMoreBtn.style.cssText = 'margin: 12px auto; display: block; padding: 8px 24px; font-size: 0.85rem;';
-                loadMoreBtn.textContent = `Load more (${results.length - shown} remaining)`;
-                container.appendChild(loadMoreBtn);
-                loadMoreBtn.addEventListener('click', () => {
-                    const next = Math.min(shown + BATCH_SIZE, results.length);
-                    loadMoreBtn.remove();
-                    renderBrowseBatch(container, results, shown, next);
-                    shown = next;
-                    if (shown < results.length) {
-                        loadMoreBtn.textContent = `Load more (${results.length - shown} remaining)`;
-                        container.appendChild(loadMoreBtn);
-                    }
-                });
-            }
+            setupLazyLoad(container, results, 60);
         }
         
         function renderPopularColors() {
@@ -2498,7 +2536,8 @@
                 {name: 'Green', color: '#00843D', search: 'green'},
                 {name: 'Brown', color: '#8B5B29', search: 'brown'},
                 {name: 'Gray', color: '#7C878E', search: 'gray'},
-                {name: 'Black', color: '#2D2926', search: 'black'}
+                {name: 'Black', color: '#2D2926', search: 'black'},
+                {name: 'White', color: '#F2F0EB', search: 'white'}
             ];
             
             const container = document.getElementById('popularColors');
@@ -3540,9 +3579,10 @@
         }
 
         function closePdfPanel() {
+            const wasOpen = pdfPanel.classList.contains('show');
             pdfPanel.classList.remove('show');
             pdfPanel.removeEventListener('keydown', pdfPanelKeyHandler);
-            exportPdfBtn.focus();
+            if (wasOpen) exportPdfBtn.focus();
         }
 
         exportPdfBtn.addEventListener('click', (e) => {
