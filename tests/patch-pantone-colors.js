@@ -91,9 +91,10 @@ async function main() {
     });
     console.log('New colors added:', addedCount);
 
-    // Step 6: Write updated JSON
+    // Step 6: Write updated JSON + JS loader
     fs.writeFileSync('./brand-palette-pantone/pantone-colors.json', JSON.stringify(data, null, 2));
-    console.log('\nUpdated pantone-colors.json');
+    fs.writeFileSync('./brand-palette-pantone/pantone-colors.js', 'window.PANTONE_DATA = ' + JSON.stringify(data) + ';');
+    console.log('\nUpdated pantone-colors.json + pantone-colors.js');
     console.log('New totals — Coated:', data.coated.length, '| Uncoated:', data.uncoated.length);
 
     // Step 7: Write changelog

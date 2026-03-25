@@ -1554,12 +1554,11 @@
 
     <div class="copy-toast" id="copyToast" role="status" aria-live="polite">Copied!</div>
 
-    <script type="module">
-        // Pantone color libraries (embedded for offline use)
-        // Load Pantone color library from external JSON
-        const pantoneData = await (await fetch('pantone-colors.json')).json();
-        const pantoneCoated = pantoneData.coated;
-        const pantoneUncoated = pantoneData.uncoated;
+    <script src="pantone-colors.js"></script>
+    <script>
+        // Pantone color library loaded from pantone-colors.js
+        const pantoneCoated = window.PANTONE_DATA.coated;
+        const pantoneUncoated = window.PANTONE_DATA.uncoated;
         const allPantone = [...pantoneCoated, ...pantoneUncoated];
 
         // Pre-compute Lab values for all Pantone colors for faster matching
@@ -2579,10 +2578,6 @@
             copyToClipboard(pantoneList);
             showToast('Pantone list copied!');
         }
-        // Expose to global scope for inline onclick handlers
-        window.copyPalette = copyPalette;
-        window.copyCss = copyCss;
-        window.copyPantoneList = copyPantoneList;
 
         let toastTimer = null;
         function showToast(message) {
