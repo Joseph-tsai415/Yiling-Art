@@ -15,12 +15,10 @@
 const fs = require('fs');
 const html = fs.readFileSync('./brand-palette-pantone/index.html', 'utf8');
 
-// --- Extract Pantone data ---
-const cMatch = html.match(/const pantoneCoated\s*=\s*(\[.*?\]);/s);
-const uMatch = html.match(/const pantoneUncoated\s*=\s*(\[.*?\]);/s);
-if (!cMatch || !uMatch) { console.error('FAIL: Could not parse Pantone data'); process.exit(1); }
-const pantoneCoated = eval(cMatch[1]);
-const pantoneUncoated = eval(uMatch[1]);
+// --- Load Pantone data from JSON ---
+const pantoneData = JSON.parse(fs.readFileSync('./brand-palette-pantone/pantone-colors.json', 'utf8'));
+const pantoneCoated = pantoneData.coated;
+const pantoneUncoated = pantoneData.uncoated;
 const allPantone = [...pantoneCoated, ...pantoneUncoated];
 
 // --- Extract functions from index.html (no duplication) ---
@@ -86,9 +84,9 @@ function assert(condition, message) {
 
 // --- Test 1: Total color count ---
 console.log('--- Test 1: Data integrity ---');
-assert(allPantone.length === 5762, `Expected 5762 colors, got ${allPantone.length}`);
-assert(pantoneCoated.length === 2881, `Expected 2881 coated, got ${pantoneCoated.length}`);
-assert(pantoneUncoated.length === 2881, `Expected 2881 uncoated, got ${pantoneUncoated.length}`);
+assert(allPantone.length === 5772, `Expected 5772 colors, got ${allPantone.length}`);
+assert(pantoneCoated.length === 2886, `Expected 2886 coated, got ${pantoneCoated.length}`);
+assert(pantoneUncoated.length === 2886, `Expected 2886 uncoated, got ${pantoneUncoated.length}`);
 
 // --- Test 2: Every color has valid hex ---
 console.log('--- Test 2: Valid hex values ---');
