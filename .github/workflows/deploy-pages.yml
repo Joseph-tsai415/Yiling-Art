@@ -22,6 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Inject version from latest git tag
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+          echo "Injecting version: $VERSION"
+          sed -i "s/__APP_VERSION__/$VERSION/g" brand-palette-pantone/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
