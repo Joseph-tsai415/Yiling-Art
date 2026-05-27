@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yiling Art — Designer Tools</title>
+    <style>
+        :root {
+            --bg-gradient-1: #1a1a2e;
+            --bg-gradient-2: #16213e;
+            --text-primary: #fff;
+            --text-secondary: #aaa;
+            --text-muted: #888;
+            --text-dim: #666;
+            --panel-bg: rgba(255, 255, 255, 0.05);
+            --item-bg: rgba(255, 255, 255, 0.05);
+            --item-hover: rgba(255, 255, 255, 0.1);
+            --border-subtle: rgba(255, 255, 255, 0.1);
+            --border-medium: rgba(255, 255, 255, 0.15);
+            --accent: #4982cf;
+        }
+
+        :root.light-mode {
+            --bg-gradient-1: #f0f2f5;
+            --bg-gradient-2: #e8ecf1;
+            --text-primary: #1a1a2e;
+            --text-secondary: #444;
+            --text-muted: #666;
+            --text-dim: #888;
+            --panel-bg: rgba(255, 255, 255, 0.92);
+            --item-bg: rgba(0, 0, 0, 0.05);
+            --item-hover: rgba(0, 0, 0, 0.09);
+            --border-subtle: rgba(0, 0, 0, 0.1);
+            --border-medium: rgba(0, 0, 0, 0.15);
+            --accent: #2563eb;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        *:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, var(--bg-gradient-1) 0%, var(--bg-gradient-2) 100%);
+            min-height: 100vh;
+            padding: 60px 20px;
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        .container { max-width: 960px; margin: 0 auto; }
+
+        header { text-align: center; margin-bottom: 56px; }
+        header h1 {
+            font-size: clamp(2rem, 5vw, 3rem);
+            font-weight: 700;
+            margin-bottom: 12px;
+            letter-spacing: -0.02em;
+        }
+        header p {
+            font-size: 1.05rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .apps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .app-card {
+            display: block;
+            text-decoration: none;
+            color: inherit;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-subtle);
+            border-radius: 14px;
+            padding: 28px 24px;
+            transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+        }
+        .app-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--border-medium);
+            background: var(--item-hover);
+        }
+        .app-card h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .app-card p {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+        .app-card .meta {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        .app-card .meta span {
+            background: var(--item-bg);
+            border: 1px solid var(--border-subtle);
+            padding: 3px 10px;
+            border-radius: 999px;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 56px;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+        footer a {
+            color: var(--text-muted);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text-primary); }
+
+        .theme-toggle {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.35);
+            background: rgba(30, 30, 60, 0.9);
+            cursor: pointer;
+            font-size: 18px;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        :root.light-mode .theme-toggle {
+            background: rgba(255, 255, 255, 0.95);
+            border-color: rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" type="button" aria-label="Toggle theme" onclick="toggleTheme()">
+        <span id="themeIcon">☀</span>
+    </button>
+
+    <div class="container">
+        <header>
+            <h1>Yiling Art</h1>
+            <p>A small collection of zero-install, browser-based tools for designers and print production.</p>
+        </header>
+
+        <div class="apps">
+            <a class="app-card" href="brand-palette-pantone/">
+                <h2>Brand Color Palette + Pantone</h2>
+                <p>Generate harmonious palettes, find the closest Pantone matches with CIEDE2000, check WCAG contrast, and export a multi-page PDF report.</p>
+                <div class="meta">
+                    <span>2,881 Pantone colors</span>
+                    <span>WCAG 2.1</span>
+                    <span>PDF export</span>
+                </div>
+            </a>
+
+            <a class="app-card" href="product-card-printer/">
+                <h2>Product Card Printer</h2>
+                <p>Upload a CSV of products (title, ingredients, allergens, price…) and lay them out as 103×73 mm cards on an A3 or A4 PDF ready for printing.</p>
+                <div class="meta">
+                    <span>103×73 mm cards</span>
+                    <span>A3 / A4</span>
+                    <span>CSV input</span>
+                </div>
+            </a>
+        </div>
+
+        <footer>
+            <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener">View on GitHub</a>
+        </footer>
+    </div>
+
+    <script>
+        function toggleTheme() {
+            const root = document.documentElement;
+            const isLight = root.classList.toggle('light-mode');
+            document.getElementById('themeIcon').textContent = isLight ? '☾' : '☀';
+            try { localStorage.setItem('yiling-art-theme', isLight ? 'light' : 'dark'); } catch (e) {}
+        }
+        (function () {
+            try {
+                if (localStorage.getItem('yiling-art-theme') === 'light') {
+                    document.documentElement.classList.add('light-mode');
+                    document.getElementById('themeIcon').textContent = '☾';
+                }
+            } catch (e) {}
+        })();
+    </script>
+</body>
+</html>

@@ -13,10 +13,13 @@
  */
 
 const fs = require('fs');
-const html = fs.readFileSync('./brand-palette-pantone/index.html', 'utf8');
+const path = require('path');
+
+const APP_DIR = path.resolve(__dirname, '..');
+const html = fs.readFileSync(path.join(APP_DIR, 'index.html'), 'utf8');
 
 // --- Load Pantone data from JSON ---
-const pantoneData = JSON.parse(fs.readFileSync('./brand-palette-pantone/pantone-colors.json', 'utf8'));
+const pantoneData = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'pantone-colors.json'), 'utf8'));
 const pantoneCoated = pantoneData.coated;
 const pantoneUncoated = pantoneData.uncoated;
 const allPantone = [...pantoneCoated, ...pantoneUncoated];

@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Card Printer — 103×73 mm Cards on A3/A4</title>
+    <style>
+        :root {
+            --bg-gradient-1: #1a1a2e;
+            --bg-gradient-2: #16213e;
+            --text-primary: #fff;
+            --text-secondary: #aaa;
+            --text-muted: #888;
+            --text-dim: #666;
+            --panel-bg: rgba(255, 255, 255, 0.05);
+            --item-bg: rgba(255, 255, 255, 0.05);
+            --item-hover: rgba(255, 255, 255, 0.1);
+            --border-subtle: rgba(255, 255, 255, 0.1);
+            --border-medium: rgba(255, 255, 255, 0.15);
+            --input-bg: rgba(255, 255, 255, 0.08);
+            --accent: #4982cf;
+            --card-bg: #ffffff;
+            --card-ink: #1a1a2e;
+            --card-border: #d0d4da;
+        }
+        :root.light-mode {
+            --bg-gradient-1: #f0f2f5;
+            --bg-gradient-2: #e8ecf1;
+            --text-primary: #1a1a2e;
+            --text-secondary: #444;
+            --text-muted: #666;
+            --text-dim: #888;
+            --panel-bg: rgba(255, 255, 255, 0.92);
+            --item-bg: rgba(0, 0, 0, 0.05);
+            --item-hover: rgba(0, 0, 0, 0.09);
+            --border-subtle: rgba(0, 0, 0, 0.1);
+            --border-medium: rgba(0, 0, 0, 0.15);
+            --input-bg: rgba(0, 0, 0, 0.06);
+            --accent: #2563eb;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        *:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, var(--bg-gradient-1) 0%, var(--bg-gradient-2) 100%);
+            min-height: 100vh;
+            padding: 30px 20px 80px;
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        .container { max-width: 1100px; margin: 0 auto; }
+
+        header { margin-bottom: 24px; }
+        header .crumb {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        header .crumb a {
+            color: var(--text-secondary);
+            text-decoration: none;
+        }
+        header .crumb a:hover { color: var(--text-primary); }
+        header h1 {
+            font-size: clamp(1.5rem, 3vw, 2rem);
+            font-weight: 700;
+            margin-bottom: 6px;
+            letter-spacing: -0.01em;
+        }
+        header p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .panel h2 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+            align-items: end;
+        }
+        .field label {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .field input[type="file"],
+        .field input[type="number"],
+        .field select {
+            width: 100%;
+            background: var(--input-bg);
+            border: 1px solid var(--border-medium);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+        button {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 18px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.15s ease;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.secondary {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border-medium);
+        }
+
+        .status {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 10px;
+            min-height: 1.2em;
+        }
+        .status.error { color: #f87171; }
+
+        .preview-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .preview-meta .summary {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        .preview-meta .summary strong { color: var(--text-primary); }
+
+        .pages { display: flex; flex-direction: column; gap: 24px; }
+
+        .page {
+            background: #fff;
+            border-radius: 4px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+            position: relative;
+            margin: 0 auto;
+            overflow: hidden;
+        }
+        .page-label {
+            position: absolute;
+            top: -22px;
+            left: 0;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .card {
+            position: absolute;
+            background: var(--card-bg);
+            color: var(--card-ink);
+            border: 0.3mm solid var(--card-border);
+            padding: 3mm 4mm;
+            overflow: hidden;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+        .card .title {
+            font-size: 4.2mm;
+            font-weight: 700;
+            line-height: 1.15;
+            margin-bottom: 1.5mm;
+            color: var(--card-ink);
+        }
+        .card .price {
+            font-size: 5mm;
+            font-weight: 700;
+            color: #b91c1c;
+            margin-bottom: 1.5mm;
+        }
+        .card .fields {
+            font-size: 2.6mm;
+            line-height: 1.25;
+            color: #444;
+            flex: 1;
+            overflow: hidden;
+        }
+        .card .fields .row-item {
+            margin-bottom: 0.8mm;
+        }
+        .card .fields .row-item .key {
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+        .card .footer {
+            font-size: 2.2mm;
+            color: #888;
+            border-top: 0.2mm dashed #d0d4da;
+            padding-top: 1mm;
+            margin-top: auto;
+        }
+
+        details summary {
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        details summary:hover { color: var(--text-primary); }
+
+        .field-map {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+        }
+        .field-map label { color: var(--text-muted); align-self: center; }
+
+        .theme-toggle {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.35);
+            background: rgba(30, 30, 60, 0.9);
+            cursor: pointer;
+            font-size: 18px;
+            color: var(--text-primary);
+            z-index: 100;
+        }
+        :root.light-mode .theme-toggle {
+            background: rgba(255, 255, 255, 0.95);
+            border-color: rgba(0, 0, 0, 0.2);
+        }
+
+        .version-strip {
+            position: fixed;
+            bottom: 8px;
+            left: 12px;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            display: flex;
+            gap: 8px;
+        }
+        .version-strip a { color: var(--text-muted); text-decoration: none; opacity: 0.7; }
+        .version-strip a:hover { opacity: 1; }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" type="button" aria-label="Toggle theme" onclick="toggleTheme()">
+        <span id="themeIcon">☀</span>
+    </button>
+
+    <div class="container">
+        <header>
+            <div class="crumb"><a href="../">← Yiling Art</a></div>
+            <h1>Product Card Printer</h1>
+            <p>Upload a CSV of products and lay them out as 103 × 73 mm cards on A3 or A4, ready for printing.</p>
+        </header>
+
+        <section class="panel">
+            <h2>1. Upload CSV</h2>
+            <div class="controls">
+                <div class="field">
+                    <label for="csvInput">CSV file (UTF-8, first row = headers)</label>
+                    <input type="file" id="csvInput" accept=".csv,text/csv">
+                </div>
+                <div class="field">
+                    <label for="pageFormat">Page format</label>
+                    <select id="pageFormat">
+                        <option value="a3-landscape">A3 landscape (max cards)</option>
+                        <option value="a3-portrait">A3 portrait</option>
+                        <option value="a4-landscape">A4 landscape</option>
+                        <option value="a4-portrait" selected>A4 portrait</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="margin">Page margin (mm)</label>
+                    <input type="number" id="margin" min="0" max="30" step="1" value="10">
+                </div>
+                <div class="field">
+                    <label for="gutter">Gap between cards (mm)</label>
+                    <input type="number" id="gutter" min="0" max="20" step="1" value="3">
+                </div>
+            </div>
+            <div class="row">
+                <button id="loadSampleBtn" class="secondary" type="button">Load sample data</button>
+                <button id="generatePdfBtn" type="button" disabled>Generate PDF</button>
+            </div>
+            <div class="status" id="status">Awaiting CSV — or click “Load sample data” to try the layout.</div>
+        </section>
+
+        <section class="panel" id="mappingPanel" hidden>
+            <h2>2. Map CSV columns to card fields</h2>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+                Pick which CSV column feeds each card field. Any remaining columns appear in the body as key/value rows.
+            </p>
+            <div class="field-map">
+                <label for="mapTitle">Title</label>
+                <select id="mapTitle"></select>
+                <label for="mapPrice">Price</label>
+                <select id="mapPrice"></select>
+                <label for="mapFooter">Footer (optional)</label>
+                <select id="mapFooter"></select>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="preview-meta">
+                <h2 style="margin: 0;">3. Preview</h2>
+                <div class="summary" id="layoutSummary">Cards: 0 · Pages: 0</div>
+            </div>
+            <div class="pages" id="pages"></div>
+        </section>
+    </div>
+
+    <div class="version-strip">
+        <span>__APP_VERSION__</span>
+        <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener">GitHub</a>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script>
+        const CARD_W_MM = 103;
+        const CARD_H_MM = 73;
+
+        const PAGES = {
+            'a4-portrait':  { w: 210, h: 297, label: 'A4 portrait',  jsOrientation: 'p', jsFormat: 'a4' },
+            'a4-landscape': { w: 297, h: 210, label: 'A4 landscape', jsOrientation: 'l', jsFormat: 'a4' },
+            'a3-portrait':  { w: 297, h: 420, label: 'A3 portrait',  jsOrientation: 'p', jsFormat: 'a3' },
+            'a3-landscape': { w: 420, h: 297, label: 'A3 landscape', jsOrientation: 'l', jsFormat: 'a3' },
+        };
+
+        const SAMPLE_CSV =
+            'Title,Price,Ingredients,Allergens,Origin\n' +
+            'Tomato Basil Soup,$8.50,"Tomato, basil, cream, garlic, salt","Dairy",Italy\n' +
+            'Pesto Linguine,$12.00,"Linguine, basil, pine nuts, parmesan, olive oil","Wheat, dairy, nuts",Italy\n' +
+            'Caesar Salad,$10.00,"Romaine, parmesan, anchovy, croutons","Wheat, dairy, fish",USA\n' +
+            'Margherita Pizza,$14.50,"Tomato, mozzarella, basil, dough","Wheat, dairy",Italy\n' +
+            'Chocolate Lava Cake,$7.50,"Chocolate, butter, egg, flour, sugar","Egg, dairy, wheat",France\n' +
+            'Iced Matcha Latte,$5.50,"Matcha, milk, ice","Dairy",Japan\n';
+
+        const state = {
+            headers: [],
+            rows: [],
+            map: { title: 0, price: -1, footer: -1 },
+        };
+
+        // Minimal CSV parser supporting quoted fields and embedded newlines.
+        function parseCSV(text) {
+            const rows = [];
+            let field = '';
+            let row = [];
+            let inQuotes = false;
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i];
+                if (inQuotes) {
+                    if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+                    else if (c === '"') inQuotes = false;
+                    else field += c;
+                } else {
+                    if (c === '"') inQuotes = true;
+                    else if (c === ',') { row.push(field); field = ''; }
+                    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+                    else if (c === '\r') { /* skip */ }
+                    else field += c;
+                }
+            }
+            if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+            return rows.filter(r => r.some(cell => cell && cell.length > 0));
+        }
+
+        function setStatus(msg, isError) {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.classList.toggle('error', !!isError);
+        }
+
+        function ingestCSV(text) {
+            const rows = parseCSV(text);
+            if (rows.length < 2) {
+                setStatus('CSV must have a header row and at least one data row.', true);
+                return;
+            }
+            state.headers = rows[0].map(h => h.trim());
+            state.rows = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
+
+            const lc = state.headers.map(h => h.toLowerCase());
+            const findIdx = (...keys) => {
+                for (const k of keys) {
+                    const i = lc.findIndex(h => h.includes(k));
+                    if (i !== -1) return i;
+                }
+                return -1;
+            };
+            state.map.title = Math.max(0, findIdx('title', 'name', 'product'));
+            state.map.price = findIdx('price', 'cost');
+            state.map.footer = findIdx('origin', 'source', 'note');
+
+            buildMappingUI();
+            document.getElementById('mappingPanel').hidden = false;
+            document.getElementById('generatePdfBtn').disabled = false;
+            setStatus(`Loaded ${state.rows.length} rows · ${state.headers.length} columns.`);
+            render();
+        }
+
+        function buildMappingUI() {
+            ['mapTitle', 'mapPrice', 'mapFooter'].forEach(id => {
+                const select = document.getElementById(id);
+                select.innerHTML = '';
+                if (id !== 'mapTitle') {
+                    const opt = document.createElement('option');
+                    opt.value = -1;
+                    opt.textContent = '— none —';
+                    select.appendChild(opt);
+                }
+                state.headers.forEach((h, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = i;
+                    opt.textContent = h;
+                    select.appendChild(opt);
+                });
+            });
+            document.getElementById('mapTitle').value = state.map.title;
+            document.getElementById('mapPrice').value = state.map.price;
+            document.getElementById('mapFooter').value = state.map.footer;
+        }
+
+        function computeLayout() {
+            const fmt = document.getElementById('pageFormat').value;
+            const page = PAGES[fmt];
+            const margin = Math.max(0, parseFloat(document.getElementById('margin').value) || 0);
+            const gutter = Math.max(0, parseFloat(document.getElementById('gutter').value) || 0);
+            const usableW = page.w - margin * 2;
+            const usableH = page.h - margin * 2;
+            const cols = Math.max(1, Math.floor((usableW + gutter) / (CARD_W_MM + gutter)));
+            const rows = Math.max(1, Math.floor((usableH + gutter) / (CARD_H_MM + gutter)));
+            const perPage = cols * rows;
+            const blockW = cols * CARD_W_MM + (cols - 1) * gutter;
+            const blockH = rows * CARD_H_MM + (rows - 1) * gutter;
+            const offsetX = (page.w - blockW) / 2;
+            const offsetY = (page.h - blockH) / 2;
+            return { page, margin, gutter, cols, rows, perPage, offsetX, offsetY };
+        }
+
+        function cardFieldsFromRow(row) {
+            const { title: ti, price: pi, footer: fi } = state.map;
+            const title = ti >= 0 ? row[ti] : '';
+            const price = pi >= 0 ? row[pi] : '';
+            const footer = fi >= 0 ? row[fi] : '';
+            const used = new Set([ti, pi, fi].filter(i => i >= 0));
+            const extras = [];
+            for (let i = 0; i < state.headers.length; i++) {
+                if (used.has(i)) continue;
+                const val = row[i];
+                if (!val) continue;
+                extras.push({ key: state.headers[i], val });
+            }
+            return { title, price, footer, extras };
+        }
+
+        function render() {
+            const pagesEl = document.getElementById('pages');
+            pagesEl.innerHTML = '';
+            if (!state.rows.length) {
+                document.getElementById('layoutSummary').textContent = 'Cards: 0 · Pages: 0';
+                return;
+            }
+            const layout = computeLayout();
+            const totalPages = Math.ceil(state.rows.length / layout.perPage);
+            document.getElementById('layoutSummary').textContent =
+                `Cards: ${state.rows.length} · ${layout.cols}×${layout.rows} per page · Pages: ${totalPages}`;
+
+            const PX_PER_MM = 3; // preview scale
+            for (let p = 0; p < totalPages; p++) {
+                const pageEl = document.createElement('div');
+                pageEl.className = 'page';
+                pageEl.style.width = layout.page.w * PX_PER_MM + 'px';
+                pageEl.style.height = layout.page.h * PX_PER_MM + 'px';
+
+                const label = document.createElement('div');
+                label.className = 'page-label';
+                label.textContent = `Page ${p + 1} / ${totalPages} — ${layout.page.label}`;
+                pageEl.appendChild(label);
+
+                for (let i = 0; i < layout.perPage; i++) {
+                    const dataIdx = p * layout.perPage + i;
+                    if (dataIdx >= state.rows.length) break;
+                    const col = i % layout.cols;
+                    const row = Math.floor(i / layout.cols);
+                    const x = layout.offsetX + col * (CARD_W_MM + layout.gutter);
+                    const y = layout.offsetY + row * (CARD_H_MM + layout.gutter);
+
+                    const cardEl = document.createElement('div');
+                    cardEl.className = 'card';
+                    cardEl.style.left = x * PX_PER_MM + 'px';
+                    cardEl.style.top = y * PX_PER_MM + 'px';
+                    cardEl.style.width = CARD_W_MM * PX_PER_MM + 'px';
+                    cardEl.style.height = CARD_H_MM * PX_PER_MM + 'px';
+
+                    const f = cardFieldsFromRow(state.rows[dataIdx]);
+                    if (f.title) {
+                        const t = document.createElement('div');
+                        t.className = 'title';
+                        t.textContent = f.title;
+                        cardEl.appendChild(t);
+                    }
+                    if (f.price) {
+                        const pr = document.createElement('div');
+                        pr.className = 'price';
+                        pr.textContent = f.price;
+                        cardEl.appendChild(pr);
+                    }
+                    if (f.extras.length) {
+                        const body = document.createElement('div');
+                        body.className = 'fields';
+                        f.extras.forEach(({ key, val }) => {
+                            const r = document.createElement('div');
+                            r.className = 'row-item';
+                            r.innerHTML = '<span class="key">' + escapeHtml(key) + ':</span> ' + escapeHtml(val);
+                            body.appendChild(r);
+                        });
+                        cardEl.appendChild(body);
+                    }
+                    if (f.footer) {
+                        const ft = document.createElement('div');
+                        ft.className = 'footer';
+                        ft.textContent = f.footer;
+                        cardEl.appendChild(ft);
+                    }
+
+                    pageEl.appendChild(cardEl);
+                }
+                pagesEl.appendChild(pageEl);
+            }
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        function generatePDF() {
+            if (!state.rows.length) return;
+            const layout = computeLayout();
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({
+                orientation: layout.page.jsOrientation,
+                unit: 'mm',
+                format: layout.page.jsFormat,
+            });
+
+            const totalPages = Math.ceil(state.rows.length / layout.perPage);
+            for (let p = 0; p < totalPages; p++) {
+                if (p > 0) doc.addPage();
+                for (let i = 0; i < layout.perPage; i++) {
+                    const dataIdx = p * layout.perPage + i;
+                    if (dataIdx >= state.rows.length) break;
+                    const col = i % layout.cols;
+                    const rowIdx = Math.floor(i / layout.cols);
+                    const x = layout.offsetX + col * (CARD_W_MM + layout.gutter);
+                    const y = layout.offsetY + rowIdx * (CARD_H_MM + layout.gutter);
+                    drawCardPDF(doc, x, y, state.rows[dataIdx]);
+                }
+            }
+            doc.save('product-cards.pdf');
+            setStatus(`Exported ${state.rows.length} cards to product-cards.pdf.`);
+        }
+
+        function drawCardPDF(doc, x, y, row) {
+            const padX = 4;
+            const padY = 3;
+            const innerW = CARD_W_MM - padX * 2;
+            doc.setDrawColor(208, 212, 218);
+            doc.setLineWidth(0.3);
+            doc.rect(x, y, CARD_W_MM, CARD_H_MM);
+
+            const f = cardFieldsFromRow(row);
+            let cursorY = y + padY + 4;
+
+            if (f.title) {
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(12);
+                doc.setTextColor(26, 26, 46);
+                const titleLines = doc.splitTextToSize(f.title, innerW);
+                doc.text(titleLines.slice(0, 2), x + padX, cursorY);
+                cursorY += Math.min(titleLines.length, 2) * 4.6;
+            }
+            if (f.price) {
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(13);
+                doc.setTextColor(185, 28, 28);
+                doc.text(f.price, x + padX, cursorY + 1);
+                cursorY += 5.5;
+            }
+
+            if (f.extras.length) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(7.5);
+                doc.setTextColor(68, 68, 68);
+                const bottomLimit = y + CARD_H_MM - padY - (f.footer ? 5 : 1);
+                for (const { key, val } of f.extras) {
+                    if (cursorY > bottomLimit) break;
+                    const text = key + ': ' + val;
+                    const lines = doc.splitTextToSize(text, innerW);
+                    for (const line of lines) {
+                        if (cursorY > bottomLimit) break;
+                        doc.text(line, x + padX, cursorY);
+                        cursorY += 3.1;
+                    }
+                    cursorY += 0.4;
+                }
+            }
+
+            if (f.footer) {
+                doc.setDrawColor(208, 212, 218);
+                doc.setLineDashPattern([0.6, 0.6], 0);
+                const lineY = y + CARD_H_MM - padY - 3.2;
+                doc.line(x + padX, lineY, x + CARD_W_MM - padX, lineY);
+                doc.setLineDashPattern([], 0);
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(6.5);
+                doc.setTextColor(136, 136, 136);
+                doc.text(f.footer, x + padX, y + CARD_H_MM - padY);
+            }
+        }
+
+        function toggleTheme() {
+            const root = document.documentElement;
+            const isLight = root.classList.toggle('light-mode');
+            document.getElementById('themeIcon').textContent = isLight ? '☾' : '☀';
+            try { localStorage.setItem('yiling-art-theme', isLight ? 'light' : 'dark'); } catch (e) {}
+        }
+        (function () {
+            try {
+                if (localStorage.getItem('yiling-art-theme') === 'light') {
+                    document.documentElement.classList.add('light-mode');
+                    document.getElementById('themeIcon').textContent = '☾';
+                }
+            } catch (e) {}
+        })();
+
+        document.getElementById('csvInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => ingestCSV(reader.result);
+            reader.onerror = () => setStatus('Failed to read file.', true);
+            reader.readAsText(file);
+        });
+
+        document.getElementById('loadSampleBtn').addEventListener('click', () => ingestCSV(SAMPLE_CSV));
+        document.getElementById('generatePdfBtn').addEventListener('click', generatePDF);
+
+        ['pageFormat', 'margin', 'gutter'].forEach(id => {
+            document.getElementById(id).addEventListener('input', render);
+        });
+        ['mapTitle', 'mapPrice', 'mapFooter'].forEach(id => {
+            document.getElementById(id).addEventListener('change', () => {
+                state.map.title = parseInt(document.getElementById('mapTitle').value, 10);
+                state.map.price = parseInt(document.getElementById('mapPrice').value, 10);
+                state.map.footer = parseInt(document.getElementById('mapFooter').value, 10);
+                render();
+            });
+        });
+    </script>
+</body>
+</html>
