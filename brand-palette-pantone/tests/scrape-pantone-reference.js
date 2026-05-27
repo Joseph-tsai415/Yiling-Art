@@ -6,6 +6,9 @@
  */
 const https = require('https');
 const fs = require('fs');
+const path = require('path');
+
+const APP_DIR = path.resolve(__dirname, '..');
 
 function fetch(url) {
     return new Promise((resolve, reject) => {
@@ -63,7 +66,7 @@ async function main() {
     console.log('Reference uncoated:', Object.keys(refUncoated).length);
 
     // Step 2: Load our database from JSON
-    const pantoneData = JSON.parse(fs.readFileSync('./brand-palette-pantone/pantone-colors.json', 'utf8'));
+    const pantoneData = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'pantone-colors.json'), 'utf8'));
     const ourCoated = pantoneData.coated;
     const ourUncoated = pantoneData.uncoated;
     console.log('Our coated:', ourCoated.length, '| Our uncoated:', ourUncoated.length);
@@ -154,11 +157,11 @@ async function main() {
         }
     };
 
-    fs.writeFileSync('./tests/pantone-patch-report.json', JSON.stringify(report, null, 2));
+    fs.writeFileSync(path.join(__dirname, 'pantone-patch-report.json'), JSON.stringify(report, null, 2));
     console.log('\n=== SUMMARY ===');
     console.log('Coated:   ' + coatedResult.updates.length + ' to update, ' + coatedResult.newColors.length + ' new');
     console.log('Uncoated: ' + uncoatedResult.updates.length + ' to update, ' + uncoatedResult.newColors.length + ' new');
-    console.log('Report saved to tests/pantone-patch-report.json');
+    console.log('Report saved to brand-palette-pantone/tests/pantone-patch-report.json');
 }
 
 main().catch(console.error);

@@ -6,6 +6,9 @@
  */
 const https = require('https');
 const fs = require('fs');
+const path = require('path');
+
+const APP_DIR = path.resolve(__dirname, '..');
 
 function fetch(url) {
     return new Promise((resolve, reject) => {
@@ -21,7 +24,7 @@ async function main() {
     const patchDate = new Date().toISOString().split('T')[0];
 
     // Step 1: Load our JSON
-    const data = JSON.parse(fs.readFileSync('./brand-palette-pantone/pantone-colors.json', 'utf8'));
+    const data = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'pantone-colors.json'), 'utf8'));
     console.log('Loaded — Coated:', data.coated.length, '| Uncoated:', data.uncoated.length);
 
     // Step 2: Fetch reference data from pantonecolors.net
@@ -92,8 +95,8 @@ async function main() {
     console.log('New colors added:', addedCount);
 
     // Step 6: Write updated JSON + JS loader
-    fs.writeFileSync('./brand-palette-pantone/pantone-colors.json', JSON.stringify(data, null, 2));
-    fs.writeFileSync('./brand-palette-pantone/pantone-colors.js', 'window.PANTONE_DATA = ' + JSON.stringify(data) + ';');
+    fs.writeFileSync(path.join(APP_DIR, 'pantone-colors.json'), JSON.stringify(data, null, 2));
+    fs.writeFileSync(path.join(APP_DIR, 'pantone-colors.js'), 'window.PANTONE_DATA = ' + JSON.stringify(data) + ';');
     console.log('\nUpdated pantone-colors.json + pantone-colors.js');
     console.log('New totals — Coated:', data.coated.length, '| Uncoated:', data.uncoated.length);
 
@@ -108,8 +111,8 @@ async function main() {
         },
         changes: changelog
     };
-    fs.writeFileSync('./tests/pantone-patch-changelog.json', JSON.stringify(changelogContent, null, 2));
-    console.log('Changelog saved to tests/pantone-patch-changelog.json (' + changelog.length + ' entries)');
+    fs.writeFileSync(path.join(__dirname, 'pantone-patch-changelog.json'), JSON.stringify(changelogContent, null, 2));
+    console.log('Changelog saved to brand-palette-pantone/tests/pantone-patch-changelog.json (' + changelog.length + ' entries)');
 
     // Step 8: Print summary of biggest changes
     const updates = changelog.filter(c => c.type === 'update').sort((a, b) => {

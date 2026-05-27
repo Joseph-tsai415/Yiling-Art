@@ -28,7 +28,11 @@ jobs:
         run: |
           VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev")
           echo "Injecting version: $VERSION"
-          sed -i "s/__APP_VERSION__/$VERSION/g" brand-palette-pantone/index.html
+          # Patch __APP_VERSION__ in every app's index.html (one folder per app at repo root).
+          grep -rl --include='index.html' --exclude-dir='.git' --exclude-dir='node_modules' '__APP_VERSION__' . | while read -r file; do
+            echo "  -> $file"
+            sed -i "s/__APP_VERSION__/$VERSION/g" "$file"
+          done
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
