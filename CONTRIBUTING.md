@@ -24,11 +24,16 @@ master          (production — deployed to GitHub Pages)
 
 ### Branch naming
 
+Branches that touch a single app should include the app scope so PRs are easy to triage. Repo-wide changes (workflows, hub page, docs) use the bare form.
+
 | Type | Pattern | Example |
 |------|---------|---------|
-| New feature | `feature/short-description` | `feature/color-export-svg` |
-| Bug fix | `fix/short-description` | `fix/toast-stacking` |
-| Maintenance | `chore/short-description` | `chore/update-dependencies` |
+| App feature | `feature/<app>-short-description` | `feature/pantone-export-svg`, `feature/cards-csv-mapping` |
+| App bug fix | `fix/<app>-short-description` | `fix/pantone-toast-stacking`, `fix/cards-a3-layout` |
+| App maintenance | `chore/<app>-short-description` | `chore/pantone-update-dataset` |
+| Repo-wide change | `<type>/short-description` (no app scope) | `chore/multi-app-structure`, `chore/update-deploy-workflow` |
+
+Current app scopes: `pantone` (brand-palette-pantone), `cards` (product-card-printer). When you add a new app, pick a short scope (lowercase, no spaces) and add it to this list.
 
 ## Pull Requests
 

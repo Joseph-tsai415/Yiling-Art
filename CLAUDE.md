@@ -2,10 +2,15 @@
 
 **Always read and follow [CONTRIBUTING.md](CONTRIBUTING.md)** for the full development workflow, branch strategy, PR guidelines, and issue linking rules.
 
+## Repo Layout
+
+This repo hosts multiple self-contained browser apps, one folder per app at the repo root (currently `brand-palette-pantone/` and `product-card-printer/`). A root `index.html` is the hub that links to each app. When adding a new app, create a new top-level folder and add a card to the hub. See [README.md](README.md) for the current app list.
+
 ## Git Workflow
 
 - Do NOT include `Co-Authored-By` lines in commit messages.
 - **Branch strategy**: `feature/*`, `fix/*`, `chore/*` branches merge into `dev` via PR. Only `dev` merges into `master` for releases.
+- **App scope in branch names**: app-specific branches use `<type>/<app>-description` (e.g. `feature/pantone-export-svg`, `feature/cards-csv-mapping`). Repo-wide branches drop the scope (e.g. `chore/multi-app-structure`). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full table.
 - Always create new branches from `dev`, not `master`:
   ```bash
   git checkout dev && git pull origin dev && git checkout -b feature/my-feature
