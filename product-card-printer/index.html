@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Product Card Printer — 103×73 mm Cards on A3/A4</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Chocolate+Classical+Sans&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-gradient-1: #1a1a2e;
@@ -95,6 +92,7 @@
         }
         .field input[type="file"],
         .field input[type="number"],
+        .field input[type="text"],
         .field select {
             width: 100%;
             background: var(--input-bg);
@@ -103,6 +101,18 @@
             padding: 10px 12px;
             color: var(--text-primary);
             font-size: 0.9rem;
+        }
+        /* The native option popup uses a light system background, so set explicit
+           option colors per theme — otherwise white-on-white is unreadable. */
+        .field select option,
+        .field-map select option {
+            background-color: #1a1a2e;
+            color: #fff;
+        }
+        :root.light-mode .field select option,
+        :root.light-mode .field-map select option {
+            background-color: #ffffff;
+            color: #1a1a2e;
         }
 
         .row {
@@ -161,68 +171,41 @@
         }
         .preview-meta .summary strong { color: var(--text-primary); }
 
-        .pages { display: flex; flex-direction: column; gap: 24px; align-items: center; }
-
-        .page {
+        .preview-wrap { position: relative; }
+        #pdfPreview {
+            width: 100%;
+            height: 75vh;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
             background: #fff;
-            border-radius: 4px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.25);
-            position: relative;
-            overflow: hidden;
-            transform-origin: top left;
+            display: block;
         }
-        .page-label {
-            position: absolute;
-            top: -22px;
-            left: 0;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            transform: scale(calc(1 / var(--preview-scale, 1)));
-            transform-origin: top left;
-        }
-
-        /* ---------- Card template ---------- */
-        .card {
-            position: absolute;
-            background: #fff;
-            color: #fbf6ed;
-            overflow: hidden;
-            /* Only Chocolate Classical Sans, then a clearly different serif fallback so
-               it's visually obvious if the Google Font has not loaded yet. */
-            font-family: 'Chocolate Classical Sans', serif;
-            line-height: 1.15;
-        }
-        .card-bg {
+        .spinner-overlay {
             position: absolute;
             inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            user-select: none;
-            -webkit-user-drag: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            background: rgba(10, 12, 24, 0.45);
+            border-radius: 8px;
+            backdrop-filter: blur(2px);
+            z-index: 5;
         }
-        .card-text {
-            position: absolute;
-            color: #fbf6ed;
-            white-space: pre-wrap;
-            z-index: 2;
+        /* The hidden attribute must win over display:flex above. */
+        .spinner-overlay[hidden] { display: none; }
+        .spinner {
+            width: 44px;
+            height: 44px;
+            border: 4px solid rgba(255, 255, 255, 0.25);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            /* transform-based so it keeps spinning on the compositor thread */
+            animation: card-spin 0.8s linear infinite;
         }
-        .card-text.center {
-            left: 0;
-            right: 0;
-            text-align: center;
-        }
-        /*
-         * All positions measured in mm from the top-left of the card.
-         * Card is 103mm × 73mm.
-         */
-        .card-text.title          { top: 23mm; font-size: 17pt; font-weight: 600; }
-        .card-text.english-title  { top: 30mm; font-size: 12pt; }
-        /* Chinese + English ingredients render as one block, line 2 directly under
-           line 1 with no extra gap. */
-        .card-text.ingredients    { top: 42mm; font-size: 9pt; line-height: 1.1; }
-        .card-text.allergens      { left: 5.5mm; top: 60mm; font-size: 9pt;  text-align: left;  max-width: 70mm; }
-        .card-text.price          { left: 82mm; top: 60mm; font-size: 14pt; font-weight: 700; }
+        @keyframes card-spin { to { transform: rotate(360deg); } }
+        .spinner-label { color: #fff; font-size: 0.85rem; letter-spacing: 0.03em; }
 
         details summary {
             cursor: pointer;
@@ -320,6 +303,18 @@
                 <button id="generatePdfBtn" type="button" disabled>Generate PDF</button>
             </div>
             <div class="status" id="status">Awaiting CSV — or click “Load sample data” to try the layout.</div>
+
+            <div style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-subtle);">
+                <label for="sheetUrl" style="display:block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px;">
+                    …or connect a Google Sheet (shared “anyone with the link can view”) — auto-refreshes every 15s
+                </label>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                    <input type="text" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=0"
+                           style="flex:1; min-width:260px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 10px 12px; color: var(--text-primary); font-size: 0.9rem;">
+                    <button id="sheetConnectBtn" class="secondary" type="button">Connect</button>
+                </div>
+                <div class="status" id="sheetStatus"></div>
+            </div>
         </section>
 
         <section class="panel" id="mappingPanel" hidden>
@@ -336,10 +331,14 @@
                 <select id="mapCnIngredients"></select>
                 <label for="mapEnIngredients">Ingredients (English)</label>
                 <select id="mapEnIngredients"></select>
-                <label for="mapAllergens">Allergens</label>
+                <label for="mapDiet">Diet (素別) — allergen line 1</label>
+                <select id="mapDiet"></select>
+                <label for="mapAllergens">Allergens (過敏原) — line 2</label>
                 <select id="mapAllergens"></select>
-                <label for="mapPrice">Price</label>
-                <select id="mapPrice"></select>
+                <label for="mapPriceWhole">Price (whole)</label>
+                <select id="mapPriceWhole"></select>
+                <label for="mapPriceHalf">Price (half/slice)</label>
+                <select id="mapPriceHalf"></select>
             </div>
         </section>
 
@@ -348,7 +347,16 @@
                 <h2 style="margin: 0;">3. Preview</h2>
                 <div class="summary" id="layoutSummary">Cards: 0 · Pages: 0</div>
             </div>
-            <div class="pages" id="pages"></div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
+                This is the actual generated PDF — what you see is exactly what “Generate PDF” downloads.
+            </p>
+            <div class="preview-wrap">
+                <iframe id="pdfPreview" title="PDF preview"></iframe>
+                <div id="spinner" class="spinner-overlay" hidden>
+                    <div class="spinner"></div>
+                    <div class="spinner-label">Rendering…</div>
+                </div>
+            </div>
         </section>
     </div>
 
@@ -357,65 +365,57 @@
         <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener">GitHub</a>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script>
-        const CARD_W_MM = 103;
-        const CARD_H_MM = 73;
-
-        // Background image hosted on S3. Bucket must have CORS configured to allow
-        // GET from this site's origin (or *), otherwise the PDF canvas read will be
-        // blocked by the same-origin policy.
+        // PDF building runs in pdf-worker.js (off the main thread). These are the
+        // assets the worker fetches.
         const BG_URL = 'https://db-doc-tw1.s3.ap-east-2.amazonaws.com/background.png';
-        // Optional: drop a CMYK-encoded JPEG at this URL for fully-CMYK PDFs.
+        // Optional: a CMYK-encoded JPEG here yields a fully-CMYK PDF (background too).
         const BG_CMYK_URL = 'https://db-doc-tw1.s3.ap-east-2.amazonaws.com/background.cmyk.jpg';
+        // Full unsubsetted Chocolate Classical Sans TTF (incl. CJK) from the google/fonts repo.
+        const PDF_FONT_URL = 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/chocolateclassicalsans/ChocolateClassicalSans-Regular.ttf';
 
-        const PAGES = {
-            'a4-portrait':  { w: 210, h: 297, label: 'A4 portrait',  jsOrientation: 'p', jsFormat: 'a4' },
-            'a4-landscape': { w: 297, h: 210, label: 'A4 landscape', jsOrientation: 'l', jsFormat: 'a4' },
-            'a3-portrait':  { w: 297, h: 420, label: 'A3 portrait',  jsOrientation: 'p', jsFormat: 'a3' },
-            'a3-landscape': { w: 420, h: 297, label: 'A3 landscape', jsOrientation: 'l', jsFormat: 'a3' },
-        };
-
-        const FONT_FAMILY = 'Chocolate Classical Sans';
-        // Sample of every script we expect on the cards. Used to force Google Fonts
-        // to pull the right unicode-range subsets before we rasterize.
-        const FONT_SAMPLE_TEXT = 'ABC abc 0123 $€ 毛豆梵谷起司 抹茶生巧克力 奶素含乳製品';
-
-        async function ensureFontLoaded() {
-            if (!document.fonts || !document.fonts.load) return;
-            const sizes = ['10pt', '14pt', '9pt'];
-            await Promise.all(sizes.map(size =>
-                document.fonts.load(`${size} "${FONT_FAMILY}"`, FONT_SAMPLE_TEXT)
-            ));
-            await document.fonts.ready;
-        }
-
-        function isFontAvailable() {
-            return !!document.fonts && document.fonts.check(`10pt "${FONT_FAMILY}"`, FONT_SAMPLE_TEXT);
-        }
-
+        // Each field: optional `match` predicate (runs first, against the lowercased+
+        // trimmed header) for tricky cases, then `aliases` (exact pass, then includes).
         const FIELDS = [
-            { id: 'title',          label: 'Title (Chinese)',     selectId: 'mapTitle',          aliases: ['title', 'chinese title', 'name', 'product'] },
-            { id: 'englishTitle',   label: 'Title (English)',     selectId: 'mapEnglishTitle',   aliases: ['english', 'english title'] },
-            { id: 'cnIngredients',  label: 'Ingredients (CN)',    selectId: 'mapCnIngredients',  aliases: ['chinese ingredients', 'ingredients zh', 'ingredients_zh', '材料', '成分'] },
-            { id: 'enIngredients',  label: 'Ingredients (EN)',    selectId: 'mapEnIngredients',  aliases: ['english ingredients', 'ingredients en', 'ingredients_en', 'ingredients'] },
-            { id: 'allergens',      label: 'Allergens',           selectId: 'mapAllergens',      aliases: ['allergen', 'allergens', 'allergy', '過敏'] },
-            { id: 'price',          label: 'Price',               selectId: 'mapPrice',          aliases: ['price', 'cost', '價格'] },
+            { id: 'title',         label: 'Title (Chinese)',    selectId: 'mapTitle',
+              match: h => h.includes('mamalili品名') && !h.includes('英文'),
+              aliases: ['chinese title', 'title', 'name', 'product'] },
+            { id: 'englishTitle',  label: 'Title (English)',    selectId: 'mapEnglishTitle',
+              match: h => h.includes('mamalili品名') && h.includes('英文'),
+              aliases: ['english title', 'english'] },
+            { id: 'cnIngredients', label: 'Ingredients (CN)',   selectId: 'mapCnIngredients',
+              match: h => h.includes('中文成分'),
+              aliases: ['chinese ingredients', 'ingredients zh', 'ingredients_zh'] },
+            { id: 'enIngredients', label: 'Ingredients (EN)',   selectId: 'mapEnIngredients',
+              match: h => h.includes('英文成分'),
+              aliases: ['english ingredients', 'ingredients en', 'ingredients_en', 'ingredients'] },
+            { id: 'diet',          label: 'Diet (素別)',        selectId: 'mapDiet',
+              match: h => h.includes('素別'),
+              aliases: ['diet', 'veg'] },
+            { id: 'allergens',     label: 'Allergens (過敏原)',  selectId: 'mapAllergens',
+              match: h => h.includes('過敏'),
+              aliases: ['allergen', 'allergy', 'allergens'] },
+            { id: 'priceWhole',    label: 'Price (whole)',      selectId: 'mapPriceWhole',
+              match: h => h.includes('整顆') || h.includes('整份'),
+              aliases: ['price', 'cost', '價格'] },
+            { id: 'priceHalf',     label: 'Price (half/slice)', selectId: 'mapPriceHalf',
+              match: h => h.includes('一半') || h.includes('一片'),
+              aliases: ['half', 'slice'] },
         ];
 
         const SAMPLE_CSV =
-            'Chinese Title,English Title,Chinese Ingredients,English Ingredients,Allergens,Price\n' +
-            '"毛豆梵谷起司巧巴達","Edamame & Van Gogh Cheese Ciabatta","毛豆、梵谷起司","Edamame, Vincent Van Gogh Cheese","奶素Veg\\n含乳製品Contains Dairy","$85"\n' +
-            '"紅藜麥酸種","Red Quinoa Sourdough","紅藜麥、酸種麵粉","Red quinoa, sourdough flour","純素Vegan\\n含麩質Contains Gluten","$78"\n' +
-            '"伯爵茶磅蛋糕","Earl Grey Pound Cake","伯爵茶、奶油、雞蛋","Earl Grey tea, butter, eggs","奶蛋素Lacto-ovo\\n含乳製品Contains Dairy, Egg","$120"\n' +
-            '"南瓜籽全麥","Pumpkin Seed Whole Wheat","南瓜籽、全麥麵粉","Pumpkin seeds, whole wheat flour","純素Vegan\\n含麩質Contains Gluten","$68"\n' +
-            '"莓果可頌","Berry Croissant","綜合莓果、奶油","Mixed berries, butter","奶蛋素Lacto-ovo\\n含乳製品Contains Dairy","$95"\n' +
-            '"抹茶生巧克力","Matcha Raw Chocolate","抹茶、可可、鮮奶油","Matcha, cacao, fresh cream","奶素Veg\\n含乳製品Contains Dairy","$135"\n';
+            'Chinese Title,English Title,Chinese Ingredients,English Ingredients,Diet,Allergens,Price Whole,Price Half\n' +
+            '"慢活莊園: 原味酸種","Slow Living: Classic Sourdough","法國小麥粉、長時間發酵野生酵母、海鹽","Wheat flour, naturally fermented wild yeast, sea salt","全素Vegan","","NT$270","165"\n' +
+            '"情歌：橙香巧克力酸種","Love Song: Dark Chocolate & Orange","糖漬橘皮丁、70%巧克力、酒漬黑加侖","Candied orange, 70% chocolate, boozy blackcurrant","全素Vegan","","NT$330","195"\n' +
+            '"探戈：剝皮辣椒起司酸種","Tango: Peeled Chili & Cheddar","剝皮辣椒、紅切達乳酪絲","Taiwanese peeled chili, red cheddar cheese","奶素Veg","含乳製品Contains Dairy","NT$290","175"\n' +
+            '"拿坡里陽光: 臘腸起司酸種","Napoli Sunshine","美式臘腸、米摩特勒起司丁、風乾番茄、義大利香料","Salami, Mimolette cheese, sun-dried tomatoes, herbs","葷Non-Veg","含乳製品Contains Dairy","NT$340","200"\n' +
+            '"莓果森林：蔓越莓藍莓酸種","Blueberry Forest","藍莓汁、藍莓乾、酒漬蔓越莓乾、核桃","Blueberry, boozy cranberries, walnuts","全素Vegan","含堅果Contains Nuts","NT$350","205"\n' +
+            '"斑斕樂團：黑加侖椰香酸種","Pandan Playground","斑斕粉、羽衣甘藍粉、酒漬黑加侖、椰子絲","Pandan powder, kale powder, boozy blackcurrants, shredded coconut","全素Vegan","","NT$290","175"\n';
 
         const state = {
             headers: [],
             rows: [],
-            map: { title: -1, englishTitle: -1, cnIngredients: -1, enIngredients: -1, allergens: -1, price: -1 },
+            map: { title: -1, englishTitle: -1, cnIngredients: -1, enIngredients: -1, diet: -1, allergens: -1, priceWhole: -1, priceHalf: -1 },
         };
 
         // Minimal CSV parser: supports quoted fields, embedded newlines, and "" escape.
@@ -448,16 +448,19 @@
             el.classList.toggle('error', !!isError);
         }
 
-        // Convert literal "\n" sequences inside CSV cells into real newlines so allergen
-        // text can be written on a single CSV line.
-        function unescapeNewlines(s) {
-            return String(s || '').replace(/\\n/g, '\n');
-        }
-
-        function findHeaderIndex(headers, aliases) {
+        function findHeaderIndex(headers, field) {
             const lc = headers.map(h => h.toLowerCase().trim());
-            for (const alias of aliases) {
-                const i = lc.findIndex(h => h === alias || h.includes(alias));
+            if (field.match) {
+                const i = lc.findIndex(field.match);
+                if (i !== -1) return i;
+            }
+            const aliases = (field.aliases || []).map(a => a.toLowerCase());
+            for (const a of aliases) {            // exact pass
+                const i = lc.indexOf(a);
+                if (i !== -1) return i;
+            }
+            for (const a of aliases) {            // includes pass
+                const i = lc.findIndex(h => h.includes(a));
                 if (i !== -1) return i;
             }
             return -1;
@@ -473,14 +476,14 @@
             state.rows = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
 
             FIELDS.forEach(f => {
-                state.map[f.id] = findHeaderIndex(state.headers, f.aliases);
+                state.map[f.id] = findHeaderIndex(state.headers, f);
             });
 
             buildMappingUI();
             document.getElementById('mappingPanel').hidden = false;
             document.getElementById('generatePdfBtn').disabled = false;
             setStatus(`Loaded ${state.rows.length} rows · ${state.headers.length} columns.`);
-            render();
+            refreshPreview();
         }
 
         function buildMappingUI() {
@@ -500,293 +503,152 @@
                 select.value = state.map[f.id];
                 select.addEventListener('change', () => {
                     state.map[f.id] = parseInt(select.value, 10);
-                    render();
+                    scheduleRefresh();
                 });
             });
         }
 
-        function computeLayout() {
-            const fmt = document.getElementById('pageFormat').value;
-            const page = PAGES[fmt];
-            const margin = Math.max(0, parseFloat(document.getElementById('margin').value) || 0);
-            const gutter = Math.max(0, parseFloat(document.getElementById('gutter').value) || 0);
-            const usableW = page.w - margin * 2;
-            const usableH = page.h - margin * 2;
-            const cols = Math.max(1, Math.floor((usableW + gutter) / (CARD_W_MM + gutter)));
-            const rowsCount = Math.max(1, Math.floor((usableH + gutter) / (CARD_H_MM + gutter)));
-            const perPage = cols * rowsCount;
-            const blockW = cols * CARD_W_MM + (cols - 1) * gutter;
-            const blockH = rowsCount * CARD_H_MM + (rowsCount - 1) * gutter;
-            const offsetX = (page.w - blockW) / 2;
-            const offsetY = (page.h - blockH) / 2;
-            return { page, margin, gutter, cols, rows: rowsCount, perPage, offsetX, offsetY };
+        // ===================== PDF pipeline =====================
+        // All PDF building happens in pdf-worker.js (off the main thread) so the page
+        // never freezes while embedding the ~12 MB font and serializing the document.
+        // The worker is the single source of truth for card layout; the bytes it
+        // returns are shown in the preview iframe and saved on download, so preview
+        // and export are identical.
+
+        let pdfWorker = null;
+        function getWorker() {
+            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js');
+            return pdfWorker;
         }
 
-        function cellFor(row, fieldId) {
-            const idx = state.map[fieldId];
-            if (idx < 0 || idx >= row.length) return '';
-            return unescapeNewlines(row[idx]);
-        }
-
-        // Build a card DOM node for the on-screen preview.
-        function buildCardElement(row) {
-            const card = document.createElement('div');
-            card.className = 'card';
-
-            const bg = document.createElement('img');
-            bg.className = 'card-bg';
-            bg.src = BG_URL;
-            bg.alt = '';
-            card.appendChild(bg);
-
-            const ingredients = [cellFor(row, 'cnIngredients'), cellFor(row, 'enIngredients')]
-                .filter(Boolean).join('\n');
-            const fields = [
-                { cls: 'title center',         val: cellFor(row, 'title') },
-                { cls: 'english-title center', val: cellFor(row, 'englishTitle') },
-                { cls: 'ingredients center',   val: ingredients },
-                { cls: 'allergens',            val: cellFor(row, 'allergens') },
-                { cls: 'price',                val: cellFor(row, 'price') },
-            ];
-            fields.forEach(({ cls, val }) => {
-                if (!val) return;
-                const el = document.createElement('div');
-                el.className = 'card-text ' + cls;
-                el.textContent = val;
-                card.appendChild(el);
+        // Post the current data + layout params to the worker and resolve with its
+        // response ({ buffer, cols, rows, totalPages, cardCount, hasCmyk }).
+        function renderViaWorker() {
+            return new Promise((resolve, reject) => {
+                const w = getWorker();
+                function cleanup() {
+                    w.removeEventListener('message', onMsg);
+                    w.removeEventListener('error', onErr);
+                }
+                function onMsg(e) {
+                    cleanup();
+                    if (e.data.ok) resolve(e.data);
+                    else reject(new Error(e.data.error));
+                }
+                function onErr(e) {
+                    cleanup();
+                    reject(new Error(e.message || 'Worker failed (needs an http origin, not file://).'));
+                }
+                w.addEventListener('message', onMsg);
+                w.addEventListener('error', onErr);
+                w.postMessage({
+                    rows: state.rows,
+                    map: state.map,
+                    pageFormat: document.getElementById('pageFormat').value,
+                    margin: parseFloat(document.getElementById('margin').value) || 0,
+                    gutter: parseFloat(document.getElementById('gutter').value) || 0,
+                    fontUrl: PDF_FONT_URL,
+                    bgUrl: BG_URL,
+                    bgCmykUrl: BG_CMYK_URL,
+                });
             });
-            return card;
         }
 
-        // Page preview uses a CSS zoom factor so a full A3 fits on most monitors but
-        // the cards themselves are sized in physical mm — the same coordinate
-        // system the native PDF pipeline uses.
-        const PREVIEW_ZOOM = 0.7;
+        // Serialize worker builds so only one runs at a time (the worker processes
+        // one message at a time anyway; this keeps responses paired with requests).
+        let workerChain = Promise.resolve();
+        function renderPdf() {
+            const p = workerChain.then(renderViaWorker);
+            workerChain = p.then(() => {}, () => {});
+            return p;
+        }
 
-        function render() {
-            const pagesEl = document.getElementById('pages');
-            pagesEl.innerHTML = '';
+        let lastBuffer = null;     // ArrayBuffer of the PDF currently shown in preview
+        let lastDocDirty = true;   // true when inputs changed since the last build
+        let previewUrl = null;
+        let refreshTimer = null;
+        let activeRenders = 0;
+
+        function showSpinner(on) {
+            document.getElementById('spinner').hidden = !on;
+        }
+
+        function reportPdfError(err) {
+            console.error(err);
+            const text = (err && err.message) || String(err);
+            const looksLikeCors = /tainted|toDataURL|CORS|preflight|Failed to (load|fetch)|HTTP 4|HTTP 5/i.test(text);
+            if (looksLikeCors) {
+                document.getElementById('corsBanner').hidden = false;
+                setStatus('Blocked — could not fetch the S3 background (check the bucket CORS config; see banner at top).', true);
+            } else {
+                setStatus('PDF render failed: ' + text, true);
+            }
+        }
+
+        function applyResult(res) {
+            lastBuffer = res.buffer;
+            lastDocDirty = false;
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+            previewUrl = URL.createObjectURL(new Blob([res.buffer], { type: 'application/pdf' }));
+            document.getElementById('pdfPreview').src = previewUrl;
+            document.getElementById('layoutSummary').textContent =
+                `Cards: ${res.cardCount} · ${res.cols}×${res.rows} per page · Pages: ${res.totalPages}`;
+            const cmykNote = res.hasCmyk ? 'Full CMYK (text + background).' : 'CMYK text on RGB background.';
+            setStatus(`Preview ready — ${res.cardCount} cards across ${res.totalPages} page(s). ${cmykNote}`);
+        }
+
+        async function refreshPreview() {
             if (!state.rows.length) {
                 document.getElementById('layoutSummary').textContent = 'Cards: 0 · Pages: 0';
                 return;
             }
-            const layout = computeLayout();
-            const totalPages = Math.ceil(state.rows.length / layout.perPage);
-            document.getElementById('layoutSummary').textContent =
-                `Cards: ${state.rows.length} · ${layout.cols}×${layout.rows} per page · Pages: ${totalPages}`;
-
-            for (let p = 0; p < totalPages; p++) {
-                const pageEl = document.createElement('div');
-                pageEl.className = 'page';
-                pageEl.style.width = layout.page.w + 'mm';
-                pageEl.style.height = layout.page.h + 'mm';
-                pageEl.style.zoom = PREVIEW_ZOOM;
-
-                const label = document.createElement('div');
-                label.className = 'page-label';
-                label.textContent = `Page ${p + 1} / ${totalPages} — ${layout.page.label}`;
-                pageEl.appendChild(label);
-
-                for (let i = 0; i < layout.perPage; i++) {
-                    const dataIdx = p * layout.perPage + i;
-                    if (dataIdx >= state.rows.length) break;
-                    const col = i % layout.cols;
-                    const rowIdx = Math.floor(i / layout.cols);
-                    const x = layout.offsetX + col * (CARD_W_MM + layout.gutter);
-                    const y = layout.offsetY + rowIdx * (CARD_H_MM + layout.gutter);
-
-                    const cardEl = buildCardElement(state.rows[dataIdx]);
-                    cardEl.style.left = x + 'mm';
-                    cardEl.style.top = y + 'mm';
-                    cardEl.style.width = CARD_W_MM + 'mm';
-                    cardEl.style.height = CARD_H_MM + 'mm';
-                    pageEl.appendChild(cardEl);
-                }
-                pagesEl.appendChild(pageEl);
-            }
-        }
-
-        // ===================== PDF pipeline (native, CMYK) =====================
-        // We bypass html2canvas and draw text natively in jsPDF so we can set CMYK
-        // colors. The background image is embedded as PNG (RGB) — if you need a
-        // fully CMYK PDF including the background, upload a CMYK-encoded JPEG to
-        // BG_CMYK_URL on S3 and we'll use that instead.
-
-        // #fbf6ed converted to CMYK (0–100 percent). Computed once, used per-card.
-        // R=251 G=246 B=237 → K≈1.6, C=0, M≈1.9, Y≈5.6.
-        const CARD_TEXT_CMYK = [0, 1.9, 5.6, 1.6];
-
-        const PDF_FIELDS = [
-            { id: 'title',        x: 'center', y: 23, size: 17, align: 'center', baseline: 'top' },
-            { id: 'englishTitle', x: 'center', y: 30, size: 12, align: 'center', baseline: 'top' },
-            // Chinese + English ingredients as one centered block (line 2 under line 1).
-            { id: 'ingredients',  x: 'center', y: 42, size: 9,  align: 'center', baseline: 'top', sources: ['cnIngredients', 'enIngredients'] },
-            { id: 'allergens',    x: 5.5,      y: 60, size: 9,  align: 'left',   baseline: 'top', maxWidth: 70 },
-            { id: 'price',        x: 82,       y: 60, size: 14, align: 'left',   baseline: 'top' },
-        ];
-
-        // Cache the font + background between PDF generations.
-        let cachedFontBase64 = null;
-        let cachedBgPngDataUrl = null;
-        let cachedCmykBgJpegDataUrl = null;  // set if BG_CMYK_URL is reachable
-
-        const PDF_FONT_NAME = 'ChocolateClassicalSans';
-        const PDF_FONT_FILE = 'ChocolateClassicalSans-Regular.ttf';
-        // Full unsubsetted TTF from the google/fonts repo — includes CJK glyphs.
-        const PDF_FONT_URL = 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/chocolateclassicalsans/ChocolateClassicalSans-Regular.ttf';
-
-        async function fetchAsBase64(url) {
-            const resp = await fetch(url);
-            if (!resp.ok) throw new Error(url + ' → HTTP ' + resp.status);
-            const buf = await resp.arrayBuffer();
-            const bytes = new Uint8Array(buf);
-            let binary = '';
-            const chunk = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunk) {
-                binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
-            }
-            return btoa(binary);
-        }
-
-        async function loadCardFont() {
-            if (cachedFontBase64) return cachedFontBase64;
-            setStatus('Loading Chocolate Classical Sans for PDF…');
-            cachedFontBase64 = await fetchAsBase64(PDF_FONT_URL);
-            return cachedFontBase64;
-        }
-
-        // Load a cross-origin image with CORS enabled, then re-encode via canvas.
-        // Requires the host (S3 in our case) to send Access-Control-Allow-Origin;
-        // otherwise the canvas will taint and toDataURL throws SecurityError.
-        function loadCorsImage(src, mimeType) {
-            return new Promise((resolve, reject) => {
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.onload = () => {
-                    try {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.naturalWidth;
-                        canvas.height = img.naturalHeight;
-                        canvas.getContext('2d').drawImage(img, 0, 0);
-                        resolve(canvas.toDataURL(mimeType || 'image/png'));
-                    } catch (e) {
-                        const err = new Error('CORS not configured for ' + src + ' — canvas tainted.');
-                        err.cause = e;
-                        reject(err);
-                    }
-                };
-                img.onerror = () => reject(new Error('Failed to load ' + src + ' (network error or CORS preflight rejected).'));
-                img.src = src;
-            });
-        }
-
-        // Optional CMYK JPEG override fetched with raw bytes (preserves the CMYK
-        // colour space; canvas re-encoding would convert it to RGB).
-        async function loadCmykBackgroundOverride() {
+            activeRenders++;
+            showSpinner(true);
+            setStatus('Rendering preview…');
             try {
-                const resp = await fetch(BG_CMYK_URL);
-                if (!resp.ok) return null;
-                const buf = await resp.arrayBuffer();
-                const bytes = new Uint8Array(buf);
-                let binary = '';
-                const chunk = 0x8000;
-                for (let i = 0; i < bytes.length; i += chunk) {
-                    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
-                }
-                return 'data:image/jpeg;base64,' + btoa(binary);
-            } catch (e) {
-                return null;
+                const res = await renderPdf();   // runs in the worker — UI stays responsive
+                applyResult(res);
+            } catch (err) {
+                lastBuffer = null;
+                reportPdfError(err);
+            } finally {
+                if (--activeRenders === 0) showSpinner(false);
             }
         }
 
-        let bgInitDone = false;
-        async function loadCardBackground() {
-            if (bgInitDone) return { png: cachedBgPngDataUrl, cmyk: cachedCmykBgJpegDataUrl };
-            cachedCmykBgJpegDataUrl = await loadCmykBackgroundOverride();
-            cachedBgPngDataUrl = await loadCorsImage(BG_URL, 'image/png');
-            bgInitDone = true;
-            return { png: cachedBgPngDataUrl, cmyk: cachedCmykBgJpegDataUrl };
+        function scheduleRefresh() {
+            lastDocDirty = true;
+            clearTimeout(refreshTimer);
+            refreshTimer = setTimeout(refreshPreview, 400);
         }
 
-        function drawCardNative(doc, cardX, cardY, row, bg) {
-            // Background fills the whole card.
-            if (bg.cmyk) {
-                doc.addImage(bg.cmyk, 'JPEG', cardX, cardY, CARD_W_MM, CARD_H_MM, undefined, 'NONE');
-            } else {
-                doc.addImage(bg.png, 'PNG', cardX, cardY, CARD_W_MM, CARD_H_MM, undefined, 'NONE');
-            }
-
-            // CMYK text on top.
-            doc.setFont(PDF_FONT_NAME, 'normal');
-            doc.setTextColor.apply(doc, CARD_TEXT_CMYK);
-
-            const cardCenterX = cardX + CARD_W_MM / 2;
-            PDF_FIELDS.forEach(f => {
-                const text = f.sources
-                    ? f.sources.map(s => cellFor(row, s)).filter(Boolean).join('\n')
-                    : cellFor(row, f.id);
-                if (!text) return;
-                doc.setFontSize(f.size);
-                const tx = (f.x === 'center') ? cardCenterX : (cardX + f.x);
-                const ty = cardY + f.y;
-                let lines;
-                if (f.maxWidth) {
-                    // splitTextToSize honours existing \n and wraps long lines.
-                    lines = doc.splitTextToSize(text, f.maxWidth);
-                } else {
-                    lines = text.split('\n');
-                }
-                doc.text(lines, tx, ty, { align: f.align, baseline: f.baseline });
-            });
-        }
-
-        async function generatePDF() {
-            if (!state.rows.length) return;
+        async function downloadPDF() {
             const btn = document.getElementById('generatePdfBtn');
             btn.disabled = true;
-            const layout = computeLayout();
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({
-                orientation: layout.page.jsOrientation,
-                unit: 'mm',
-                format: layout.page.jsFormat,
-                compress: true,
-            });
-
             try {
-                const [fontB64, bg] = await Promise.all([loadCardFont(), loadCardBackground()]);
-                doc.addFileToVFS(PDF_FONT_FILE, fontB64);
-                doc.addFont(PDF_FONT_FILE, PDF_FONT_NAME, 'normal');
-
-                const totalPages = Math.ceil(state.rows.length / layout.perPage);
-                for (let p = 0; p < totalPages; p++) {
-                    if (p > 0) doc.addPage();
-                    for (let i = 0; i < layout.perPage; i++) {
-                        const dataIdx = p * layout.perPage + i;
-                        if (dataIdx >= state.rows.length) break;
-                        const col = i % layout.cols;
-                        const rowIdx = Math.floor(i / layout.cols);
-                        const x = layout.offsetX + col * (CARD_W_MM + layout.gutter);
-                        const y = layout.offsetY + rowIdx * (CARD_H_MM + layout.gutter);
-
-                        setStatus(`Drawing card ${dataIdx + 1} / ${state.rows.length}…`);
-                        drawCardNative(doc, x, y, state.rows[dataIdx], bg);
+                if (lastDocDirty || !lastBuffer) {
+                    activeRenders++;
+                    showSpinner(true);
+                    try {
+                        const res = await renderPdf();
+                        applyResult(res);
+                    } finally {
+                        if (--activeRenders === 0) showSpinner(false);
                     }
-                    // Yield to the UI between pages so the status text updates.
-                    await new Promise(r => setTimeout(r, 0));
                 }
-                doc.save('product-cards.pdf');
-                const cmykNote = bg.cmyk ? 'Full CMYK (text + background).' : 'CMYK text on RGB background (upload a CMYK JPEG to BG_CMYK_URL for full CMYK).';
-                setStatus(`Exported ${state.rows.length} cards to product-cards.pdf. ${cmykNote}`);
+                if (lastBuffer) {
+                    const url = URL.createObjectURL(new Blob([lastBuffer], { type: 'application/pdf' }));
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'product-cards.pdf';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 2000);
+                    setStatus(`Saved product-cards.pdf (${state.rows.length} cards).`);
+                }
             } catch (err) {
-                console.error(err);
-                const looksLikeCors = err && /tainted|toDataURL|CORS|preflight/i.test(err.message || String(err));
-                let msg = 'PDF generation failed: ' + (err && err.message ? err.message : err);
-                if (looksLikeCors) {
-                    document.getElementById('corsBanner').hidden = false;
-                    msg = 'PDF generation blocked — S3 bucket missing CORS headers. See banner at top of page for the JSON to paste into the bucket’s CORS configuration.';
-                }
-                setStatus(msg, true);
+                reportPdfError(err);
             } finally {
                 btn.disabled = false;
             }
@@ -807,20 +669,110 @@
             } catch (e) {}
         })();
 
+        // ===================== Google Sheets (live) =====================
+        const SHEET_POLL_MS = 15000;
+        let sheetCsvUrl = null;
+        let sheetTimer = null;
+        let lastSheetText = null;
+
+        function setSheetStatus(msg, isError) {
+            const el = document.getElementById('sheetStatus');
+            el.textContent = msg;
+            el.classList.toggle('error', !!isError);
+        }
+
+        // Build the gviz CSV endpoint from a pasted Sheet URL (or bare ID).
+        function sheetCsvUrlFrom(input) {
+            const idMatch = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/) || input.match(/^([a-zA-Z0-9-_]{20,})$/);
+            if (!idMatch) return null;
+            const id = idMatch[1];
+            const gidMatch = input.match(/[#&?]gid=(\d+)/);
+            let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
+            if (gidMatch) url += `&gid=${gidMatch[1]}`;
+            return url;
+        }
+
+        async function fetchSheetCsv() {
+            const resp = await fetch(sheetCsvUrl);
+            if (!resp.ok) throw new Error('Sheet fetch HTTP ' + resp.status);
+            return resp.text();
+        }
+
+        // Apply fetched CSV. Full re-ingest if headers changed (re-detects mapping);
+        // otherwise just swap row data and re-render, preserving manual mapping.
+        function applySheetCsv(text) {
+            if (text === lastSheetText) return false;
+            lastSheetText = text;
+            const rows = parseCSV(text);
+            if (rows.length < 2) { setSheetStatus('Sheet has a header row but no data rows.', true); return false; }
+            const headers = rows[0].map(h => h.trim());
+            const sameHeaders = headers.length === state.headers.length && headers.every((h, i) => h === state.headers[i]);
+            if (!sameHeaders) {
+                ingestCSV(text);
+            } else {
+                state.rows = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
+                refreshPreview();
+            }
+            return true;
+        }
+
+        function setSheetConnected(connected) {
+            document.getElementById('sheetConnectBtn').textContent = connected ? 'Disconnect' : 'Connect';
+            document.getElementById('sheetConnectBtn').dataset.connected = connected ? '1' : '';
+        }
+
+        function stopSheetPolling() {
+            if (sheetTimer) { clearInterval(sheetTimer); sheetTimer = null; }
+            sheetCsvUrl = null;
+            lastSheetText = null;
+            setSheetConnected(false);
+        }
+
+        async function connectSheet() {
+            const url = sheetCsvUrlFrom(document.getElementById('sheetUrl').value.trim());
+            if (!url) { setSheetStatus('Could not find a Google Sheet ID in that URL.', true); return; }
+            sheetCsvUrl = url;
+            lastSheetText = null;
+            setSheetStatus('Connecting…');
+            try {
+                applySheetCsv(await fetchSheetCsv());
+                document.getElementById('generatePdfBtn').disabled = false;
+                setSheetConnected(true);
+                setSheetStatus('Live • synced ' + new Date().toLocaleTimeString());
+                sheetTimer = setInterval(async () => {
+                    try {
+                        const changed = applySheetCsv(await fetchSheetCsv());
+                        setSheetStatus((changed ? 'Updated • ' : 'Live • synced ') + new Date().toLocaleTimeString());
+                    } catch (err) {
+                        setSheetStatus('Sync error: ' + (err.message || err), true);
+                    }
+                }, SHEET_POLL_MS);
+            } catch (err) {
+                sheetCsvUrl = null;
+                setSheetStatus('Connect failed: ' + (err.message || err) + ' — is the sheet shared “anyone with the link can view”?', true);
+            }
+        }
+
+        document.getElementById('sheetConnectBtn').addEventListener('click', () => {
+            if (document.getElementById('sheetConnectBtn').dataset.connected) stopSheetPolling();
+            else connectSheet();
+        });
+
         document.getElementById('csvInput').addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
+            stopSheetPolling();   // manual file wins; stop any live sheet
             const reader = new FileReader();
             reader.onload = () => ingestCSV(reader.result);
             reader.onerror = () => setStatus('Failed to read file.', true);
             reader.readAsText(file);
         });
 
-        document.getElementById('loadSampleBtn').addEventListener('click', () => ingestCSV(SAMPLE_CSV));
-        document.getElementById('generatePdfBtn').addEventListener('click', generatePDF);
+        document.getElementById('loadSampleBtn').addEventListener('click', () => { stopSheetPolling(); ingestCSV(SAMPLE_CSV); });
+        document.getElementById('generatePdfBtn').addEventListener('click', downloadPDF);
 
         // Probe S3 CORS up-front so we can show a clear banner before the user
-        // clicks "Generate PDF" and hits a SecurityError.
+        // tries to render and hits a SecurityError.
         (function probeBgCors() {
             const img = new Image();
             img.crossOrigin = 'anonymous';
@@ -832,21 +784,8 @@
             img.src = BG_URL + '?cors-probe=' + Date.now();
         })();
 
-        // Kick off font loading immediately so the preview renders in the correct
-        // font and the first PDF export does not wait on the CJK subset.
-        ensureFontLoaded().then(() => {
-            if (isFontAvailable()) {
-                console.log(`[card-printer] "${FONT_FAMILY}" loaded.`);
-            } else {
-                console.warn(`[card-printer] "${FONT_FAMILY}" reported unloaded after fonts.ready — check network / CSP.`);
-            }
-            // Re-render any preview already on screen so it picks up the freshly
-            // loaded font instead of the fallback.
-            if (state.rows.length) render();
-        });
-
         ['pageFormat', 'margin', 'gutter'].forEach(id => {
-            document.getElementById(id).addEventListener('input', render);
+            document.getElementById(id).addEventListener('input', scheduleRefresh);
         });
     </script>
 </body>
