@@ -17,3 +17,6 @@ dist/
 # Environment
 .env
 .env.local
+
+# Local-only Google API credentials (injected from GitHub secrets at deploy)
+product-card-printer/google-config.local.js

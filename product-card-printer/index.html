@@ -258,6 +258,13 @@
         :root.light-mode .elem-props select option, :root.light-mode #cardPicker option {
             background-color: #ffffff; color: #1a1a2e;
         }
+        .content-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+        .content-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: var(--text-muted); }
+        .content-grid input, .content-grid textarea {
+            background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 6px;
+            padding: 7px 9px; color: var(--text-primary); font-size: 0.88rem; font-family: inherit; resize: vertical;
+        }
+        .content-grid input:disabled, .content-grid textarea:disabled { opacity: 0.4; }
 
         details summary {
             cursor: pointer;
@@ -368,6 +375,14 @@
                     <button id="sheetPauseBtn" class="secondary" type="button" hidden>Pause auto-refresh</button>
                 </div>
                 <div class="status" id="sheetStatus"></div>
+                <div class="row" style="margin-top: 10px;">
+                    <button id="googlePickBtn" class="secondary" type="button">Sign in &amp; pick a sheet (editable)</button>
+                    <span id="googleStatus" class="status" style="margin: 0; align-self: center;"></span>
+                </div>
+                <div class="row" id="googleTabRow" style="margin-top: 8px;" hidden>
+                    <label for="googleTab" style="font-size: 0.8rem; color: var(--text-muted); align-self: center;">Tab</label>
+                    <select id="googleTab" style="min-width: 220px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 8px 10px; color: var(--text-primary); font-size: 0.9rem;"></select>
+                </div>
             </div>
         </section>
 
@@ -437,6 +452,23 @@
                     <button id="resetLayoutBtn" class="secondary" type="button" style="margin-top:12px; width:100%;">Reset to default layout</button>
                 </div>
             </div>
+
+            <div id="contentEditor" style="margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 14px;" hidden>
+                <h2 style="margin-bottom: 4px;">Content — edits write to the sheet</h2>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
+                    Editing a field updates this card and, when signed in, writes that cell back to the Google Sheet.
+                </p>
+                <div class="content-grid">
+                    <label>Title 中文<input type="text" data-field="title"></label>
+                    <label>Title English<input type="text" data-field="englishTitle"></label>
+                    <label>Ingredients 中文<textarea data-field="cnIngredients" rows="2"></textarea></label>
+                    <label>Ingredients English<textarea data-field="enIngredients" rows="2"></textarea></label>
+                    <label>素別 (Veg type)<input type="text" data-field="diet"></label>
+                    <label>過敏原 (Allergens)<input type="text" data-field="allergens"></label>
+                    <label>Price (whole)<input type="text" data-field="priceWhole"></label>
+                    <label>Price (half/slice)<input type="text" data-field="priceHalf"></label>
+                </div>
+            </div>
         </section>
 
         <section class="panel" id="selectorPanel" hidden>
@@ -474,6 +506,16 @@
         <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener">GitHub</a>
     </div>
 
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://apis.google.com/js/api.js" async defer></script>
+    <script>
+        // Google OAuth Client ID + Picker API key. In production these placeholders
+        // are replaced at deploy time from GitHub Actions secrets. For local dev,
+        // google-config.local.js (gitignored) overrides them on the next line.
+        window.GOOGLE_CLIENT_ID = '__GOOGLE_CLIENT_ID__';
+        window.GOOGLE_API_KEY = '__GOOGLE_API_KEY__';
+    </script>
+    <script src="google-config.local.js"></script>
     <script src="card-layout.js"></script>
     <script>
         // PDF building runs in pdf-worker.js (off the main thread). These are the
@@ -645,12 +687,57 @@
                 setStatus('CSV must have a header row and at least one data row.', true);
                 return;
             }
-            state.headers = rows[0].map(h => h.trim());
-            state.rows = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
+            ingestGrid(rows);
+        }
 
-            FIELDS.forEach(f => {
-                state.map[f.id] = findHeaderIndex(state.headers, f);
-            });
+        // Pick the header row = the one (within the first few rows) that maps the most
+        // fields. Skips banner/title rows (e.g. a merged "Mamalili …" row 1).
+        function detectHeaderRow(values) {
+            const limit = Math.min(values.length, 6);
+            let best = 0, bestScore = -1;
+            for (let r = 0; r < limit; r++) {
+                const header = (values[r] || []).map(h => String(h || ''));
+                let score = 0;
+                FIELDS.forEach(f => { if (findHeaderIndex(header, f) !== -1) score++; });
+                if (score > bestScore) { bestScore = score; best = r; }
+            }
+            return best;
+        }
+
+        // From a 2D grid (CSV or Sheets API): detect the header row, then ingest the
+        // rows below it. sheetRowNums carries each data row's true 1-based sheet row.
+        function ingestGrid(values) {
+            const hdr = detectHeaderRow(values);
+            const header = values[hdr] || [];
+            const dataRows = [], sheetRowNums = [];
+            for (let v = hdr + 1; v < values.length; v++) {
+                const r = values[v];
+                if (r && r.some(c => String(c || '').trim())) { dataRows.push(r); sheetRowNums.push(v + 1); }
+            }
+            if (!dataRows.length) { setStatus('No data rows found below the header row.', true); return; }
+            ingestRows(header, dataRows, sheetRowNums);
+        }
+
+        // Shared post-parse pipeline for any source (CSV, gviz, or the Sheets API).
+        // headerRow + dataRows are arrays of cell-string arrays. sheetRowNums (optional)
+        // gives each data row's 1-based sheet row, used for write-back.
+        function ingestRows(headerRow, dataRows, sheetRowNums) {
+            state.headers = headerRow.map(h => String(h || '').trim());
+            state.rows = dataRows.map(r => state.headers.map((_, i) => String((r && r[i]) || '').trim()));
+            state.sheetRowNums = sheetRowNums || null;
+            FIELDS.forEach(f => { state.map[f.id] = findHeaderIndex(state.headers, f); });
+
+            // Only rows with a product title become cards — drops any category/section
+            // rows that slipped through (so they don't render as blank/junk cards).
+            const ti = state.map.title;
+            if (ti >= 0) {
+                const keep = [];
+                state.rows.forEach((r, idx) => { if (String(r[ti] || '').trim()) keep.push(idx); });
+                if (keep.length) {
+                    state.rows = keep.map(i => state.rows[i]);
+                    if (state.sheetRowNums) state.sheetRowNums = keep.map(i => state.sheetRowNums[i]);
+                }
+            }
 
             buildMappingUI();
             initCardConfigs();   // fresh load → new ids + default per-card configs
@@ -1088,8 +1175,36 @@
             rebuildCardPicker();
             document.getElementById('designerPanel').hidden = false;
             renderEditor();
+            renderContentInputs();
             renderSelector();
         }
+
+        // ----- Content editing (writes back to the sheet when signed in) -----
+        let writeTimers = {};
+        function renderContentInputs() {
+            const wrap = document.getElementById('contentEditor');
+            if (!state.rows.length) { wrap.hidden = true; return; }
+            wrap.hidden = false;
+            Array.prototype.slice.call(wrap.querySelectorAll('[data-field]')).forEach(inp => {
+                if (document.activeElement === inp) return;   // don't clobber while typing
+                const col = state.map[inp.dataset.field];
+                inp.disabled = col < 0;
+                inp.value = (col >= 0 && state.rows[activeCardIndex]) ? String(state.rows[activeCardIndex][col] || '') : '';
+            });
+        }
+        function onContentInput(e) {
+            const inp = e.target;
+            const field = inp.dataset.field;
+            const col = state.map[field];
+            if (col < 0 || !state.rows[activeCardIndex]) return;
+            state.rows[activeCardIndex][col] = inp.value;
+            renderEditor();        // reflect on the on-screen card
+            scheduleRefresh();     // update the PDF
+            clearTimeout(writeTimers[field]);
+            writeTimers[field] = setTimeout(() => writeCell(field, inp.value), 700);  // debounced write-back
+        }
+        Array.prototype.slice.call(document.querySelectorAll('#contentEditor [data-field]'))
+            .forEach(inp => inp.addEventListener('input', onContentInput));
 
         // ----- Print selector -----
         function updateSelectSummary() {
@@ -1132,7 +1247,7 @@
 
         document.getElementById('elemSelect').addEventListener('change', (e) => selectElem(e.target.value));
         ['propX', 'propY', 'propSize', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
-        document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); });
+        document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); renderContentInputs(); });
         document.getElementById('cardSearch').addEventListener('input', rebuildCardPicker);
         document.getElementById('designModeSelect').addEventListener('change', (e) => {
             designMode = e.target.value;
@@ -1213,6 +1328,7 @@
                 rebuildCardPicker();
                 renderSelector();
                 renderEditor();
+                renderContentInputs();
                 refreshPreview();
             }
             return true;
@@ -1281,6 +1397,179 @@
             else connectSheet();
         });
         document.getElementById('sheetPauseBtn').addEventListener('click', () => setSheetPaused(!sheetPaused));
+
+        // ===================== Google sign-in + Picker + Sheets API (editable) =====================
+        const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+        let gTokenClient = null;
+        let gToken = null;          // { access_token, expires_at }
+        let gSpreadsheetId = null;
+        let gTabTitle = null;
+        let gTabId = null;
+        let gTabs = [];
+
+        function setGoogleStatus(msg, isError) {
+            const el = document.getElementById('googleStatus');
+            el.textContent = msg;
+            el.classList.toggle('error', !!isError);
+        }
+        function googleConfigured() {
+            return window.GOOGLE_CLIENT_ID && window.GOOGLE_CLIENT_ID.indexOf('__') !== 0
+                && window.GOOGLE_API_KEY && window.GOOGLE_API_KEY.indexOf('__') !== 0;
+        }
+        function ensureTokenClient() {
+            if (gTokenClient) return gTokenClient;
+            if (!(window.google && google.accounts && google.accounts.oauth2)) {
+                setGoogleStatus('Google library still loading — try again in a moment.', true);
+                return null;
+            }
+            gTokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: window.GOOGLE_CLIENT_ID,
+                scope: GOOGLE_SCOPE,
+                callback: (resp) => {
+                    if (resp.error) { setGoogleStatus('Sign-in failed: ' + resp.error, true); return; }
+                    gToken = { access_token: resp.access_token, expires_at: Date.now() + (resp.expires_in || 3600) * 1000 };
+                    setGoogleStatus('Signed in — opening picker…');
+                    openPicker();
+                },
+            });
+            return gTokenClient;
+        }
+        function googleSignInAndPick() {
+            if (!googleConfigured()) { setGoogleStatus('Google credentials not configured.', true); return; }
+            const tc = ensureTokenClient();
+            if (!tc) return;
+            if (gToken && gToken.expires_at > Date.now() + 60000) openPicker();
+            else tc.requestAccessToken();   // opens Google sign-in + consent popup
+        }
+        function openPicker() {
+            if (!window.gapi) { setGoogleStatus('Picker library still loading — try again.', true); return; }
+            gapi.load('picker', () => {
+                // App ID = Cloud project number = the prefix of the OAuth client ID.
+                // Required so drive.file grants the picked file's access to THIS app,
+                // otherwise the Sheets API returns 404 "Requested entity was not found".
+                const appId = (window.GOOGLE_CLIENT_ID || '').split('-')[0];
+                const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+                    .setMimeTypes('application/vnd.google-apps.spreadsheet')
+                    .setMode(google.picker.DocsViewMode.LIST);
+                const builder = new google.picker.PickerBuilder()
+                    .addView(view)
+                    .setOAuthToken(gToken.access_token)
+                    .setDeveloperKey(window.GOOGLE_API_KEY)
+                    .setCallback(pickerCallback);
+                if (appId) builder.setAppId(appId);
+                builder.build().setVisible(true);
+            });
+        }
+        function pickerCallback(data) {
+            if (data.action === google.picker.Action.PICKED) {
+                gSpreadsheetId = data.docs[0].id;
+                setGoogleStatus('Loading “' + (data.docs[0].name || gSpreadsheetId) + '”…');
+                stopSheetPolling();   // switch off the anonymous gviz source
+                loadSheetFromApi().catch(err => setGoogleStatus('Load failed: ' + (err.message || err), true));
+            } else if (data.action === google.picker.Action.CANCEL) {
+                setGoogleStatus('Picker cancelled.');
+            }
+        }
+        async function gapiGet(url) {
+            const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + gToken.access_token } });
+            const text = await resp.text();
+            if (!resp.ok) {
+                let detail = '';
+                try { const j = JSON.parse(text); if (j.error && j.error.message) detail = ' — ' + j.error.message; } catch (e) {}
+                console.error('[card-printer] Sheets API error', resp.status, text);
+                throw new Error('Sheets API HTTP ' + resp.status + detail);
+            }
+            return JSON.parse(text);
+        }
+        async function loadSheetFromApi() {
+            const meta = await gapiGet('https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '?fields=sheets.properties(title,index,sheetId)');
+            gTabs = (meta.sheets || []).map(s => s.properties).sort((a, b) => a.index - b.index);
+            if (!gTabs.length) throw new Error('No tabs in this spreadsheet.');
+            // Prefer the tab whose gid matches the link field (same spreadsheet); else first.
+            let chosen = gTabs[0];
+            const link = document.getElementById('sheetUrl').value || '';
+            const idM = link.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+            const gidM = link.match(/[#&?]gid=(\d+)/);
+            if (idM && idM[1] === gSpreadsheetId && gidM) {
+                const t = gTabs.find(tt => String(tt.sheetId) === gidM[1]);
+                if (t) chosen = t;
+            }
+            const sel = document.getElementById('googleTab');
+            sel.innerHTML = '';
+            gTabs.forEach(t => { const o = document.createElement('option'); o.value = String(t.sheetId); o.textContent = t.title; sel.appendChild(o); });
+            sel.value = String(chosen.sheetId);
+            document.getElementById('googleTabRow').hidden = false;
+            await loadTab(chosen);
+        }
+        async function loadTab(tab) {
+            gTabTitle = tab.title;
+            gTabId = tab.sheetId;
+            // Put the picked sheet+tab into the link field and let the normal gviz path
+            // read it + start the 15s auto-refresh (pausable). gviz folds the multi-row
+            // header and returns only product rows.
+            document.getElementById('sheetUrl').value =
+                'https://docs.google.com/spreadsheets/d/' + gSpreadsheetId + '/edit#gid=' + tab.sheetId;
+            setGoogleStatus('Reading “' + tab.title + '”…');
+            await connectSheet();          // gviz read into the app + start 15s poll
+            await buildSheetRowIndex();    // map each product to its real sheet row (for write-back)
+            setGoogleStatus('Editable • ' + tab.title + ' • ' + state.rows.length + ' rows • writes on');
+        }
+
+        // Column index -> A1 letter (0 -> A, 25 -> Z, 26 -> AA …).
+        function colLetter(idx) {
+            let s = ''; idx++;
+            while (idx > 0) { idx--; s = String.fromCharCode(65 + (idx % 26)) + s; idx = Math.floor(idx / 26); }
+            return s;
+        }
+        // A1 needs the tab name single-quoted (and inner quotes doubled) for names with
+        // spaces / CJK / parentheses, e.g. '(一)酸種'!F5.
+        function quoteTab(title) { return "'" + String(title).replace(/'/g, "''") + "'"; }
+        // Map each in-app product row to its true 1-based sheet row by matching the title
+        // cell against the raw grid (gviz hides the header offset, so we resolve it here).
+        async function buildSheetRowIndex() {
+            state.sheetRowNums = null;
+            if (!gToken || !gSpreadsheetId || !gTabTitle) return;
+            const titleCol = state.map.title;
+            if (titleCol < 0) return;
+            try {
+                const vals = await gapiGet('https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values/' + encodeURIComponent(quoteTab(gTabTitle)) + '?majorDimension=ROWS');
+                const raw = vals.values || [];
+                state.sheetRowNums = state.rows.map(r => {
+                    const title = String(r[titleCol] || '').trim();
+                    if (!title) return null;
+                    const idx = raw.findIndex(rr => String((rr && rr[titleCol]) || '').trim() === title);
+                    return idx >= 0 ? idx + 1 : null;
+                });
+            } catch (e) {
+                console.warn('[card-printer] buildSheetRowIndex failed', e);
+            }
+        }
+        // Write a single cell back to the sheet (USER_ENTERED so prices/strings parse).
+        async function writeCell(fieldId, value) {
+            if (!gToken || !gSpreadsheetId || !gTabTitle) return;
+            const col = state.map[fieldId];
+            if (col < 0) return;
+            const row = state.sheetRowNums && state.sheetRowNums[activeCardIndex];
+            if (!row) { setGoogleStatus('Could not locate this card’s sheet row for write-back.', true); return; }
+            const a1 = quoteTab(gTabTitle) + '!' + colLetter(col) + row;
+            const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values/' + encodeURIComponent(a1) + '?valueInputOption=USER_ENTERED';
+            try {
+                const resp = await fetch(url, {
+                    method: 'PUT',
+                    headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ values: [[value]] }),
+                });
+                if (!resp.ok) { const t = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + t); }
+                setGoogleStatus('Saved ' + a1 + ' • ' + new Date().toLocaleTimeString());
+            } catch (e) {
+                setGoogleStatus('Write failed (' + a1 + '): ' + (e.message || e), true);
+            }
+        }
+        document.getElementById('googlePickBtn').addEventListener('click', googleSignInAndPick);
+        document.getElementById('googleTab').addEventListener('change', (e) => {
+            const tab = gTabs.find(t => String(t.sheetId) === e.target.value);
+            if (tab) loadTab(tab).catch(err => setGoogleStatus('Load failed: ' + (err.message || err), true));
+        });
 
         document.getElementById('csvInput').addEventListener('change', (e) => {
             const file = e.target.files[0];
