@@ -439,9 +439,21 @@
             </div>
         </section>
 
+        <section class="panel" id="selectorPanel" hidden>
+            <div class="preview-meta">
+                <h2 style="margin: 0;">4. Select cards to print</h2>
+                <div class="summary" id="selectSummary"></div>
+            </div>
+            <div class="row" style="margin-top: 0; margin-bottom: 12px;">
+                <button id="selectAllBtn" class="secondary" type="button">Select all</button>
+                <button id="selectNoneBtn" class="secondary" type="button">Select none</button>
+            </div>
+            <div id="cardSelectList" style="max-height: 240px; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 16px; font-size: 0.85rem;"></div>
+        </section>
+
         <section class="panel">
             <div class="preview-meta">
-                <h2 style="margin: 0;">4. Sheet preview (PDF)</h2>
+                <h2 style="margin: 0;">5. Sheet preview (PDF)</h2>
                 <div class="summary" id="layoutSummary">Cards: 0 · Pages: 0</div>
             </div>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
@@ -532,6 +544,7 @@
 
         let templateConfig = clone(TEMPLATE_DEFAULT);  // shared baseline
         let cardConfig = {};                            // uuid -> per-card config
+        let cardSelected = {};                          // uuid -> bool (print this card?)
         let designMode = 'percard';                     // 'percard' | 'template'
         let activeCardIndex = 0;
 
@@ -540,13 +553,31 @@
         function initCardConfigs() {
             state.ids = state.rows.map(genId);
             cardConfig = {};
-            state.ids.forEach(id => { cardConfig[id] = clone(templateConfig); });
+            cardSelected = {};
+            state.ids.forEach(id => { cardConfig[id] = clone(templateConfig); cardSelected[id] = true; });
         }
-        // Content-only refresh: keep ids/configs by index, only add/drop at the tail.
+        // Content-only refresh: keep ids/configs/selection by index, add new at tail.
         function reconcileCardConfigs() {
             const oldIds = state.ids || [];
             state.ids = state.rows.map((_, i) => oldIds[i] || genId());
-            state.ids.forEach(id => { if (!cardConfig[id]) cardConfig[id] = clone(templateConfig); });
+            state.ids.forEach(id => {
+                if (!cardConfig[id]) cardConfig[id] = clone(templateConfig);
+                if (!(id in cardSelected)) cardSelected[id] = true;
+            });
+        }
+        // Indices of cards selected for printing.
+        function selectedIndices() {
+            const out = [];
+            (state.ids || []).forEach((id, i) => { if (cardSelected[id]) out.push(i); });
+            return out;
+        }
+        // The rows + per-card configs that actually get rendered (selection applied).
+        function renderInputs() {
+            const sel = selectedIndices();
+            return {
+                rows: sel.map(i => state.rows[i]),
+                cfgs: sel.map(i => cardConfig[state.ids[i]] || templateConfig),
+            };
         }
         function activeId() { return state.ids ? state.ids[activeCardIndex] : null; }
         function activeCfg() {
@@ -558,9 +589,6 @@
         // Template-wide edits overwrite every card's config.
         function applyTemplateToAll() {
             (state.ids || []).forEach(id => { cardConfig[id] = clone(templateConfig); });
-        }
-        function cardConfigsForWorker() {
-            return (state.ids || []).map(id => cardConfig[id] || templateConfig);
         }
 
         // Minimal CSV parser: supports quoted fields, embedded newlines, and "" escape.
@@ -650,7 +678,7 @@
                 select.value = state.map[f.id];
                 select.addEventListener('change', () => {
                     state.map[f.id] = parseInt(select.value, 10);
-                    if (state.rows.length) { rebuildCardPicker(); renderEditor(); }
+                    if (state.rows.length) { rebuildCardPicker(); renderSelector(); renderEditor(); }
                     scheduleRefresh();
                 });
             });
@@ -719,8 +747,9 @@
                 }
                 w.addEventListener('message', onMsg);
                 w.addEventListener('error', onErr);
+                const inp = renderInputs();   // only the selected cards
                 w.postMessage({
-                    rows: state.rows,
+                    rows: inp.rows,
                     map: state.map,
                     pageFormat: document.getElementById('pageFormat').value,
                     margin: parseFloat(document.getElementById('margin').value) || 0,
@@ -729,7 +758,7 @@
                     bgDataUrl: bgDataUrl,
                     bgCmykDataUrl: bgCmykDataUrl,
                     config: templateConfig,
-                    cardConfigs: cardConfigsForWorker(),
+                    cardConfigs: inp.cfgs,
                 });
             });
         }
@@ -783,19 +812,20 @@
         // polls returning identical data) are skipped.
         let lastRenderSig = null;
         function renderSignature() {
+            const inp = renderInputs();
             return JSON.stringify({
-                rows: state.rows,
+                rows: inp.rows,
                 map: state.map,
                 pf: document.getElementById('pageFormat').value,
                 m: document.getElementById('margin').value,
                 g: document.getElementById('gutter').value,
-                cfgs: cardConfigsForWorker(),
+                cfgs: inp.cfgs,
             });
         }
 
         async function refreshPreview() {
-            if (!state.rows.length) {
-                document.getElementById('layoutSummary').textContent = 'Cards: 0 · Pages: 0';
+            if (!state.rows.length || !selectedIndices().length) {
+                document.getElementById('layoutSummary').textContent = state.rows.length ? '0 cards selected' : 'Cards: 0 · Pages: 0';
                 return;
             }
             const sig = renderSignature();
@@ -1058,7 +1088,47 @@
             rebuildCardPicker();
             document.getElementById('designerPanel').hidden = false;
             renderEditor();
+            renderSelector();
         }
+
+        // ----- Print selector -----
+        function updateSelectSummary() {
+            document.getElementById('selectSummary').textContent =
+                selectedIndices().length + ' of ' + state.rows.length + ' selected';
+        }
+        function renderSelector() {
+            const list = document.getElementById('cardSelectList');
+            list.innerHTML = '';
+            state.rows.forEach((_, i) => {
+                const id = state.ids[i];
+                const label = document.createElement('label');
+                label.style.display = 'flex';
+                label.style.alignItems = 'center';
+                label.style.gap = '6px';
+                label.style.cursor = 'pointer';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = !!cardSelected[id];
+                cb.addEventListener('change', () => { cardSelected[id] = cb.checked; updateSelectSummary(); scheduleRefresh(); });
+                const span = document.createElement('span');
+                span.textContent = cardLabel(i);
+                span.style.overflow = 'hidden';
+                span.style.textOverflow = 'ellipsis';
+                span.style.whiteSpace = 'nowrap';
+                label.appendChild(cb);
+                label.appendChild(span);
+                list.appendChild(label);
+            });
+            updateSelectSummary();
+            document.getElementById('selectorPanel').hidden = false;
+        }
+        function setAllSelected(val) {
+            (state.ids || []).forEach(id => { cardSelected[id] = val; });
+            renderSelector();
+            scheduleRefresh();
+        }
+        document.getElementById('selectAllBtn').addEventListener('click', () => setAllSelected(true));
+        document.getElementById('selectNoneBtn').addEventListener('click', () => setAllSelected(false));
 
         document.getElementById('elemSelect').addEventListener('change', (e) => selectElem(e.target.value));
         ['propX', 'propY', 'propSize', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
@@ -1141,6 +1211,7 @@
                 state.rows = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
                 reconcileCardConfigs();
                 rebuildCardPicker();
+                renderSelector();
                 renderEditor();
                 refreshPreview();
             }
