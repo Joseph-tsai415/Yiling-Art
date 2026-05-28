@@ -365,6 +365,7 @@
                            value="https://docs.google.com/spreadsheets/d/1q3eMGabBQeh1v9tra4ZMES_kGQeG2Qv5HjmsAC8XqHo/edit?usp=sharing"
                            style="flex:1; min-width:260px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 10px 12px; color: var(--text-primary); font-size: 0.9rem;">
                     <button id="sheetConnectBtn" class="secondary" type="button">Connect</button>
+                    <button id="sheetPauseBtn" class="secondary" type="button" hidden>Pause auto-refresh</button>
                 </div>
                 <div class="status" id="sheetStatus"></div>
             </div>
@@ -461,6 +462,7 @@
         <a href="https://github.com/Joseph-tsai415/Yiling-Art" target="_blank" rel="noopener">GitHub</a>
     </div>
 
+    <script src="card-layout.js"></script>
     <script>
         // PDF building runs in pdf-worker.js (off the main thread). These are the
         // assets the worker fetches.
@@ -776,17 +778,35 @@
             setStatus(`Preview ready — ${res.cardCount} cards on ${res.totalPages} ${res.pageLabel} page(s), ${res.perPage}/page${rot}. ${cmykNote}`);
         }
 
+        // Signature of everything that affects the rendered PDF. The preview only
+        // re-renders when this changes, so redundant triggers (clicks, no-op edits,
+        // polls returning identical data) are skipped.
+        let lastRenderSig = null;
+        function renderSignature() {
+            return JSON.stringify({
+                rows: state.rows,
+                map: state.map,
+                pf: document.getElementById('pageFormat').value,
+                m: document.getElementById('margin').value,
+                g: document.getElementById('gutter').value,
+                cfgs: cardConfigsForWorker(),
+            });
+        }
+
         async function refreshPreview() {
             if (!state.rows.length) {
                 document.getElementById('layoutSummary').textContent = 'Cards: 0 · Pages: 0';
                 return;
             }
+            const sig = renderSignature();
+            if (sig === lastRenderSig) return;   // nothing actually changed → skip render
             activeRenders++;
             showSpinner(true);
             setStatus('Rendering preview…');
             try {
                 const res = await renderPdf();   // runs in the worker — UI stays responsive
                 applyResult(res);
+                lastRenderSig = sig;
             } catch (err) {
                 lastBuffer = null;
                 reportPdfError(err);
@@ -805,12 +825,14 @@
             const btn = document.getElementById('generatePdfBtn');
             btn.disabled = true;
             try {
-                if (lastDocDirty || !lastBuffer) {
+                const sig = renderSignature();
+                if (!lastBuffer || sig !== lastRenderSig) {
                     activeRenders++;
                     showSpinner(true);
                     try {
                         const res = await renderPdf();
                         applyResult(res);
+                        lastRenderSig = sig;
                     } finally {
                         if (--activeRenders === 0) showSpinner(false);
                     }
@@ -834,23 +856,24 @@
         }
 
         // ===================== Single-card designer =====================
+        // Renders via the SHARED CardLayout algorithm (same as the worker); only the
+        // text measurement differs (canvas here, jsPDF in the worker).
         const EDITOR_PPMM = 5.5;                 // px per mm in the HTML editor
-        const CARD_W_MM = 103, CARD_H_MM = 73;
-        // lineHeight must match the worker's per-element value or multi-line blocks
-        // (ingredients, allergens) drift vertically between editor and PDF.
-        const EDITOR_ELEMENTS = [
-            { id: 'title',        align: 'center', lineHeight: 1.1 },
-            { id: 'englishTitle', align: 'center', lineHeight: 1.1 },
-            { id: 'ingredients',  align: 'center', lineHeight: 1.0 },
-            { id: 'allergens',    align: 'left',   lineHeight: 1.0 },
-            { id: 'price',        align: 'right',  lineHeight: 1.1 },
+        const CARD_W_MM = CardLayout.CARD_W_MM;
+        const CARD_H_MM = CardLayout.CARD_H_MM;
+        const ELEMS = [
+            { id: 'title',        align: 'center' },
+            { id: 'englishTitle', align: 'center' },
+            { id: 'ingredients',  align: 'center' },
+            { id: 'allergens',    align: 'left' },
+            { id: 'price',        align: 'right' },
         ];
         let selectedElem = 'title';
         let drag = null;
 
         function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-        // Display text for an element from a given row (mirrors the worker's fields).
+        // Combined display text per element from a row (mirrors the worker's fields).
         function elemText(rowIdx, id) {
             const row = state.rows[rowIdx];
             if (!row) return '';
@@ -864,27 +887,45 @@
             }
             return '';
         }
+        function editorFields(rowIdx) {
+            const price = elemText(rowIdx, 'price');
+            return {
+                title: elemText(rowIdx, 'title'),
+                englishTitle: elemText(rowIdx, 'englishTitle'),
+                ingredients: elemText(rowIdx, 'ingredients'),
+                allergens: elemText(rowIdx, 'allergens'),
+                priceLines: price ? price.split('\n') : [],
+            };
+        }
 
-        function positionElem(el, id) {
-            const c = activeCfg()[id];
-            const def = EDITOR_ELEMENTS.find(e => e.id === id);
-            const ppmm = EDITOR_PPMM;
-            const wrapMm = c.wrapPct ? CARD_W_MM * c.wrapPct / 100 : CARD_W_MM;
-            el.style.left = (c.x * ppmm) + 'px';
-            el.style.top = (c.y * ppmm) + 'px';
-            el.style.fontSize = (c.size * ppmm * (25.4 / 72)) + 'px';
-            el.style.lineHeight = def.lineHeight;
-            el.style.maxWidth = (wrapMm * ppmm) + 'px';
-            if (def.align === 'center') {
-                el.style.transform = 'translateX(-50%)';
-                el.style.textAlign = 'center';
-            } else if (def.align === 'right') {
-                el.style.transform = 'translateX(-100%)';
-                el.style.textAlign = 'right';
-            } else {
-                el.style.transform = 'none';
-                el.style.textAlign = 'left';
-            }
+        // Canvas measure — editor's half of the shared algorithm. Mirrors jsPDF's
+        // splitTextToSize (word-wrap; CJK breaks per character) closely enough that
+        // wrap points and shrink decisions match the PDF.
+        const _measureCanvas = document.createElement('canvas');
+        const _mctx = _measureCanvas.getContext('2d');
+        const MEASURE_MMPX = 12;
+        const CJK_RE = '\\u3000-\\u303f\\u3400-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef';
+        const TOKEN_RE = new RegExp('[' + CJK_RE + ']|[^\\s' + CJK_RE + ']+|\\s+', 'g');
+        function editorMeasure(text, sizePt, wrapWidthMm) {
+            _mctx.font = (sizePt * CardLayout.PT_TO_MM * MEASURE_MMPX) + 'px "Chocolate Classical Sans", serif';
+            const maxPx = wrapWidthMm * MEASURE_MMPX;
+            const out = [];
+            String(text).split('\n').forEach(para => {
+                if (para === '') { out.push(''); return; }
+                const tokens = para.match(TOKEN_RE) || [para];
+                let line = '';
+                tokens.forEach(tok => {
+                    const cand = line + tok;
+                    if (_mctx.measureText(cand.replace(/\s+$/, '')).width <= maxPx || line.trim() === '') {
+                        line = cand;
+                    } else {
+                        out.push(line.replace(/\s+$/, ''));
+                        line = tok.replace(/^\s+/, '');
+                    }
+                });
+                out.push(line.replace(/\s+$/, ''));
+            });
+            return out.length ? out : [''];
         }
 
         function renderEditor() {
@@ -895,14 +936,37 @@
             if (bgDataUrl) bgImg.src = bgDataUrl;
             else ensureBackground().then(() => { bgImg.src = bgDataUrl; }).catch(() => {});
             Array.prototype.slice.call(editor.querySelectorAll('.card-elem')).forEach(e => e.remove());
-            EDITOR_ELEMENTS.forEach(def => {
-                const text = elemText(activeCardIndex, def.id);
+
+            const cfg = activeCfg();
+            const items = CardLayout.layoutCard(editorFields(activeCardIndex), cfg, editorMeasure);
+            const byId = {};
+            items.forEach(it => { byId[it.id] = it; });
+            const ppmm = EDITOR_PPMM;
+
+            ELEMS.forEach(def => {
+                const c = cfg[def.id];
+                if (!c) return;
+                const it = byId[def.id];
                 const el = document.createElement('div');
                 el.className = 'card-elem' + (def.id === selectedElem ? ' selected' : '');
                 el.dataset.id = def.id;
-                el.textContent = text || ('(' + def.id + ')');
-                if (!text) el.style.opacity = '0.4';
-                positionElem(el, def.id);
+                el.style.position = 'absolute';
+                el.style.whiteSpace = 'pre';           // lines already wrapped by the algorithm
+                el.style.left = (c.x * ppmm) + 'px';
+                el.style.top = (c.y * ppmm) + 'px';
+                if (it) {
+                    el.textContent = it.lines.join('\n');
+                    el.style.fontSize = (it.size * ppmm * CardLayout.PT_TO_MM) + 'px';
+                    el.style.lineHeight = it.lineHeight;
+                } else {
+                    el.textContent = '(' + def.id + ')';
+                    el.style.fontSize = (c.size * ppmm * CardLayout.PT_TO_MM) + 'px';
+                    el.style.lineHeight = 1.1;
+                    el.style.opacity = '0.4';
+                }
+                if (def.align === 'center') { el.style.transform = 'translateX(-50%)'; el.style.textAlign = 'center'; }
+                else if (def.align === 'right') { el.style.transform = 'translateX(-100%)'; el.style.textAlign = 'right'; }
+                else { el.style.transform = 'none'; el.style.textAlign = 'left'; }
                 el.addEventListener('mousedown', startDrag);
                 editor.appendChild(el);
             });
@@ -924,7 +988,8 @@
             const c = activeCfg()[drag.id];
             c.x = Math.round(clamp(drag.startX + (e.clientX - drag.startMx) / EDITOR_PPMM, 0, CARD_W_MM) * 2) / 2;
             c.y = Math.round(clamp(drag.startY + (e.clientY - drag.startMy) / EDITOR_PPMM, 0, CARD_H_MM) * 2) / 2;
-            positionElem(drag.el, drag.id);
+            drag.el.style.left = (c.x * EDITOR_PPMM) + 'px';   // position-only; no re-wrap needed
+            drag.el.style.top = (c.y * EDITOR_PPMM) + 'px';
             syncPropInputs();
         }
         function endDrag() {
@@ -944,12 +1009,13 @@
         }
         function syncPropInputs() {
             const c = activeCfg()[selectedElem];
-            document.getElementById('propX').value = c.x;
-            document.getElementById('propY').value = c.y;
-            document.getElementById('propSize').value = c.size;
+            const setv = (id, v) => { const el = document.getElementById(id); if (document.activeElement !== el) el.value = v; };
+            setv('propX', c.x);
+            setv('propY', c.y);
+            setv('propSize', c.size);
             const hasWrap = typeof c.wrapPct === 'number';
             document.getElementById('wrapRow').style.display = hasWrap ? '' : 'none';
-            if (hasWrap) document.getElementById('propWrap').value = c.wrapPct;
+            if (hasWrap) setv('propWrap', c.wrapPct);
         }
         function afterEdit() {
             if (designMode === 'template') applyTemplateToAll();
@@ -963,8 +1029,7 @@
             if (typeof c.wrapPct === 'number') {
                 c.wrapPct = clamp(parseFloat(document.getElementById('propWrap').value) || 100, 10, 100);
             }
-            const el = document.querySelector('.card-elem[data-id="' + selectedElem + '"]');
-            if (el) positionElem(el, selectedElem);
+            renderEditor();   // re-layout (wrap depends on size + wrap %)
             afterEdit();
         }
 
@@ -1035,6 +1100,7 @@
         let sheetCsvUrl = null;
         let sheetTimer = null;
         let lastSheetText = null;
+        let sheetPaused = false;
 
         function setSheetStatus(msg, isError) {
             const el = document.getElementById('sheetStatus');
@@ -1084,12 +1150,39 @@
         function setSheetConnected(connected) {
             document.getElementById('sheetConnectBtn').textContent = connected ? 'Disconnect' : 'Connect';
             document.getElementById('sheetConnectBtn').dataset.connected = connected ? '1' : '';
+            document.getElementById('sheetPauseBtn').hidden = !connected;
+        }
+
+        function startSheetTimer() {
+            if (sheetTimer) clearInterval(sheetTimer);
+            sheetTimer = setInterval(pollSheetOnce, SHEET_POLL_MS);
+        }
+        async function pollSheetOnce() {
+            if (sheetPaused || !sheetCsvUrl) return;
+            try {
+                const changed = applySheetCsv(await fetchSheetCsv());
+                setSheetStatus((changed ? 'Updated • ' : 'Live • synced ') + new Date().toLocaleTimeString());
+            } catch (err) {
+                setSheetStatus('Sync error: ' + (err.message || err), true);
+            }
+        }
+
+        function setSheetPaused(paused) {
+            sheetPaused = paused;
+            document.getElementById('sheetPauseBtn').textContent = paused ? 'Resume auto-refresh' : 'Pause auto-refresh';
+            if (paused) {
+                setSheetStatus('Auto-refresh paused — edit the layout freely; click Resume to pull updates.');
+            } else {
+                setSheetStatus('Live • synced ' + new Date().toLocaleTimeString());
+                pollSheetOnce();   // pull immediately on resume
+            }
         }
 
         function stopSheetPolling() {
             if (sheetTimer) { clearInterval(sheetTimer); sheetTimer = null; }
             sheetCsvUrl = null;
             lastSheetText = null;
+            sheetPaused = false;
             setSheetConnected(false);
         }
 
@@ -1098,20 +1191,14 @@
             if (!url) { setSheetStatus('Could not find a Google Sheet ID in that URL.', true); return; }
             sheetCsvUrl = url;
             lastSheetText = null;
+            sheetPaused = false;
             setSheetStatus('Connecting…');
             try {
                 applySheetCsv(await fetchSheetCsv());
                 document.getElementById('generatePdfBtn').disabled = false;
                 setSheetConnected(true);
-                setSheetStatus('Live • synced ' + new Date().toLocaleTimeString());
-                sheetTimer = setInterval(async () => {
-                    try {
-                        const changed = applySheetCsv(await fetchSheetCsv());
-                        setSheetStatus((changed ? 'Updated • ' : 'Live • synced ') + new Date().toLocaleTimeString());
-                    } catch (err) {
-                        setSheetStatus('Sync error: ' + (err.message || err), true);
-                    }
-                }, SHEET_POLL_MS);
+                setSheetPaused(false);
+                startSheetTimer();
             } catch (err) {
                 sheetCsvUrl = null;
                 setSheetStatus('Connect failed: ' + (err.message || err) + ' — is the sheet shared “anyone with the link can view”?', true);
@@ -1122,6 +1209,7 @@
             if (document.getElementById('sheetConnectBtn').dataset.connected) stopSheetPolling();
             else connectSheet();
         });
+        document.getElementById('sheetPauseBtn').addEventListener('click', () => setSheetPaused(!sheetPaused));
 
         document.getElementById('csvInput').addEventListener('change', (e) => {
             const file = e.target.files[0];

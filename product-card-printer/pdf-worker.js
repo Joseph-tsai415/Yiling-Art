@@ -7,11 +7,12 @@
  * globals), draws every card with CMYK text, and posts the PDF back as an
  * ArrayBuffer (transferable).
  */
-/* global importScripts, self */
+/* global importScripts, self, CardLayout */
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+importScripts('card-layout.js');   // shared config + layout algorithm
 
-const CARD_W_MM = 103;
-const CARD_H_MM = 73;
+const CARD_W_MM = CardLayout.CARD_W_MM;
+const CARD_H_MM = CardLayout.CARD_H_MM;
 
 // #fbf6ed as CMYK 0–1 fractions (jsPDF writes k-operator values verbatim, and the
 // PDF spec requires 0–1). R=251 G=246 B=237 → C=0, M≈0.02, Y≈0.056, K≈0.016.
@@ -24,22 +25,6 @@ const PAGES = {
     'a3-portrait':  { w: 297, h: 420, jsOrientation: 'p', jsFormat: 'a3', label: 'A3 portrait' },
     'a3-landscape': { w: 420, h: 297, jsOrientation: 'l', jsFormat: 'a3', label: 'A3 landscape' },
 };
-
-const PT_TO_MM = 25.4 / 72;
-
-// Per-element layout config (mm from top-left of card; size in pt). These are the
-// editable values the single-card designer tweaks. x is the anchor for the element's
-// alignment: centre-x for centred elements, left edge for allergens, right edge for
-// price. The size is the baseline; fitText still wraps and shrinks if text overflows
-// ("manual baseline + auto-fit refine").
-const DEFAULT_CONFIG = {
-    title:        { x: 51.5, y: 23, size: 17, wrapPct: 80 },   // centred
-    englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80 },   // centred
-    ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90 },   // centred
-    allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68 },   // left  (diet + allergen stacked)
-    price:        { x: 97.5, y: 60, size: 14 },                // right (whole + half stacked)
-};
-const wrapMm = (c, fallback) => CARD_W_MM * ((c && c.wrapPct ? c.wrapPct : fallback) / 100);
 
 const PDF_FONT_NAME = 'ChocolateClassicalSans';
 const PDF_FONT_FILE = 'ChocolateClassicalSans-Regular.ttf';
@@ -154,37 +139,7 @@ function computeLayout(pageFormat, margin, gutter) {
     };
 }
 
-// ---- Text-fit optimizer ----
-// Find the largest font size in [minSize, maxSize] (0.5pt steps) at which `text`,
-// word/char-wrapped to wrapWidthMm, fits within maxHeightMm (if given). Honours
-// existing newlines. Returns the chosen size, the wrapped lines, and the block
-// height in mm.
-function fitText(doc, text, opts) {
-    const lineHeight = opts.lineHeight || 1.1;
-    const minSize = opts.minSize || 4;
-    let chosen = minSize;
-    let lines = [String(text)];
-    for (let size = opts.maxSize; size >= minSize - 1e-9; size -= 0.5) {
-        doc.setFontSize(size);
-        const wrapped = doc.splitTextToSize(text, opts.wrapWidthMm);
-        const heightMm = wrapped.length * size * lineHeight * PT_TO_MM;
-        if (!opts.maxHeightMm || heightMm <= opts.maxHeightMm) {
-            return { size, lines: wrapped, heightMm, lineHeight };
-        }
-        chosen = size; lines = wrapped;
-    }
-    const heightMm = lines.length * chosen * lineHeight * PT_TO_MM;
-    return { size: chosen, lines, heightMm, lineHeight };
-}
-
-function drawFitted(doc, fit, x, yTopMm, align) {
-    doc.setFontSize(fit.size);
-    doc.setLineHeightFactor(fit.lineHeight);
-    doc.text(fit.lines, x, yTopMm, { align, baseline: 'top' });
-}
-
 function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
-    cfg = cfg || DEFAULT_CONFIG;
     if (bg.cmyk) {
         doc.addImage(bg.cmyk, 'JPEG', cardX, cardY, CARD_W_MM, CARD_H_MM, undefined, 'NONE');
     } else {
@@ -193,45 +148,24 @@ function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
     doc.setFont(PDF_FONT_NAME, 'normal');
     doc.setTextColor.apply(doc, CARD_TEXT_CMYK);
 
-    const title = cellFor(row, map, 'title');
-    const englishTitle = cellFor(row, map, 'englishTitle');
-    const ingredients = ['cnIngredients', 'enIngredients']
-        .map(s => cellFor(row, map, s)).filter(Boolean).join('\n');
-    const allergenText = ['diet', 'allergens']
-        .map(s => cellFor(row, map, s)).filter(Boolean).join('\n');
-    const priceLines = ['priceWhole', 'priceHalf']
-        .map(s => cellFor(row, map, s)).filter(Boolean);
-
-    // Each element is anchored at its configured x/y; fitText still wraps (and
-    // shrinks where a height budget applies) so long text stays on the card.
-    if (title && cfg.title) {
-        const c = cfg.title;
-        const fit = fitText(doc, title, { wrapWidthMm: wrapMm(c, 80), maxSize: c.size, minSize: Math.max(6, c.size * 0.6), lineHeight: 1.1 });
-        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'center');
-    }
-    if (englishTitle && cfg.englishTitle) {
-        const c = cfg.englishTitle;
-        const fit = fitText(doc, englishTitle, { wrapWidthMm: wrapMm(c, 80), maxSize: c.size, minSize: Math.max(5, c.size * 0.6), lineHeight: 1.1 });
-        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'center');
-    }
-    if (ingredients && cfg.ingredients) {
-        const c = cfg.ingredients;
-        const priceY = cfg.price ? cfg.price.y : CARD_H_MM;        // shrink to stay above the bottom row
-        const budget = Math.max(3, priceY - 2 - c.y);
-        const fit = fitText(doc, ingredients, { wrapWidthMm: wrapMm(c, 90), maxHeightMm: budget, maxSize: c.size, minSize: 4.5, lineHeight: 1 });
-        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'center');
-    }
-    if (allergenText && cfg.allergens) {
-        const c = cfg.allergens;
-        const fit = fitText(doc, allergenText, { wrapWidthMm: wrapMm(c, 68), maxHeightMm: Math.max(3, CARD_H_MM - c.y - 1), maxSize: c.size, minSize: 5, lineHeight: 1 });
-        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'left');
-    }
-    if (priceLines.length && cfg.price) {
-        const c = cfg.price;
-        doc.setFontSize(c.size);
-        doc.setLineHeightFactor(1.1);
-        doc.text(priceLines, cardX + c.x, cardY + c.y, { align: 'right', baseline: 'top' });
-    }
+    const fields = {
+        title: cellFor(row, map, 'title'),
+        englishTitle: cellFor(row, map, 'englishTitle'),
+        ingredients: ['cnIngredients', 'enIngredients'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
+        allergens: ['diet', 'allergens'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
+        priceLines: ['priceWhole', 'priceHalf'].map(s => cellFor(row, map, s)).filter(Boolean),
+    };
+    // jsPDF text measurement — the engine-specific half of the shared algorithm.
+    const measure = (text, sizePt, wrapWidthMm) => {
+        doc.setFontSize(sizePt);
+        return doc.splitTextToSize(text, wrapWidthMm);
+    };
+    const items = CardLayout.layoutCard(fields, cfg, measure);
+    items.forEach(it => {
+        doc.setFontSize(it.size);
+        doc.setLineHeightFactor(it.lineHeight);
+        doc.text(it.lines, cardX + it.x, cardY + it.y, { align: it.align, baseline: 'top' });
+    });
 }
 
 // Draw a card upright at (x,y), or rotated 90° CW into a 73×103 footprint at (x,y).
@@ -278,7 +212,7 @@ self.onmessage = async (e) => {
                 const dataIdx = p * perPage + i;
                 if (dataIdx >= rows.length) break;
                 const slot = layout.slots[i];
-                const cfg = (cardConfigs && cardConfigs[dataIdx]) || config || DEFAULT_CONFIG;
+                const cfg = (cardConfigs && cardConfigs[dataIdx]) || config || CardLayout.DEFAULT_CONFIG;
                 placeCard(doc, layout.page, layout.margin + slot.x, layout.margin + slot.y, slot.rotated, rows[dataIdx], map, bg, cfg);
             }
         }
