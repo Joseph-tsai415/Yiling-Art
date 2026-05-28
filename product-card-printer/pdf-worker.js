@@ -19,10 +19,10 @@ const CARD_H_MM = 73;
 const CARD_TEXT_CMYK = [0, 0.0199, 0.0558, 0.0157];
 
 const PAGES = {
-    'a4-portrait':  { w: 210, h: 297, jsOrientation: 'p', jsFormat: 'a4' },
-    'a4-landscape': { w: 297, h: 210, jsOrientation: 'l', jsFormat: 'a4' },
-    'a3-portrait':  { w: 297, h: 420, jsOrientation: 'p', jsFormat: 'a3' },
-    'a3-landscape': { w: 420, h: 297, jsOrientation: 'l', jsFormat: 'a3' },
+    'a4-portrait':  { w: 210, h: 297, jsOrientation: 'p', jsFormat: 'a4', label: 'A4 portrait' },
+    'a4-landscape': { w: 297, h: 210, jsOrientation: 'l', jsFormat: 'a4', label: 'A4 landscape' },
+    'a3-portrait':  { w: 297, h: 420, jsOrientation: 'p', jsFormat: 'a3', label: 'A3 portrait' },
+    'a3-landscape': { w: 420, h: 297, jsOrientation: 'l', jsFormat: 'a3', label: 'A3 landscape' },
 };
 
 const PT_TO_MM = 25.4 / 72;
@@ -74,20 +74,86 @@ function cellFor(row, map, fieldId) {
     return unescapeNewlines(row[idx]);
 }
 
+// ---- MaxRects bin packing (identical cards, rotation allowed) ----
+// Greedy Maximal-Rectangles packer with Best-Short-Side-Fit. Cards may be placed
+// upright (103×73) or rotated 90° (73×103); the algorithm fills leftover strips
+// with rotated cards, which can beat a uniform grid (e.g. 5 on A4 portrait vs 4).
+function rectsIntersect(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+function rectContains(a, b) {   // does a fully contain b?
+    return b.x >= a.x - 1e-6 && b.y >= a.y - 1e-6 &&
+        b.x + b.w <= a.x + a.w + 1e-6 && b.y + b.h <= a.y + a.h + 1e-6;
+}
+function pruneFree(free) {
+    const out = [];
+    for (let i = 0; i < free.length; i++) {
+        let contained = false;
+        for (let j = 0; j < free.length; j++) {
+            if (i === j) continue;
+            if (rectContains(free[j], free[i]) && !(rectContains(free[i], free[j]) && i < j)) {
+                contained = true; break;
+            }
+        }
+        if (!contained) out.push(free[i]);
+    }
+    return out;
+}
+function packMaxRects(W, H, gutter) {
+    const fpW = CARD_W_MM + gutter, fpH = CARD_H_MM + gutter;   // footprints incl. gutter
+    const EPS = 1e-6;
+    // Expand the area by one gutter so the trailing row/column doesn't need a gutter.
+    let free = [{ x: 0, y: 0, w: W + gutter, h: H + gutter }];
+    const placed = [];
+    while (true) {
+        let best = null;
+        for (const fr of free) {
+            const opts = [{ w: fpW, h: fpH, rotated: false }, { w: fpH, h: fpW, rotated: true }];
+            for (const o of opts) {
+                if (o.w <= fr.w + EPS && o.h <= fr.h + EPS) {
+                    const shortSide = Math.min(fr.w - o.w, fr.h - o.h);
+                    const longSide = Math.max(fr.w - o.w, fr.h - o.h);
+                    if (!best || shortSide < best.shortSide - EPS ||
+                        (Math.abs(shortSide - best.shortSide) < EPS && longSide < best.longSide - EPS)) {
+                        best = { x: fr.x, y: fr.y, w: o.w, h: o.h, rotated: o.rotated, shortSide, longSide };
+                    }
+                }
+            }
+        }
+        if (!best) break;
+        placed.push({ x: best.x, y: best.y, rotated: best.rotated });
+        const used = { x: best.x, y: best.y, w: best.w, h: best.h };
+        const next = [];
+        for (const fr of free) {
+            if (!rectsIntersect(fr, used)) { next.push(fr); continue; }
+            if (used.x > fr.x + EPS) next.push({ x: fr.x, y: fr.y, w: used.x - fr.x, h: fr.h });
+            if (used.x + used.w < fr.x + fr.w - EPS) next.push({ x: used.x + used.w, y: fr.y, w: (fr.x + fr.w) - (used.x + used.w), h: fr.h });
+            if (used.y > fr.y + EPS) next.push({ x: fr.x, y: fr.y, w: fr.w, h: used.y - fr.y });
+            if (used.y + used.h < fr.y + fr.h - EPS) next.push({ x: fr.x, y: used.y + used.h, w: fr.w, h: (fr.y + fr.h) - (used.y + used.h) });
+        }
+        free = pruneFree(next);
+    }
+    return placed;
+}
+
+// Pack the chosen page with MaxRects and return the per-page card slots (x,y in mm
+// within the usable area, plus a rotated flag). The user picks the page/orientation
+// and tunes the margin; the packer always fills it optimally (rotating where it helps).
 function computeLayout(pageFormat, margin, gutter) {
-    const page = PAGES[pageFormat];
     margin = Math.max(0, margin || 0);
     gutter = Math.max(0, gutter || 0);
-    const usableW = page.w - margin * 2;
-    const usableH = page.h - margin * 2;
-    const cols = Math.max(1, Math.floor((usableW + gutter) / (CARD_W_MM + gutter)));
-    const rows = Math.max(1, Math.floor((usableH + gutter) / (CARD_H_MM + gutter)));
-    const perPage = cols * rows;
-    const blockW = cols * CARD_W_MM + (cols - 1) * gutter;
-    const blockH = rows * CARD_H_MM + (rows - 1) * gutter;
-    const offsetX = (page.w - blockW) / 2;
-    const offsetY = (page.h - blockH) / 2;
-    return { page, margin, gutter, cols, rows, perPage, offsetX, offsetY };
+    const page = PAGES[pageFormat] || PAGES['a4-portrait'];
+    const W = page.w - margin * 2;
+    const H = page.h - margin * 2;
+    const slots = packMaxRects(W, H, gutter);
+    const cardArea = CARD_W_MM * CARD_H_MM;
+    const wastePct = (W > 0 && H > 0) ? Math.max(0, (1 - (slots.length * cardArea) / (W * H)) * 100) : 100;
+    return {
+        page, margin, gutter, slots,
+        perPage: slots.length,
+        wastePct,
+        rotatedCount: slots.filter(s => s.rotated).length,
+    };
 }
 
 // ---- Text-fit optimizer ----
@@ -204,6 +270,24 @@ function drawCard(doc, cardX, cardY, row, map, bg) {
     }
 }
 
+// Draw a card upright at (x,y), or rotated 90° CW into a 73×103 footprint at (x,y).
+// Rotation uses a CTM (determinant +1, no mirroring); the card is drawn in its own
+// 0,0 origin and the matrix places + rotates it.
+function placeCard(doc, page, x, y, rotated, row, map, bg) {
+    if (!rotated) {
+        drawCard(doc, x, y, row, map, bg);
+        return;
+    }
+    const k = 72 / 25.4;
+    const Hpt = page.h * k;
+    const e = (x + CARD_H_MM) * k - Hpt;
+    const f = Hpt - y * k;
+    doc.saveGraphicsState();
+    doc.setCurrentTransformationMatrix(new doc.Matrix(0, -1, 1, 0, e, f));
+    drawCard(doc, 0, 0, row, map, bg);
+    doc.restoreGraphicsState();
+}
+
 self.onmessage = async (e) => {
     const { rows, map, pageFormat, margin, gutter, fontUrl, bgUrl, bgCmykUrl } = e.data;
     try {
@@ -226,17 +310,16 @@ self.onmessage = async (e) => {
         doc.addFileToVFS(PDF_FONT_FILE, fontB64);
         doc.addFont(PDF_FONT_FILE, PDF_FONT_NAME, 'normal');
 
-        const totalPages = Math.ceil(rows.length / layout.perPage);
+        const perPage = layout.perPage;
+        if (!perPage) throw new Error('Card does not fit on the selected page size.');
+        const totalPages = Math.ceil(rows.length / perPage);
         for (let p = 0; p < totalPages; p++) {
             if (p > 0) doc.addPage();
-            for (let i = 0; i < layout.perPage; i++) {
-                const dataIdx = p * layout.perPage + i;
+            for (let i = 0; i < perPage; i++) {
+                const dataIdx = p * perPage + i;
                 if (dataIdx >= rows.length) break;
-                const col = i % layout.cols;
-                const rowIdx = Math.floor(i / layout.cols);
-                const x = layout.offsetX + col * (CARD_W_MM + layout.gutter);
-                const y = layout.offsetY + rowIdx * (CARD_H_MM + layout.gutter);
-                drawCard(doc, x, y, rows[dataIdx], map, bg);
+                const slot = layout.slots[i];
+                placeCard(doc, layout.page, layout.margin + slot.x, layout.margin + slot.y, slot.rotated, rows[dataIdx], map, bg);
             }
         }
 
@@ -244,10 +327,12 @@ self.onmessage = async (e) => {
         self.postMessage({
             ok: true,
             buffer,
-            cols: layout.cols,
-            rows: layout.rows,
+            perPage,
             totalPages,
             cardCount: rows.length,
+            wastePct: layout.wastePct,
+            rotatedCount: layout.rotatedCount,
+            pageLabel: layout.page.label,
             hasCmyk: !!bg.cmyk,
         }, [buffer]);
     } catch (err) {

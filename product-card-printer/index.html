@@ -283,10 +283,10 @@
                 <div class="field">
                     <label for="pageFormat">Page format</label>
                     <select id="pageFormat">
-                        <option value="a3-landscape">A3 landscape (max cards)</option>
-                        <option value="a3-portrait">A3 portrait</option>
-                        <option value="a4-landscape">A4 landscape</option>
                         <option value="a4-portrait" selected>A4 portrait</option>
+                        <option value="a4-landscape">A4 landscape</option>
+                        <option value="a3-portrait">A3 portrait</option>
+                        <option value="a3-landscape">A3 landscape</option>
                     </select>
                 </div>
                 <div class="field">
@@ -310,6 +310,7 @@
                 </label>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
                     <input type="text" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=0"
+                           value="https://docs.google.com/spreadsheets/d/1q3eMGabBQeh1v9tra4ZMES_kGQeG2Qv5HjmsAC8XqHo/edit?usp=sharing"
                            style="flex:1; min-width:260px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 10px 12px; color: var(--text-primary); font-size: 0.9rem;">
                     <button id="sheetConnectBtn" class="secondary" type="button">Connect</button>
                 </div>
@@ -591,10 +592,11 @@
             if (previewUrl) URL.revokeObjectURL(previewUrl);
             previewUrl = URL.createObjectURL(new Blob([res.buffer], { type: 'application/pdf' }));
             document.getElementById('pdfPreview').src = previewUrl;
+            const rot = res.rotatedCount ? `, ${res.rotatedCount} rotated` : '';
             document.getElementById('layoutSummary').textContent =
-                `Cards: ${res.cardCount} · ${res.cols}×${res.rows} per page · Pages: ${res.totalPages}`;
+                `${res.cardCount} cards · ${res.pageLabel} · ${res.perPage}/page (${res.rotatedCount} rotated) · ${res.totalPages} pages · ${res.wastePct.toFixed(0)}% waste`;
             const cmykNote = res.hasCmyk ? 'Full CMYK (text + background).' : 'CMYK text on RGB background.';
-            setStatus(`Preview ready — ${res.cardCount} cards across ${res.totalPages} page(s). ${cmykNote}`);
+            setStatus(`Preview ready — ${res.cardCount} cards on ${res.totalPages} ${res.pageLabel} page(s), ${res.perPage}/page${rot}. ${cmykNote}`);
         }
 
         async function refreshPreview() {
