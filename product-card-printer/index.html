@@ -216,10 +216,11 @@
          * All positions measured in mm from the top-left of the card.
          * Card is 103mm × 73mm.
          */
-        .card-text.title          { top: 23mm; font-size: 10pt; font-weight: 600; }
-        .card-text.english-title  { top: 30mm; font-size: 10pt; }
-        .card-text.cn-ingredients { top: 42mm; font-size: 9pt;  }
-        .card-text.en-ingredients { top: 49mm; font-size: 9pt;  }
+        .card-text.title          { top: 23mm; font-size: 17pt; font-weight: 600; }
+        .card-text.english-title  { top: 30mm; font-size: 12pt; }
+        /* Chinese + English ingredients render as one block, line 2 directly under
+           line 1 with no extra gap. */
+        .card-text.ingredients    { top: 42mm; font-size: 9pt; line-height: 1.1; }
         .card-text.allergens      { left: 5.5mm; top: 60mm; font-size: 9pt;  text-align: left;  max-width: 70mm; }
         .card-text.price          { left: 82mm; top: 60mm; font-size: 14pt; font-weight: 700; }
 
@@ -538,13 +539,14 @@
             bg.alt = '';
             card.appendChild(bg);
 
+            const ingredients = [cellFor(row, 'cnIngredients'), cellFor(row, 'enIngredients')]
+                .filter(Boolean).join('\n');
             const fields = [
-                { cls: 'title center',          val: cellFor(row, 'title') },
-                { cls: 'english-title center',  val: cellFor(row, 'englishTitle') },
-                { cls: 'cn-ingredients center', val: cellFor(row, 'cnIngredients') },
-                { cls: 'en-ingredients center', val: cellFor(row, 'enIngredients') },
-                { cls: 'allergens',             val: cellFor(row, 'allergens') },
-                { cls: 'price',                 val: cellFor(row, 'price') },
+                { cls: 'title center',         val: cellFor(row, 'title') },
+                { cls: 'english-title center', val: cellFor(row, 'englishTitle') },
+                { cls: 'ingredients center',   val: ingredients },
+                { cls: 'allergens',            val: cellFor(row, 'allergens') },
+                { cls: 'price',                val: cellFor(row, 'price') },
             ];
             fields.forEach(({ cls, val }) => {
                 if (!val) return;
@@ -615,12 +617,12 @@
         const CARD_TEXT_CMYK = [0, 1.9, 5.6, 1.6];
 
         const PDF_FIELDS = [
-            { id: 'title',         x: 'center', y: 23, size: 10, align: 'center', baseline: 'top' },
-            { id: 'englishTitle',  x: 'center', y: 30, size: 10, align: 'center', baseline: 'top' },
-            { id: 'cnIngredients', x: 'center', y: 42, size: 9,  align: 'center', baseline: 'top' },
-            { id: 'enIngredients', x: 'center', y: 49, size: 9,  align: 'center', baseline: 'top' },
-            { id: 'allergens',     x: 5.5,      y: 60, size: 9,  align: 'left',   baseline: 'top', maxWidth: 70 },
-            { id: 'price',         x: 82,       y: 60, size: 14, align: 'left',   baseline: 'top' },
+            { id: 'title',        x: 'center', y: 23, size: 17, align: 'center', baseline: 'top' },
+            { id: 'englishTitle', x: 'center', y: 30, size: 12, align: 'center', baseline: 'top' },
+            // Chinese + English ingredients as one centered block (line 2 under line 1).
+            { id: 'ingredients',  x: 'center', y: 42, size: 9,  align: 'center', baseline: 'top', sources: ['cnIngredients', 'enIngredients'] },
+            { id: 'allergens',    x: 5.5,      y: 60, size: 9,  align: 'left',   baseline: 'top', maxWidth: 70 },
+            { id: 'price',        x: 82,       y: 60, size: 14, align: 'left',   baseline: 'top' },
         ];
 
         // Cache the font + background between PDF generations.
@@ -720,7 +722,9 @@
 
             const cardCenterX = cardX + CARD_W_MM / 2;
             PDF_FIELDS.forEach(f => {
-                const text = cellFor(row, f.id);
+                const text = f.sources
+                    ? f.sources.map(s => cellFor(row, s)).filter(Boolean).join('\n')
+                    : cellFor(row, f.id);
                 if (!text) return;
                 doc.setFontSize(f.size);
                 const tx = (f.x === 'center') ? cardCenterX : (cardX + f.x);
