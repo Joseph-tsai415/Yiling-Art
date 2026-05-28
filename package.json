@@ -1,0 +1,13 @@
+{
+  "name": "yiling-art",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Static, zero-build browser tools for designers, served from one repo.",
+  "scripts": {
+    "start": "http-server . -p 8000 -c-1 -o /",
+    "serve": "http-server . -p 8000 -c-1"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
