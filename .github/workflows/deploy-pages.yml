@@ -33,6 +33,15 @@ jobs:
             echo "  -> $file"
             sed -i "s/__APP_VERSION__/$VERSION/g" "$file"
           done
+      - name: Inject Google API credentials (from repo secrets)
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          f=product-card-printer/index.html
+          sed -i "s|__GOOGLE_CLIENT_ID__|${GOOGLE_CLIENT_ID}|g" "$f"
+          sed -i "s|__GOOGLE_API_KEY__|${GOOGLE_API_KEY}|g" "$f"
+          echo "Injected Google credentials into $f"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
