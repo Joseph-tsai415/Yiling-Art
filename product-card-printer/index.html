@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Product Card Printer — 103×73 mm Cards on A3/A4</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Chocolate+Classical+Sans&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-gradient-1: #1a1a2e;
@@ -207,6 +210,55 @@
         @keyframes card-spin { to { transform: rotate(360deg); } }
         .spinner-label { color: #fff; font-size: 0.85rem; letter-spacing: 0.03em; }
 
+        /* ---------- Single-card designer ---------- */
+        .designer-grid { display: grid; grid-template-columns: 1fr 220px; gap: 18px; align-items: start; }
+        @media (max-width: 760px) { .designer-grid { grid-template-columns: 1fr; } }
+        .card-editor-wrap { overflow: auto; }
+        .card-editor {
+            position: relative;
+            background: #fff;
+            border: 1px solid var(--border-medium);
+            border-radius: 4px;
+            overflow: hidden;
+            user-select: none;
+            margin: 0 auto;
+        }
+        .card-editor-bg {
+            position: absolute; inset: 0; width: 100%; height: 100%;
+            object-fit: cover; pointer-events: none; -webkit-user-drag: none;
+        }
+        .card-elem {
+            position: absolute;
+            color: #fbf6ed;
+            font-family: 'Chocolate Classical Sans', serif;
+            white-space: pre-wrap;
+            line-height: 1.1;
+            cursor: grab;
+            z-index: 2;
+            border: 1px dashed transparent;
+        }
+        .card-elem:hover { border-color: rgba(255,255,255,0.55); }
+        .card-elem.selected { border-color: #4982cf; background: rgba(73,130,207,0.18); }
+        .card-elem.dragging { cursor: grabbing; }
+        .elem-props {
+            background: var(--input-bg);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 14px;
+        }
+        .prop-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+        .prop-row label { font-size: 0.8rem; color: var(--text-muted); }
+        .prop-row input, .prop-row select {
+            width: 120px; background: var(--input-bg); border: 1px solid var(--border-medium);
+            border-radius: 6px; padding: 6px 8px; color: var(--text-primary); font-size: 0.85rem;
+        }
+        .elem-props select option, #cardPicker option {
+            background-color: #1a1a2e; color: #fff;
+        }
+        :root.light-mode .elem-props select option, :root.light-mode #cardPicker option {
+            background-color: #ffffff; color: #1a1a2e;
+        }
+
         details summary {
             cursor: pointer;
             font-size: 0.85rem;
@@ -343,9 +395,52 @@
             </div>
         </section>
 
+        <section class="panel" id="designerPanel" hidden>
+            <h2>3. Card designer</h2>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+                Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card or all cards. The 15s sheet refresh updates text only — your layout edits stay.
+            </p>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 14px;">
+                <input type="text" id="cardSearch" placeholder="Search card by name…"
+                       style="flex:1; min-width:220px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;">
+                <select id="cardPicker" style="flex:2; min-width:240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;"></select>
+            </div>
+            <div class="designer-grid">
+                <div class="card-editor-wrap">
+                    <div id="cardEditor" class="card-editor">
+                        <img id="editorBg" class="card-editor-bg" alt="" crossorigin="anonymous">
+                    </div>
+                </div>
+                <div class="elem-props">
+                    <div class="prop-row" style="margin-bottom:10px;">
+                        <label>Edit scope</label>
+                        <select id="designModeSelect">
+                            <option value="percard" selected>This card</option>
+                            <option value="template">All cards (template)</option>
+                        </select>
+                    </div>
+                    <div class="prop-row" style="margin-bottom:10px;">
+                        <label>Element</label>
+                        <select id="elemSelect">
+                            <option value="title">Title (Chinese)</option>
+                            <option value="englishTitle">Title (English)</option>
+                            <option value="ingredients">Ingredients</option>
+                            <option value="allergens">Diet + Allergens</option>
+                            <option value="price">Price</option>
+                        </select>
+                    </div>
+                    <div class="prop-row"><label for="propX">X (mm)</label><input type="number" id="propX" step="0.5"></div>
+                    <div class="prop-row"><label for="propY">Y (mm)</label><input type="number" id="propY" step="0.5"></div>
+                    <div class="prop-row"><label for="propSize">Font (pt)</label><input type="number" id="propSize" step="0.5" min="3"></div>
+                    <div class="prop-row" id="wrapRow"><label for="propWrap">Wrap (% width)</label><input type="number" id="propWrap" step="1" min="10" max="100"></div>
+                    <button id="resetLayoutBtn" class="secondary" type="button" style="margin-top:12px; width:100%;">Reset to default layout</button>
+                </div>
+            </div>
+        </section>
+
         <section class="panel">
             <div class="preview-meta">
-                <h2 style="margin: 0;">3. Preview</h2>
+                <h2 style="margin: 0;">4. Sheet preview (PDF)</h2>
                 <div class="summary" id="layoutSummary">Cards: 0 · Pages: 0</div>
             </div>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
@@ -416,8 +511,55 @@
         const state = {
             headers: [],
             rows: [],
+            ids: [],
             map: { title: -1, englishTitle: -1, cnIngredients: -1, enIngredients: -1, diet: -1, allergens: -1, priceWhole: -1, priceHalf: -1 },
         };
+
+        // Per-element layout (mm; size pt). Mirrors the worker's DEFAULT_CONFIG.
+        // wrapPct = max text width as a % of card width (the wrap margin). Used by
+        // BOTH the editor and the worker so line breaks match. Price doesn't wrap.
+        const TEMPLATE_DEFAULT = {
+            title:        { x: 51.5, y: 23, size: 17, wrapPct: 80 },
+            englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80 },
+            ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90 },
+            allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68 },
+            price:        { x: 97.5, y: 60, size: 14 },
+        };
+        const clone = (o) => JSON.parse(JSON.stringify(o));
+        const genId = () => (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+        let templateConfig = clone(TEMPLATE_DEFAULT);  // shared baseline
+        let cardConfig = {};                            // uuid -> per-card config
+        let designMode = 'percard';                     // 'percard' | 'template'
+        let activeCardIndex = 0;
+
+        // Assign a stable id + per-card config to each row (default = copy of template).
+        // Called on a fresh load (CSV / header change).
+        function initCardConfigs() {
+            state.ids = state.rows.map(genId);
+            cardConfig = {};
+            state.ids.forEach(id => { cardConfig[id] = clone(templateConfig); });
+        }
+        // Content-only refresh: keep ids/configs by index, only add/drop at the tail.
+        function reconcileCardConfigs() {
+            const oldIds = state.ids || [];
+            state.ids = state.rows.map((_, i) => oldIds[i] || genId());
+            state.ids.forEach(id => { if (!cardConfig[id]) cardConfig[id] = clone(templateConfig); });
+        }
+        function activeId() { return state.ids ? state.ids[activeCardIndex] : null; }
+        function activeCfg() {
+            if (designMode === 'template') return templateConfig;
+            const id = activeId();
+            if (id && !cardConfig[id]) cardConfig[id] = clone(templateConfig);
+            return id ? cardConfig[id] : templateConfig;
+        }
+        // Template-wide edits overwrite every card's config.
+        function applyTemplateToAll() {
+            (state.ids || []).forEach(id => { cardConfig[id] = clone(templateConfig); });
+        }
+        function cardConfigsForWorker() {
+            return (state.ids || []).map(id => cardConfig[id] || templateConfig);
+        }
 
         // Minimal CSV parser: supports quoted fields, embedded newlines, and "" escape.
         function parseCSV(text) {
@@ -481,9 +623,11 @@
             });
 
             buildMappingUI();
+            initCardConfigs();   // fresh load → new ids + default per-card configs
             document.getElementById('mappingPanel').hidden = false;
             document.getElementById('generatePdfBtn').disabled = false;
             setStatus(`Loaded ${state.rows.length} rows · ${state.headers.length} columns.`);
+            initDesigner();
             refreshPreview();
         }
 
@@ -504,6 +648,7 @@
                 select.value = state.map[f.id];
                 select.addEventListener('change', () => {
                     state.map[f.id] = parseInt(select.value, 10);
+                    if (state.rows.length) { rebuildCardPicker(); renderEditor(); }
                     scheduleRefresh();
                 });
             });
@@ -515,6 +660,36 @@
         // The worker is the single source of truth for card layout; the bytes it
         // returns are shown in the preview iframe and saved on download, so preview
         // and export are identical.
+
+        // Background fetched once from S3 and cached as a base64 data URL, reused by
+        // the editor <img> and the worker. Data URLs aren't subject to CORS, so this
+        // also sidesteps the cache-poisoning issue with cross-origin <img> loads.
+        let bgDataUrl = null;
+        let bgCmykDataUrl = null;
+        let bgPromise = null;
+        async function fetchDataUrl(url, mime) {
+            const resp = await fetch(url, { cache: 'reload' });
+            if (!resp.ok) throw new Error(url + ' → HTTP ' + resp.status);
+            const bytes = new Uint8Array(await resp.arrayBuffer());
+            let bin = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+            }
+            return 'data:' + mime + ';base64,' + btoa(bin);
+        }
+        function ensureBackground() {
+            if (bgPromise) return bgPromise;
+            bgPromise = (async () => {
+                // Bare URLs only — this bucket 405s on query strings. cache:'reload'
+                // (in fetchDataUrl) already bypasses any ACAO-less poisoned cache entry.
+                bgDataUrl = await fetchDataUrl(BG_URL, 'image/png');
+                try { bgCmykDataUrl = await fetchDataUrl(BG_CMYK_URL, 'image/jpeg'); }
+                catch (e) { bgCmykDataUrl = null; }
+                return bgDataUrl;
+            })();
+            return bgPromise;
+        }
 
         let pdfWorker = null;
         function getWorker() {
@@ -549,8 +724,10 @@
                     margin: parseFloat(document.getElementById('margin').value) || 0,
                     gutter: parseFloat(document.getElementById('gutter').value) || 0,
                     fontUrl: PDF_FONT_URL,
-                    bgUrl: BG_URL,
-                    bgCmykUrl: BG_CMYK_URL,
+                    bgDataUrl: bgDataUrl,
+                    bgCmykDataUrl: bgCmykDataUrl,
+                    config: templateConfig,
+                    cardConfigs: cardConfigsForWorker(),
                 });
             });
         }
@@ -559,7 +736,7 @@
         // one message at a time anyway; this keeps responses paired with requests).
         let workerChain = Promise.resolve();
         function renderPdf() {
-            const p = workerChain.then(renderViaWorker);
+            const p = workerChain.then(() => ensureBackground()).then(renderViaWorker);
             workerChain = p.then(() => {}, () => {});
             return p;
         }
@@ -656,6 +833,188 @@
             }
         }
 
+        // ===================== Single-card designer =====================
+        const EDITOR_PPMM = 5.5;                 // px per mm in the HTML editor
+        const CARD_W_MM = 103, CARD_H_MM = 73;
+        // lineHeight must match the worker's per-element value or multi-line blocks
+        // (ingredients, allergens) drift vertically between editor and PDF.
+        const EDITOR_ELEMENTS = [
+            { id: 'title',        align: 'center', lineHeight: 1.1 },
+            { id: 'englishTitle', align: 'center', lineHeight: 1.1 },
+            { id: 'ingredients',  align: 'center', lineHeight: 1.0 },
+            { id: 'allergens',    align: 'left',   lineHeight: 1.0 },
+            { id: 'price',        align: 'right',  lineHeight: 1.1 },
+        ];
+        let selectedElem = 'title';
+        let drag = null;
+
+        function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+        // Display text for an element from a given row (mirrors the worker's fields).
+        function elemText(rowIdx, id) {
+            const row = state.rows[rowIdx];
+            if (!row) return '';
+            const get = (f) => { const i = state.map[f]; return (i >= 0 && i < row.length) ? String(row[i] || '').replace(/\\n/g, '\n') : ''; };
+            switch (id) {
+                case 'title': return get('title');
+                case 'englishTitle': return get('englishTitle');
+                case 'ingredients': return [get('cnIngredients'), get('enIngredients')].filter(Boolean).join('\n');
+                case 'allergens': return [get('diet'), get('allergens')].filter(Boolean).join('\n');
+                case 'price': return [get('priceWhole'), get('priceHalf')].filter(Boolean).join('\n');
+            }
+            return '';
+        }
+
+        function positionElem(el, id) {
+            const c = activeCfg()[id];
+            const def = EDITOR_ELEMENTS.find(e => e.id === id);
+            const ppmm = EDITOR_PPMM;
+            const wrapMm = c.wrapPct ? CARD_W_MM * c.wrapPct / 100 : CARD_W_MM;
+            el.style.left = (c.x * ppmm) + 'px';
+            el.style.top = (c.y * ppmm) + 'px';
+            el.style.fontSize = (c.size * ppmm * (25.4 / 72)) + 'px';
+            el.style.lineHeight = def.lineHeight;
+            el.style.maxWidth = (wrapMm * ppmm) + 'px';
+            if (def.align === 'center') {
+                el.style.transform = 'translateX(-50%)';
+                el.style.textAlign = 'center';
+            } else if (def.align === 'right') {
+                el.style.transform = 'translateX(-100%)';
+                el.style.textAlign = 'right';
+            } else {
+                el.style.transform = 'none';
+                el.style.textAlign = 'left';
+            }
+        }
+
+        function renderEditor() {
+            const editor = document.getElementById('cardEditor');
+            editor.style.width = (CARD_W_MM * EDITOR_PPMM) + 'px';
+            editor.style.height = (CARD_H_MM * EDITOR_PPMM) + 'px';
+            const bgImg = document.getElementById('editorBg');
+            if (bgDataUrl) bgImg.src = bgDataUrl;
+            else ensureBackground().then(() => { bgImg.src = bgDataUrl; }).catch(() => {});
+            Array.prototype.slice.call(editor.querySelectorAll('.card-elem')).forEach(e => e.remove());
+            EDITOR_ELEMENTS.forEach(def => {
+                const text = elemText(activeCardIndex, def.id);
+                const el = document.createElement('div');
+                el.className = 'card-elem' + (def.id === selectedElem ? ' selected' : '');
+                el.dataset.id = def.id;
+                el.textContent = text || ('(' + def.id + ')');
+                if (!text) el.style.opacity = '0.4';
+                positionElem(el, def.id);
+                el.addEventListener('mousedown', startDrag);
+                editor.appendChild(el);
+            });
+            syncPropInputs();
+        }
+
+        function startDrag(e) {
+            e.preventDefault();
+            const id = e.currentTarget.dataset.id;
+            selectElem(id);
+            const c = activeCfg()[id];
+            drag = { id: id, el: e.currentTarget, startMx: e.clientX, startMy: e.clientY, startX: c.x, startY: c.y };
+            e.currentTarget.classList.add('dragging');
+            window.addEventListener('mousemove', onDrag);
+            window.addEventListener('mouseup', endDrag);
+        }
+        function onDrag(e) {
+            if (!drag) return;
+            const c = activeCfg()[drag.id];
+            c.x = Math.round(clamp(drag.startX + (e.clientX - drag.startMx) / EDITOR_PPMM, 0, CARD_W_MM) * 2) / 2;
+            c.y = Math.round(clamp(drag.startY + (e.clientY - drag.startMy) / EDITOR_PPMM, 0, CARD_H_MM) * 2) / 2;
+            positionElem(drag.el, drag.id);
+            syncPropInputs();
+        }
+        function endDrag() {
+            if (drag) drag.el.classList.remove('dragging');
+            drag = null;
+            window.removeEventListener('mousemove', onDrag);
+            window.removeEventListener('mouseup', endDrag);
+            afterEdit();
+        }
+
+        function selectElem(id) {
+            selectedElem = id;
+            document.getElementById('elemSelect').value = id;
+            Array.prototype.slice.call(document.querySelectorAll('.card-elem'))
+                .forEach(el => el.classList.toggle('selected', el.dataset.id === id));
+            syncPropInputs();
+        }
+        function syncPropInputs() {
+            const c = activeCfg()[selectedElem];
+            document.getElementById('propX').value = c.x;
+            document.getElementById('propY').value = c.y;
+            document.getElementById('propSize').value = c.size;
+            const hasWrap = typeof c.wrapPct === 'number';
+            document.getElementById('wrapRow').style.display = hasWrap ? '' : 'none';
+            if (hasWrap) document.getElementById('propWrap').value = c.wrapPct;
+        }
+        function afterEdit() {
+            if (designMode === 'template') applyTemplateToAll();
+            scheduleRefresh();
+        }
+        function onPropInput() {
+            const c = activeCfg()[selectedElem];
+            c.x = parseFloat(document.getElementById('propX').value) || 0;
+            c.y = parseFloat(document.getElementById('propY').value) || 0;
+            c.size = Math.max(3, parseFloat(document.getElementById('propSize').value) || 3);
+            if (typeof c.wrapPct === 'number') {
+                c.wrapPct = clamp(parseFloat(document.getElementById('propWrap').value) || 100, 10, 100);
+            }
+            const el = document.querySelector('.card-elem[data-id="' + selectedElem + '"]');
+            if (el) positionElem(el, selectedElem);
+            afterEdit();
+        }
+
+        function cardLabel(rowIdx) {
+            const name = [elemText(rowIdx, 'title'), elemText(rowIdx, 'englishTitle')]
+                .filter(Boolean).join(' / ') || ('Card ' + (rowIdx + 1));
+            return (rowIdx + 1) + '. ' + name.replace(/\n/g, ' ');
+        }
+        function rebuildCardPicker() {
+            const picker = document.getElementById('cardPicker');
+            const q = (document.getElementById('cardSearch').value || '').toLowerCase();
+            picker.innerHTML = '';
+            state.rows.forEach((_, i) => {
+                const label = cardLabel(i);
+                if (q && !label.toLowerCase().includes(q)) return;
+                const opt = document.createElement('option');
+                opt.value = i; opt.textContent = label;
+                picker.appendChild(opt);
+            });
+            const opts = Array.prototype.slice.call(picker.options);
+            if (opts.some(o => +o.value === activeCardIndex)) picker.value = activeCardIndex;
+            else if (opts.length) { activeCardIndex = +opts[0].value; picker.value = activeCardIndex; }
+        }
+        function initDesigner() {
+            if (activeCardIndex >= state.rows.length) activeCardIndex = 0;
+            rebuildCardPicker();
+            document.getElementById('designerPanel').hidden = false;
+            renderEditor();
+        }
+
+        document.getElementById('elemSelect').addEventListener('change', (e) => selectElem(e.target.value));
+        ['propX', 'propY', 'propSize', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
+        document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); });
+        document.getElementById('cardSearch').addEventListener('input', rebuildCardPicker);
+        document.getElementById('designModeSelect').addEventListener('change', (e) => {
+            designMode = e.target.value;
+            renderEditor();
+        });
+        document.getElementById('resetLayoutBtn').addEventListener('click', () => {
+            if (designMode === 'template') {
+                templateConfig = clone(TEMPLATE_DEFAULT);
+                applyTemplateToAll();
+            } else {
+                const id = activeId();
+                if (id) cardConfig[id] = clone(templateConfig);
+            }
+            renderEditor();
+            scheduleRefresh();
+        });
+
         function toggleTheme() {
             const root = document.documentElement;
             const isLight = root.classList.toggle('light-mode');
@@ -712,7 +1071,11 @@
             if (!sameHeaders) {
                 ingestCSV(text);
             } else {
+                // Content-only refresh: update text, keep every card's layout config.
                 state.rows = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
+                reconcileCardConfigs();
+                rebuildCardPicker();
+                renderEditor();
                 refreshPreview();
             }
             return true;
@@ -773,18 +1136,11 @@
         document.getElementById('loadSampleBtn').addEventListener('click', () => { stopSheetPolling(); ingestCSV(SAMPLE_CSV); });
         document.getElementById('generatePdfBtn').addEventListener('click', downloadPDF);
 
-        // Probe S3 CORS up-front so we can show a clear banner before the user
-        // tries to render and hits a SecurityError.
-        (function probeBgCors() {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => { /* CORS OK */ };
-            img.onerror = () => {
-                document.getElementById('corsBanner').hidden = false;
-                console.warn('[card-printer] Background image CORS check failed — see banner.');
-            };
-            img.src = BG_URL + '?cors-probe=' + Date.now();
-        })();
+        // Warm the background cache up-front (one S3 fetch → data URL reused everywhere).
+        ensureBackground().catch(err => {
+            document.getElementById('corsBanner').hidden = false;
+            console.warn('[card-printer] Background fetch failed — see banner.', err);
+        });
 
         ['pageFormat', 'margin', 'gutter'].forEach(id => {
             document.getElementById(id).addEventListener('input', scheduleRefresh);

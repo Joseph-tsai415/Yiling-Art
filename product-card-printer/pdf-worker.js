@@ -27,29 +27,27 @@ const PAGES = {
 
 const PT_TO_MM = 25.4 / 72;
 
-// Layout zones (mm from top-left of card). The top region (title → english title →
-// ingredients) flows downward and is content-aware; the bottom row (allergens +
-// price) is fixed. Sizes in pt.
-const LAYOUT = {
-    titleTopY: 23,             // preferred top of the Chinese title
-    englishMinY: 30,           // english title not above this when title is single-line
-    bottomY: 60,               // allergens + price top
-    ingredientsClearance: 2,   // gap kept between ingredients and the bottom row
-    blockGap: 1.2,             // gap between stacked top blocks
-    title:       { wrapPct: 0.80, maxSize: 17, minSize: 11, lineHeight: 1.1 },
-    englishTitle:{ wrapPct: 0.80, maxSize: 12, minSize: 8,  lineHeight: 1.1 },
-    ingredients: { wrapPct: 0.90, maxSize: 9,  minSize: 4.5, lineHeight: 1 },
-    allergens:   { maxWidthMm: 70, maxSize: 9, minSize: 6,  lineHeight: 1 },
-    price:       { size: 14, lineHeight: 1.1 },
+// Per-element layout config (mm from top-left of card; size in pt). These are the
+// editable values the single-card designer tweaks. x is the anchor for the element's
+// alignment: centre-x for centred elements, left edge for allergens, right edge for
+// price. The size is the baseline; fitText still wraps and shrinks if text overflows
+// ("manual baseline + auto-fit refine").
+const DEFAULT_CONFIG = {
+    title:        { x: 51.5, y: 23, size: 17, wrapPct: 80 },   // centred
+    englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80 },   // centred
+    ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90 },   // centred
+    allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68 },   // left  (diet + allergen stacked)
+    price:        { x: 97.5, y: 60, size: 14 },                // right (whole + half stacked)
 };
+const wrapMm = (c, fallback) => CARD_W_MM * ((c && c.wrapPct ? c.wrapPct : fallback) / 100);
 
 const PDF_FONT_NAME = 'ChocolateClassicalSans';
 const PDF_FONT_FILE = 'ChocolateClassicalSans-Regular.ttf';
 
-// Cached across messages so re-renders don't re-download.
+// Font cached across messages so re-renders don't re-download. The background is
+// supplied by the main thread as a ready data URL (fetched once), so the worker
+// never touches S3 and there's no CORS to worry about here.
 let fontB64 = null;
-let bgPngDataUrl = null;
-let bgCmykDataUrl;   // undefined = not probed; null = absent; string = present
 
 async function fetchAsBase64(url) {
     const resp = await fetch(url);
@@ -185,7 +183,8 @@ function drawFitted(doc, fit, x, yTopMm, align) {
     doc.text(fit.lines, x, yTopMm, { align, baseline: 'top' });
 }
 
-function drawCard(doc, cardX, cardY, row, map, bg) {
+function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
+    cfg = cfg || DEFAULT_CONFIG;
     if (bg.cmyk) {
         doc.addImage(bg.cmyk, 'JPEG', cardX, cardY, CARD_W_MM, CARD_H_MM, undefined, 'NONE');
     } else {
@@ -194,88 +193,53 @@ function drawCard(doc, cardX, cardY, row, map, bg) {
     doc.setFont(PDF_FONT_NAME, 'normal');
     doc.setTextColor.apply(doc, CARD_TEXT_CMYK);
 
-    const cx = cardX + CARD_W_MM / 2;
-    const L = LAYOUT;
-
     const title = cellFor(row, map, 'title');
     const englishTitle = cellFor(row, map, 'englishTitle');
     const ingredients = ['cnIngredients', 'enIngredients']
         .map(s => cellFor(row, map, s)).filter(Boolean).join('\n');
-
-    // --- Top region flows downward (content-aware wrap + shrink) ---
-    let cursorY = L.titleTopY;
-    if (title) {
-        const fit = fitText(doc, title, {
-            wrapWidthMm: CARD_W_MM * L.title.wrapPct,
-            maxSize: L.title.maxSize, minSize: L.title.minSize, lineHeight: L.title.lineHeight,
-        });
-        drawFitted(doc, fit, cx, cardY + cursorY, 'center');
-        cursorY += fit.heightMm;
-    }
-    if (englishTitle) {
-        cursorY = Math.max(cursorY + L.blockGap, L.englishMinY);
-        const fit = fitText(doc, englishTitle, {
-            wrapWidthMm: CARD_W_MM * L.englishTitle.wrapPct,
-            maxSize: L.englishTitle.maxSize, minSize: L.englishTitle.minSize, lineHeight: L.englishTitle.lineHeight,
-        });
-        drawFitted(doc, fit, cx, cardY + cursorY, 'center');
-        cursorY += fit.heightMm;
-    }
-    if (ingredients) {
-        // Zone between the title region bottom and the price/allergen zone top.
-        const zTop = cursorY + L.blockGap;                  // title bottom (+small gap)
-        const zBot = L.bottomY - L.ingredientsClearance;    // just above the bottom row
-        const availH = zBot - zTop;
-        if (availH > 2) {
-            const fit = fitText(doc, ingredients, {
-                wrapWidthMm: CARD_W_MM * L.ingredients.wrapPct,
-                maxHeightMm: availH,
-                maxSize: L.ingredients.maxSize, minSize: L.ingredients.minSize, lineHeight: L.ingredients.lineHeight,
-            });
-            // Block centre sits at the golden-section point of the zone (≈38.2% down
-            // from the title bottom — slightly above the geometric middle).
-            const GOLDEN_FROM_TOP = 1 - 1 / 1.618;   // ≈ 0.382
-            const centerY = zTop + (zBot - zTop) * GOLDEN_FROM_TOP;
-            let top = centerY - fit.heightMm / 2;
-            top = Math.max(zTop, Math.min(top, zBot - fit.heightMm));
-            drawFitted(doc, fit, cx, cardY + top, 'center');
-        }
-    }
-
-    // --- Bottom-left: diet (素別) + allergens (過敏原), shrink to fit its corner ---
     const allergenText = ['diet', 'allergens']
         .map(s => cellFor(row, map, s)).filter(Boolean).join('\n');
-    if (allergenText) {
-        const fit = fitText(doc, allergenText, {
-            wrapWidthMm: L.allergens.maxWidthMm,
-            maxHeightMm: CARD_H_MM - L.bottomY - 1,
-            maxSize: L.allergens.maxSize, minSize: L.allergens.minSize, lineHeight: L.allergens.lineHeight,
-        });
-        drawFitted(doc, fit, cardX + 5.5, cardY + L.bottomY, 'left');
-    }
-
-    // --- Bottom-right: whole + half/slice price, stacked. A single line sits at
-    // bottomY; a second line keeps the block centred on the single-line position,
-    // i.e. the whole block moves up half a line. ---
     const priceLines = ['priceWhole', 'priceHalf']
         .map(s => cellFor(row, map, s)).filter(Boolean);
-    if (priceLines.length) {
-        const lineMm = L.price.size * L.price.lineHeight * PT_TO_MM;
-        const top = (L.bottomY + lineMm / 2) - priceLines.length * lineMm / 2;
-        doc.setFontSize(L.price.size);
-        doc.setLineHeightFactor(L.price.lineHeight);
-        // Right-aligned so both rows share the same right edge (5.5mm right margin,
-        // symmetric with the allergen block's left margin).
-        doc.text(priceLines, cardX + CARD_W_MM - 5.5, cardY + top, { align: 'right', baseline: 'top' });
+
+    // Each element is anchored at its configured x/y; fitText still wraps (and
+    // shrinks where a height budget applies) so long text stays on the card.
+    if (title && cfg.title) {
+        const c = cfg.title;
+        const fit = fitText(doc, title, { wrapWidthMm: wrapMm(c, 80), maxSize: c.size, minSize: Math.max(6, c.size * 0.6), lineHeight: 1.1 });
+        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'center');
+    }
+    if (englishTitle && cfg.englishTitle) {
+        const c = cfg.englishTitle;
+        const fit = fitText(doc, englishTitle, { wrapWidthMm: wrapMm(c, 80), maxSize: c.size, minSize: Math.max(5, c.size * 0.6), lineHeight: 1.1 });
+        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'center');
+    }
+    if (ingredients && cfg.ingredients) {
+        const c = cfg.ingredients;
+        const priceY = cfg.price ? cfg.price.y : CARD_H_MM;        // shrink to stay above the bottom row
+        const budget = Math.max(3, priceY - 2 - c.y);
+        const fit = fitText(doc, ingredients, { wrapWidthMm: wrapMm(c, 90), maxHeightMm: budget, maxSize: c.size, minSize: 4.5, lineHeight: 1 });
+        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'center');
+    }
+    if (allergenText && cfg.allergens) {
+        const c = cfg.allergens;
+        const fit = fitText(doc, allergenText, { wrapWidthMm: wrapMm(c, 68), maxHeightMm: Math.max(3, CARD_H_MM - c.y - 1), maxSize: c.size, minSize: 5, lineHeight: 1 });
+        drawFitted(doc, fit, cardX + c.x, cardY + c.y, 'left');
+    }
+    if (priceLines.length && cfg.price) {
+        const c = cfg.price;
+        doc.setFontSize(c.size);
+        doc.setLineHeightFactor(1.1);
+        doc.text(priceLines, cardX + c.x, cardY + c.y, { align: 'right', baseline: 'top' });
     }
 }
 
 // Draw a card upright at (x,y), or rotated 90° CW into a 73×103 footprint at (x,y).
 // Rotation uses a CTM (determinant +1, no mirroring); the card is drawn in its own
 // 0,0 origin and the matrix places + rotates it.
-function placeCard(doc, page, x, y, rotated, row, map, bg) {
+function placeCard(doc, page, x, y, rotated, row, map, bg, cfg) {
     if (!rotated) {
-        drawCard(doc, x, y, row, map, bg);
+        drawCard(doc, x, y, row, map, bg, cfg);
         return;
     }
     const k = 72 / 25.4;
@@ -284,20 +248,15 @@ function placeCard(doc, page, x, y, rotated, row, map, bg) {
     const f = Hpt - y * k;
     doc.saveGraphicsState();
     doc.setCurrentTransformationMatrix(new doc.Matrix(0, -1, 1, 0, e, f));
-    drawCard(doc, 0, 0, row, map, bg);
+    drawCard(doc, 0, 0, row, map, bg, cfg);
     doc.restoreGraphicsState();
 }
 
 self.onmessage = async (e) => {
-    const { rows, map, pageFormat, margin, gutter, fontUrl, bgUrl, bgCmykUrl } = e.data;
+    const { rows, map, pageFormat, margin, gutter, fontUrl, bgDataUrl, bgCmykDataUrl, config, cardConfigs } = e.data;
     try {
         if (!fontB64) fontB64 = await fetchAsBase64(fontUrl);
-        if (bgPngDataUrl === null) bgPngDataUrl = 'data:image/png;base64,' + await fetchAsBase64(bgUrl);
-        if (bgCmykDataUrl === undefined) {
-            try { bgCmykDataUrl = 'data:image/jpeg;base64,' + await fetchAsBase64(bgCmykUrl); }
-            catch (err) { bgCmykDataUrl = null; }
-        }
-        const bg = { png: bgPngDataUrl, cmyk: bgCmykDataUrl };
+        const bg = { png: bgDataUrl, cmyk: bgCmykDataUrl || null };
 
         const layout = computeLayout(pageFormat, margin, gutter);
         const { jsPDF } = self.jspdf;
@@ -319,7 +278,8 @@ self.onmessage = async (e) => {
                 const dataIdx = p * perPage + i;
                 if (dataIdx >= rows.length) break;
                 const slot = layout.slots[i];
-                placeCard(doc, layout.page, layout.margin + slot.x, layout.margin + slot.y, slot.rotated, rows[dataIdx], map, bg);
+                const cfg = (cardConfigs && cardConfigs[dataIdx]) || config || DEFAULT_CONFIG;
+                placeCard(doc, layout.page, layout.margin + slot.x, layout.margin + slot.y, slot.rotated, rows[dataIdx], map, bg, cfg);
             }
         }
 
