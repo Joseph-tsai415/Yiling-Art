@@ -26,13 +26,14 @@ const PAGES = {
     'a3-landscape': { w: 420, h: 297, jsOrientation: 'l', jsFormat: 'a3', label: 'A3 landscape' },
 };
 
-const PDF_FONT_NAME = 'ChocolateClassicalSans';
-const PDF_FONT_FILE = 'ChocolateClassicalSans-Regular.ttf';
-
-// Font cached across messages so re-renders don't re-download. The background is
-// supplied by the main thread as a ready data URL (fetched once), so the worker
-// never touches S3 and there's no CORS to worry about here.
-let fontB64 = null;
+// Fonts cached across messages (keyed by CardLayout.fontKey) so re-renders don't
+// re-download. The main thread sends a { fontKey: ttfUrl } map of every face used
+// by the selected cards; each is embedded under its key as a 'normal' jsPDF font.
+// The background is supplied as a ready data URL (fetched once on the main thread),
+// so the worker never touches S3 and there's no CORS to worry about here.
+let fontB64Map = {};
+let embeddedKeys = new Set();
+let defaultFontKey = null;
 
 async function fetchAsBase64(url) {
     const resp = await fetch(url);
@@ -145,8 +146,14 @@ function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
     } else {
         doc.addImage(bg.png, 'PNG', cardX, cardY, CARD_W_MM, CARD_H_MM, undefined, 'NONE');
     }
-    doc.setFont(PDF_FONT_NAME, 'normal');
     doc.setTextColor.apply(doc, CARD_TEXT_CMYK);
+
+    // Pick the embedded face for this element, falling back to the default if the
+    // requested one wasn't supplied (keeps a missing font from throwing mid-render).
+    const faceKey = (font, weight) => {
+        const k = CardLayout.fontKey(font, weight);
+        return embeddedKeys.has(k) ? k : defaultFontKey;
+    };
 
     const fields = {
         title: cellFor(row, map, 'title'),
@@ -156,12 +163,15 @@ function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
         priceLines: ['priceWhole', 'priceHalf'].map(s => cellFor(row, map, s)).filter(Boolean),
     };
     // jsPDF text measurement — the engine-specific half of the shared algorithm.
-    const measure = (text, sizePt, wrapWidthMm) => {
+    // Advance widths depend on the face, so set the element's font before measuring.
+    const measure = (text, sizePt, wrapWidthMm, font, weight) => {
+        doc.setFont(faceKey(font, weight), 'normal');
         doc.setFontSize(sizePt);
         return doc.splitTextToSize(text, wrapWidthMm);
     };
     const items = CardLayout.layoutCard(fields, cfg, measure);
     items.forEach(it => {
+        doc.setFont(faceKey(it.font, it.weight), 'normal');
         doc.setFontSize(it.size);
         doc.setLineHeightFactor(it.lineHeight);
         doc.text(it.lines, cardX + it.x, cardY + it.y, { align: it.align, baseline: 'top' });
@@ -187,9 +197,16 @@ function placeCard(doc, page, x, y, rotated, row, map, bg, cfg) {
 }
 
 self.onmessage = async (e) => {
-    const { rows, map, pageFormat, margin, gutter, fontUrl, bgDataUrl, bgCmykDataUrl, config, cardConfigs } = e.data;
+    const { rows, map, pageFormat, margin, gutter, fontUrl, fontFiles, defaultKey, bgDataUrl, bgCmykDataUrl, config, cardConfigs } = e.data;
     try {
-        if (!fontB64) fontB64 = await fetchAsBase64(fontUrl);
+        // { fontKey: ttfUrl } for every face used by the selected cards. Older callers
+        // that only send a single fontUrl still work via the default key.
+        const faces = fontFiles || {};
+        defaultFontKey = defaultKey || CardLayout.fontKey(CardLayout.DEFAULT_FONT, CardLayout.DEFAULT_WEIGHT);
+        if (!faces[defaultFontKey] && fontUrl) faces[defaultFontKey] = fontUrl;
+        for (const key in faces) {
+            if (!fontB64Map[key]) fontB64Map[key] = await fetchAsBase64(faces[key]);
+        }
         const bg = { png: bgDataUrl, cmyk: bgCmykDataUrl || null };
 
         const layout = computeLayout(pageFormat, margin, gutter);
@@ -200,8 +217,13 @@ self.onmessage = async (e) => {
             format: layout.page.jsFormat,
             compress: true,
         });
-        doc.addFileToVFS(PDF_FONT_FILE, fontB64);
-        doc.addFont(PDF_FONT_FILE, PDF_FONT_NAME, 'normal');
+        embeddedKeys = new Set();
+        for (const key in faces) {
+            const file = key + '.ttf';
+            doc.addFileToVFS(file, fontB64Map[key]);
+            doc.addFont(file, key, 'normal');
+            embeddedKeys.add(key);
+        }
 
         const perPage = layout.perPage;
         if (!perPage) throw new Error('Card does not fit on the selected page size.');

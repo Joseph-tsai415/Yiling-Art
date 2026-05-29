@@ -447,8 +447,13 @@
                     </div>
                     <div class="prop-row"><label for="propX">X (mm)</label><input type="number" id="propX" step="0.5"></div>
                     <div class="prop-row"><label for="propY">Y (mm)</label><input type="number" id="propY" step="0.5"></div>
-                    <div class="prop-row"><label for="propSize">Font (pt)</label><input type="number" id="propSize" step="0.5" min="3"></div>
+                    <div class="prop-row"><label for="propSize">Size (pt)</label><input type="number" id="propSize" step="0.5" min="3"></div>
+                    <div class="prop-row"><label for="propFont">Font</label><select id="propFont"></select></div>
+                    <div class="prop-row"><label for="propWeight">Weight</label><select id="propWeight"></select></div>
                     <div class="prop-row" id="wrapRow"><label for="propWrap">Wrap (% width)</label><input type="number" id="propWrap" step="1" min="10" max="100"></div>
+                    <p style="font-size: 0.72rem; color: var(--text-muted); margin: 2px 0 0;">
+                        Fonts cover Traditional Chinese. Each distinct font on a sheet is embedded in the PDF (several MB each) — keep the variety small to keep PDFs fast.
+                    </p>
                     <button id="resetLayoutBtn" class="secondary" type="button" style="margin-top:12px; width:100%;">Reset to default layout</button>
                 </div>
             </div>
@@ -574,12 +579,14 @@
         // Per-element layout (mm; size pt). Mirrors the worker's DEFAULT_CONFIG.
         // wrapPct = max text width as a % of card width (the wrap margin). Used by
         // BOTH the editor and the worker so line breaks match. Price doesn't wrap.
+        const DEF_FONT = CardLayout.DEFAULT_FONT;      // 'Chocolate Classical Sans'
+        const DEF_WEIGHT = CardLayout.DEFAULT_WEIGHT;  // 400
         const TEMPLATE_DEFAULT = {
-            title:        { x: 51.5, y: 23, size: 17, wrapPct: 80 },
-            englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80 },
-            ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90 },
-            allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68 },
-            price:        { x: 97.5, y: 60, size: 14 },
+            title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEF_FONT, weight: DEF_WEIGHT },
+            englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80, font: DEF_FONT, weight: DEF_WEIGHT },
+            ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90, font: DEF_FONT, weight: DEF_WEIGHT },
+            allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEF_FONT, weight: DEF_WEIGHT },
+            price:        { x: 97.5, y: 60, size: 14, font: DEF_FONT, weight: DEF_WEIGHT },
         };
         const clone = (o) => JSON.parse(JSON.stringify(o));
         const genId = () => (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -842,6 +849,8 @@
                     margin: parseFloat(document.getElementById('margin').value) || 0,
                     gutter: parseFloat(document.getElementById('gutter').value) || 0,
                     fontUrl: PDF_FONT_URL,
+                    fontFiles: collectFontFiles(inp.cfgs),
+                    defaultKey: CardLayout.fontKey(DEF_FONT, DEF_WEIGHT),
                     bgDataUrl: bgDataUrl,
                     bgCmykDataUrl: bgCmykDataUrl,
                     config: templateConfig,
@@ -990,6 +999,140 @@
 
         function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+        // ===================== Font catalog (lazy-loaded) =====================
+        // Each entry: { family, files: { 400: ttfUrl, 700: ttfUrl } }. The list is
+        // restricted to faces that cover Traditional Chinese (the cards contain CJK),
+        // so any element can use any font without dropping glyphs in the PDF.
+        // Live source: the Google Fonts Developer API (needs window.GOOGLE_API_KEY,
+        // injected at deploy) filtered to the chinese-traditional subset. When no key
+        // is present (local dev) we fall back to this curated list of static TTFs.
+        // Standard CSS weight stops (100–900). Only weights a family actually ships as
+        // a real face are offered — each maps to its own TTF so screen == PDF (no faux
+        // bolding). The live Fonts API supplies the full set per family; the curated
+        // fallback below lists every static weight Google serves for these families.
+        const WEIGHT_LABEL = {
+            100: 'Thin', 200: 'ExtraLight', 300: 'Light', 400: 'Regular', 500: 'Medium',
+            600: 'SemiBold', 700: 'Bold', 800: 'ExtraBold', 900: 'Black',
+        };
+        const _NSTC = 'https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz7';
+        const _NSER = 'https://fonts.gstatic.com/s/notoseriftc/v36/XLYzIZb5bJNDGYxLBibeHZ0BnHwmuanx8cUaGX';
+        const FONT_FALLBACK = [
+            { family: DEF_FONT, files: { 400: PDF_FONT_URL } },   // default; single weight, full CJK
+            { family: 'Noto Sans TC', files: {
+                100: _NSTC + '6CzzC1Esg.ttf', 200: _NSTC + 'yCyzC1Esg.ttf', 300: _NSTC + '_6yzC1Esg.ttf',
+                400: _NSTC + '6CyzC1Esg.ttf', 500: _NSTC + '5KyzC1Esg.ttf', 600: _NSTC + '361zC1Esg.ttf',
+                700: _NSTC + '0e1zC1Esg.ttf', 800: _NSTC + 'yC1zC1Esg.ttf', 900: _NSTC + 'wm1zC1Esg.ttf' } },
+            { family: 'Noto Serif TC', files: {
+                200: _NSER + '_aMNpEM2I.ttf', 300: _NSER + '8EMNpEM2I.ttf', 400: _NSER + '9aMNpEM2I.ttf',
+                500: _NSER + '9oMNpEM2I.ttf', 600: _NSER + '-EN9pEM2I.ttf', 700: _NSER + '-9N9pEM2I.ttf',
+                800: _NSER + '_aN9pEM2I.ttf', 900: _NSER + '_zN9pEM2I.ttf' } },
+        ];
+        let FONT_CATALOG = FONT_FALLBACK.slice();
+
+        function fontApiKey() {
+            const k = window.GOOGLE_API_KEY;
+            return (k && k.indexOf('__') !== 0) ? k : null;
+        }
+        function catalogEntry(family) {
+            return FONT_CATALOG.find(f => f.family === family) || FONT_CATALOG[0];
+        }
+        function weightsFor(family) {
+            return Object.keys(catalogEntry(family).files).map(Number).sort((a, b) => a - b);
+        }
+        function faceUrl(family, weight) {
+            const files = catalogEntry(family).files;
+            return files[weight] || files[400] || files[Object.keys(files)[0]];
+        }
+
+        // Pull the chinese-traditional families from the Fonts API and merge over the
+        // curated fallback (keeping the default font first). Silent no-op on failure.
+        async function loadFontCatalog() {
+            const key = fontApiKey();
+            if (!key) return;
+            try {
+                const url = 'https://www.googleapis.com/webfonts/v1/webfonts?subset=chinese-traditional&sort=popularity&key=' + encodeURIComponent(key);
+                const r = await fetch(url);
+                if (!r.ok) return;
+                const data = await r.json();
+                const byFam = {};
+                (data.items || []).forEach(it => {
+                    const files = {};
+                    Object.keys(it.files || {}).forEach(variant => {
+                        if (variant.indexOf('italic') >= 0) return;          // upright faces only
+                        const w = variant === 'regular' ? 400 : (/^\d+$/.test(variant) ? Number(variant) : null);
+                        if (w) files[w] = it.files[variant].replace(/^http:/, 'https:');
+                    });
+                    if (Object.keys(files).length) byFam[it.family] = { family: it.family, files: files };
+                });
+                FONT_FALLBACK.forEach(b => { if (!byFam[b.family]) byFam[b.family] = b; });
+                const list = Object.keys(byFam).map(f => byFam[f]);
+                list.sort((a, b) => a.family === DEF_FONT ? -1 : b.family === DEF_FONT ? 1 : a.family.localeCompare(b.family));
+                FONT_CATALOG = list;
+                populateFontSelect();
+            } catch (_) { /* keep fallback */ }
+        }
+
+        // Lazy FontFace loading for the editor. The default font is already provided by
+        // the <link> in <head>, so skip it. Every other face is loaded on demand from
+        // the SAME TTF the worker embeds, so editor wrap points match the PDF exactly.
+        const _faceReady = {};               // fontKey -> true once usable
+        const _faceLoading = {};             // fontKey -> Promise (de-dupe in-flight loads)
+        _faceReady[CardLayout.fontKey(DEF_FONT, DEF_WEIGHT)] = true;
+        function ensureFace(family, weight) {
+            const k = CardLayout.fontKey(family, weight);
+            if (_faceReady[k]) return Promise.resolve();
+            if (_faceLoading[k]) return _faceLoading[k];
+            const ff = new FontFace(family, 'url("' + faceUrl(family, weight) + '")', { weight: String(weight) });
+            const p = ff.load()
+                .then(loaded => { document.fonts.add(loaded); })
+                .catch(() => {})
+                .then(() => { _faceReady[k] = true; delete _faceLoading[k]; });
+            _faceLoading[k] = p;
+            return p;
+        }
+        // Kick off loads for every face an active config uses; re-render once any
+        // newly-loaded face arrives so canvas measurement uses the real metrics.
+        let _rerenderQueued = false;
+        function scheduleEditorRerender() {
+            if (_rerenderQueued) return;
+            _rerenderQueued = true;
+            requestAnimationFrame(() => { _rerenderQueued = false; renderEditor(); });
+        }
+        function ensureCfgFaces(cfg) {
+            ELEMS.forEach(d => {
+                const c = cfg[d.id];
+                if (!c) return;
+                const k = CardLayout.fontKey(c.font || DEF_FONT, c.weight || DEF_WEIGHT);
+                if (_faceReady[k]) return;
+                ensureFace(c.font || DEF_FONT, c.weight || DEF_WEIGHT).then(scheduleEditorRerender);
+            });
+        }
+        // { fontKey: ttfUrl } for every face used across the given configs (+ default),
+        // sent to the worker so it can embed each one in the PDF.
+        function collectFontFiles(cfgs) {
+            const map = {};
+            const add = (fam, w) => { const k = CardLayout.fontKey(fam, w); if (!map[k]) map[k] = faceUrl(fam, w); };
+            (cfgs || []).forEach(cfg => ELEMS.forEach(d => { const c = cfg[d.id]; if (c) add(c.font || DEF_FONT, c.weight || DEF_WEIGHT); }));
+            add(DEF_FONT, DEF_WEIGHT);
+            return map;
+        }
+
+        function populateFontSelect() {
+            const sel = document.getElementById('propFont');
+            if (!sel) return;
+            const cur = sel.value;
+            sel.innerHTML = FONT_CATALOG.map(f => '<option value="' + f.family + '">' + f.family + '</option>').join('');
+            if (cur && FONT_CATALOG.some(f => f.family === cur)) sel.value = cur;
+        }
+        function populateWeightSelect(family, selected) {
+            const sel = document.getElementById('propWeight');
+            if (!sel) return;
+            const ws = weightsFor(family);
+            sel.innerHTML = ws.map(w => '<option value="' + w + '">' + w + (WEIGHT_LABEL[w] ? ' · ' + WEIGHT_LABEL[w] : '') + '</option>').join('');
+            sel.value = String(ws.indexOf(selected) >= 0 ? selected : ws[0]);
+            sel.disabled = ws.length < 2;   // nothing to choose when a family has one weight
+        }
+
         // Combined display text per element from a row (mirrors the worker's fields).
         function elemText(rowIdx, id) {
             const row = state.rows[rowIdx];
@@ -1023,8 +1166,8 @@
         const MEASURE_MMPX = 12;
         const CJK_RE = '\\u3000-\\u303f\\u3400-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef';
         const TOKEN_RE = new RegExp('[' + CJK_RE + ']|[^\\s' + CJK_RE + ']+|\\s+', 'g');
-        function editorMeasure(text, sizePt, wrapWidthMm) {
-            _mctx.font = (sizePt * CardLayout.PT_TO_MM * MEASURE_MMPX) + 'px "Chocolate Classical Sans", serif';
+        function editorMeasure(text, sizePt, wrapWidthMm, font, weight) {
+            _mctx.font = (weight || DEF_WEIGHT) + ' ' + (sizePt * CardLayout.PT_TO_MM * MEASURE_MMPX) + 'px "' + (font || DEF_FONT) + '", serif';
             const maxPx = wrapWidthMm * MEASURE_MMPX;
             const out = [];
             String(text).split('\n').forEach(para => {
@@ -1055,6 +1198,7 @@
             Array.prototype.slice.call(editor.querySelectorAll('.card-elem')).forEach(e => e.remove());
 
             const cfg = activeCfg();
+            ensureCfgFaces(cfg);   // lazy-load any non-default faces; re-renders on arrival
             const items = CardLayout.layoutCard(editorFields(activeCardIndex), cfg, editorMeasure);
             const byId = {};
             items.forEach(it => { byId[it.id] = it; });
@@ -1071,6 +1215,8 @@
                 el.style.whiteSpace = 'pre';           // lines already wrapped by the algorithm
                 el.style.left = (c.x * ppmm) + 'px';
                 el.style.top = (c.y * ppmm) + 'px';
+                el.style.fontFamily = '"' + (c.font || DEF_FONT) + '", serif';
+                el.style.fontWeight = String(c.weight || DEF_WEIGHT);
                 if (it) {
                     el.textContent = it.lines.join('\n');
                     el.style.fontSize = (it.size * ppmm * CardLayout.PT_TO_MM) + 'px';
@@ -1130,9 +1276,30 @@
             setv('propX', c.x);
             setv('propY', c.y);
             setv('propSize', c.size);
+            document.getElementById('propFont').value = c.font || DEF_FONT;
+            populateWeightSelect(c.font || DEF_FONT, c.weight || DEF_WEIGHT);
             const hasWrap = typeof c.wrapPct === 'number';
             document.getElementById('wrapRow').style.display = hasWrap ? '' : 'none';
             if (hasWrap) setv('propWrap', c.wrapPct);
+        }
+        // Font / weight changes: clamp the weight to what the family offers, load the
+        // face, then re-layout (advance widths change, so wrap can shift).
+        function onFontChange() {
+            const c = activeCfg()[selectedElem];
+            c.font = document.getElementById('propFont').value;
+            const ws = weightsFor(c.font);
+            if (ws.indexOf(c.weight) < 0) c.weight = ws[0];
+            populateWeightSelect(c.font, c.weight);
+            ensureFace(c.font, c.weight).then(renderEditor);
+            renderEditor();
+            afterEdit();
+        }
+        function onWeightChange() {
+            const c = activeCfg()[selectedElem];
+            c.weight = parseInt(document.getElementById('propWeight').value, 10) || DEF_WEIGHT;
+            ensureFace(c.font || DEF_FONT, c.weight).then(renderEditor);
+            renderEditor();
+            afterEdit();
         }
         function afterEdit() {
             if (designMode === 'template') applyTemplateToAll();
@@ -1247,6 +1414,10 @@
 
         document.getElementById('elemSelect').addEventListener('change', (e) => selectElem(e.target.value));
         ['propX', 'propY', 'propSize', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
+        document.getElementById('propFont').addEventListener('change', onFontChange);
+        document.getElementById('propWeight').addEventListener('change', onWeightChange);
+        populateFontSelect();
+        loadFontCatalog();   // upgrade the curated list to the live Fonts API when a key is present
         document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); renderContentInputs(); });
         document.getElementById('cardSearch').addEventListener('input', rebuildCardPicker);
         document.getElementById('designModeSelect').addEventListener('change', (e) => {
