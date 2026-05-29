@@ -9,7 +9,7 @@
  */
 /* global importScripts, self, CardLayout */
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-importScripts('card-layout.js');   // shared config + layout algorithm
+importScripts('card-layout.js?v=20260529a');   // shared config + layout algorithm (keep ?v= in sync with index.html)
 
 const CARD_W_MM = CardLayout.CARD_W_MM;
 const CARD_H_MM = CardLayout.CARD_H_MM;

@@ -521,7 +521,10 @@
         window.GOOGLE_API_KEY = '__GOOGLE_API_KEY__';
     </script>
     <script src="google-config.local.js"></script>
-    <script src="card-layout.js"></script>
+    <!-- ?v= cache-buster: BUMP THIS on any change to card-layout.js / pdf-worker.js so
+         a redeployed index.html can't run against a stale cached copy. Keep all three
+         (here, the Worker(), and pdf-worker.js's importScripts) on the SAME value. -->
+    <script src="card-layout.js?v=20260529a"></script>
     <script>
         // PDF building runs in pdf-worker.js (off the main thread). These are the
         // assets the worker fetches.
@@ -817,7 +820,7 @@
 
         let pdfWorker = null;
         function getWorker() {
-            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js');
+            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js?v=20260529a');   // keep ?v= in sync with card-layout.js above
             return pdfWorker;
         }
 
