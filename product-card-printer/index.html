@@ -448,6 +448,7 @@
                     <div class="prop-row"><label for="propX">X (mm)</label><input type="number" id="propX" step="0.5"></div>
                     <div class="prop-row"><label for="propY">Y (mm)</label><input type="number" id="propY" step="0.5"></div>
                     <div class="prop-row"><label for="propSize">Size (pt)</label><input type="number" id="propSize" step="0.5" min="3"></div>
+                    <div class="prop-row"><label for="fontSearch">Find font</label><input type="text" id="fontSearch" placeholder="type to filter…" autocomplete="off"></div>
                     <div class="prop-row"><label for="propFont">Font</label><select id="propFont"></select></div>
                     <div class="prop-row"><label for="propWeight">Weight</label><select id="propWeight"></select></div>
                     <div class="prop-row" id="wrapRow"><label for="propWrap">Wrap (% width)</label><input type="number" id="propWrap" step="1" min="10" max="100"></div>
@@ -1003,12 +1004,15 @@
         function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
         // ===================== Font catalog (lazy-loaded) =====================
-        // Each entry: { family, files: { 400: ttfUrl, 700: ttfUrl } }. The list is
-        // restricted to faces that cover Traditional Chinese (the cards contain CJK),
-        // so any element can use any font without dropping glyphs in the PDF.
+        // Each entry: { family, files: { 100..900: ttfUrl }, category, cjk }.
+        //   category — Google Fonts category (sans-serif / serif / display / handwriting
+        //              / monospace), used to group the picker.
+        //   cjk      — true if the family covers the chinese-traditional subset. The
+        //              cards contain Chinese, so non-CJK fonts drop glyphs in the PDF;
+        //              the picker flags CJK families and sorts them first per category.
         // Live source: the Google Fonts Developer API (needs window.GOOGLE_API_KEY,
-        // injected at deploy) filtered to the chinese-traditional subset. When no key
-        // is present (local dev) we fall back to this curated list of static TTFs.
+        // injected at deploy) — the FULL library (~1900 families). When no key is present
+        // (local dev) we fall back to this curated list of static CJK TTFs.
         // Standard CSS weight stops (100–900). Only weights a family actually ships as
         // a real face are offered — each maps to its own TTF so screen == PDF (no faux
         // bolding). The live Fonts API supplies the full set per family; the curated
@@ -1020,12 +1024,12 @@
         const _NSTC = 'https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz7';
         const _NSER = 'https://fonts.gstatic.com/s/notoseriftc/v36/XLYzIZb5bJNDGYxLBibeHZ0BnHwmuanx8cUaGX';
         const FONT_FALLBACK = [
-            { family: DEF_FONT, files: { 400: PDF_FONT_URL } },   // default; single weight, full CJK
-            { family: 'Noto Sans TC', files: {
+            { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: PDF_FONT_URL } },   // default; single weight, full CJK
+            { family: 'Noto Sans TC', category: 'sans-serif', cjk: true, files: {
                 100: _NSTC + '6CzzC1Esg.ttf', 200: _NSTC + 'yCyzC1Esg.ttf', 300: _NSTC + '_6yzC1Esg.ttf',
                 400: _NSTC + '6CyzC1Esg.ttf', 500: _NSTC + '5KyzC1Esg.ttf', 600: _NSTC + '361zC1Esg.ttf',
                 700: _NSTC + '0e1zC1Esg.ttf', 800: _NSTC + 'yC1zC1Esg.ttf', 900: _NSTC + 'wm1zC1Esg.ttf' } },
-            { family: 'Noto Serif TC', files: {
+            { family: 'Noto Serif TC', category: 'serif', cjk: true, files: {
                 200: _NSER + '_aMNpEM2I.ttf', 300: _NSER + '8EMNpEM2I.ttf', 400: _NSER + '9aMNpEM2I.ttf',
                 500: _NSER + '9oMNpEM2I.ttf', 600: _NSER + '-EN9pEM2I.ttf', 700: _NSER + '-9N9pEM2I.ttf',
                 800: _NSER + '_aN9pEM2I.ttf', 900: _NSER + '_zN9pEM2I.ttf' } },
@@ -1047,13 +1051,13 @@
             return files[weight] || files[400] || files[Object.keys(files)[0]];
         }
 
-        // Pull the chinese-traditional families from the Fonts API and merge over the
-        // curated fallback (keeping the default font first). Silent no-op on failure.
+        // Pull the FULL Google Fonts library, capturing per-family weights, category and
+        // CJK coverage, then merge over the curated fallback. Silent no-op on failure.
         async function loadFontCatalog() {
             const key = fontApiKey();
             if (!key) return;
             try {
-                const url = 'https://www.googleapis.com/webfonts/v1/webfonts?subset=chinese-traditional&sort=popularity&key=' + encodeURIComponent(key);
+                const url = 'https://www.googleapis.com/webfonts/v1/webfonts?sort=alpha&key=' + encodeURIComponent(key);
                 const r = await fetch(url);
                 if (!r.ok) return;
                 const data = await r.json();
@@ -1065,13 +1069,15 @@
                         const w = variant === 'regular' ? 400 : (/^\d+$/.test(variant) ? Number(variant) : null);
                         if (w) files[w] = it.files[variant].replace(/^http:/, 'https:');
                     });
-                    if (Object.keys(files).length) byFam[it.family] = { family: it.family, files: files };
+                    if (Object.keys(files).length) byFam[it.family] = {
+                        family: it.family, files: files,
+                        category: it.category || 'other',
+                        cjk: (it.subsets || []).indexOf('chinese-traditional') >= 0,
+                    };
                 });
                 FONT_FALLBACK.forEach(b => { if (!byFam[b.family]) byFam[b.family] = b; });
-                const list = Object.keys(byFam).map(f => byFam[f]);
-                list.sort((a, b) => a.family === DEF_FONT ? -1 : b.family === DEF_FONT ? 1 : a.family.localeCompare(b.family));
-                FONT_CATALOG = list;
-                populateFontSelect();
+                FONT_CATALOG = Object.keys(byFam).map(f => byFam[f]);
+                populateFontSelect(currentSearch(), currentFamily());
             } catch (_) { /* keep fallback */ }
         }
 
@@ -1120,12 +1126,40 @@
             return map;
         }
 
-        function populateFontSelect() {
+        const CAT_ORDER = ['sans-serif', 'serif', 'display', 'handwriting', 'monospace', 'other'];
+        const CAT_LABEL = { 'sans-serif': 'Sans Serif', 'serif': 'Serif', 'display': 'Display', 'handwriting': 'Handwriting', 'monospace': 'Monospace', 'other': 'Other' };
+        const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        function currentSearch() { const el = document.getElementById('fontSearch'); return el ? el.value : ''; }
+        function currentFamily() { const c = activeCfg()[selectedElem]; return (c && c.font) || DEF_FONT; }
+
+        // Build the font <select>, grouped by category, CJK-capable families flagged and
+        // sorted first within each group, filtered by `filter`. `keepFamily` is always
+        // included and selected so the active element's font shows even when filtered out.
+        function populateFontSelect(filter, keepFamily) {
             const sel = document.getElementById('propFont');
             if (!sel) return;
-            const cur = sel.value;
-            sel.innerHTML = FONT_CATALOG.map(f => '<option value="' + f.family + '">' + f.family + '</option>').join('');
-            if (cur && FONT_CATALOG.some(f => f.family === cur)) sel.value = cur;
+            filter = (filter || '').trim().toLowerCase();
+            const cats = {};
+            FONT_CATALOG.forEach(e => {
+                if (filter && e.family.toLowerCase().indexOf(filter) < 0) return;
+                const c = e.category || 'other';
+                (cats[c] = cats[c] || []).push(e);
+            });
+            const opt = e => '<option value="' + esc(e.family) + '">' + esc(e.family) + (e.cjk ? '  ✓ 中文' : '') + '</option>';
+            let html = '';
+            CAT_ORDER.forEach(cat => {
+                const list = cats[cat];
+                if (!list || !list.length) return;
+                list.sort((a, b) => (b.cjk - a.cjk) || a.family.localeCompare(b.family));   // CJK first, then A–Z
+                html += '<optgroup label="' + CAT_LABEL[cat] + ' (' + list.length + ')">' + list.map(opt).join('') + '</optgroup>';
+            });
+            // Guarantee the selected family is present/selectable even if filtered out.
+            if (keepFamily && html.indexOf('value="' + esc(keepFamily) + '"') < 0) {
+                const e = FONT_CATALOG.find(f => f.family === keepFamily);
+                if (e) html = '<optgroup label="Selected">' + opt(e) + '</optgroup>' + html;
+            }
+            sel.innerHTML = html || '<option value="' + esc(DEF_FONT) + '">' + esc(DEF_FONT) + '</option>';
+            if (keepFamily) sel.value = keepFamily;
         }
         function populateWeightSelect(family, selected) {
             const sel = document.getElementById('propWeight');
@@ -1279,7 +1313,11 @@
             setv('propX', c.x);
             setv('propY', c.y);
             setv('propSize', c.size);
-            document.getElementById('propFont').value = c.font || DEF_FONT;
+            // Cheap path: just select the family. Only rebuild the (large) list if the
+            // family isn't currently an option (e.g. element switched, or filtered out).
+            const fontSel = document.getElementById('propFont');
+            fontSel.value = c.font || DEF_FONT;
+            if (fontSel.value !== (c.font || DEF_FONT)) populateFontSelect(currentSearch(), c.font || DEF_FONT);
             populateWeightSelect(c.font || DEF_FONT, c.weight || DEF_WEIGHT);
             const hasWrap = typeof c.wrapPct === 'number';
             document.getElementById('wrapRow').style.display = hasWrap ? '' : 'none';
@@ -1419,8 +1457,9 @@
         ['propX', 'propY', 'propSize', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
         document.getElementById('propFont').addEventListener('change', onFontChange);
         document.getElementById('propWeight').addEventListener('change', onWeightChange);
-        populateFontSelect();
-        loadFontCatalog();   // upgrade the curated list to the live Fonts API when a key is present
+        document.getElementById('fontSearch').addEventListener('input', (e) => populateFontSelect(e.target.value, currentFamily()));
+        populateFontSelect('', DEF_FONT);
+        loadFontCatalog();   // upgrade the curated fallback to the full live Fonts API when a key is present
         document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); renderContentInputs(); });
         document.getElementById('cardSearch').addEventListener('input', rebuildCardPicker);
         document.getElementById('designModeSelect').addEventListener('change', (e) => {
