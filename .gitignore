@@ -21,6 +21,8 @@ dist/
 # Local-only Google API credentials (injected from GitHub secrets at deploy)
 product-card-printer/google-config.local.js
 
-# Local-only scratch assets (sample images, screenshots) and any credentials
-# files dropped here — never commit (contains OAuth client_secret).
-product-card-printer/assets/
+# product-card-printer/assets/: ONLY fonts/ is tracked & deployed (self-hosted
+# webfonts the app loads at runtime). Everything else here is local-only — S3-source
+# background images, screenshots, and the OAuth client_secret file — never commit.
+product-card-printer/assets/*
+!product-card-printer/assets/fonts/

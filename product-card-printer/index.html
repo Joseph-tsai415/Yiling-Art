@@ -525,7 +525,7 @@
     <!-- ?v= cache-buster: BUMP THIS on any change to card-layout.js / pdf-worker.js so
          a redeployed index.html can't run against a stale cached copy. Keep all three
          (here, the Worker(), and pdf-worker.js's importScripts) on the SAME value. -->
-    <script src="card-layout.js?v=20260529a"></script>
+    <script src="card-layout.js?v=20260529b"></script>
     <script>
         // PDF building runs in pdf-worker.js (off the main thread). These are the
         // assets the worker fetches.
@@ -587,7 +587,7 @@
         const DEF_WEIGHT = CardLayout.DEFAULT_WEIGHT;  // 400
         const TEMPLATE_DEFAULT = {
             title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEF_FONT, weight: DEF_WEIGHT },
-            englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80, font: DEF_FONT, weight: DEF_WEIGHT },
+            englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80, font: 'Queensila', weight: DEF_WEIGHT },
             ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90, font: DEF_FONT, weight: DEF_WEIGHT },
             allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEF_FONT, weight: DEF_WEIGHT },
             price:        { x: 97.5, y: 60, size: 14, font: DEF_FONT, weight: DEF_WEIGHT },
@@ -821,7 +821,7 @@
 
         let pdfWorker = null;
         function getWorker() {
-            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js?v=20260529a');   // keep ?v= in sync with card-layout.js above
+            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js?v=20260529b');   // keep ?v= in sync with card-layout.js above
             return pdfWorker;
         }
 
@@ -1025,6 +1025,9 @@
         const _NSER = 'https://fonts.gstatic.com/s/notoseriftc/v36/XLYzIZb5bJNDGYxLBibeHZ0BnHwmuanx8cUaGX';
         const FONT_FALLBACK = [
             { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: PDF_FONT_URL } },   // default; single weight, full CJK
+            // Self-hosted custom font (not on Google Fonts) — bundled in the repo and
+            // deployed under assets/fonts/. Latin-only; the default for the English title.
+            { family: 'Queensila', category: 'handwriting', cjk: false, files: { 400: 'assets/fonts/queensila/Queensila-Regular.ttf' } },
             { family: 'Noto Sans TC', category: 'sans-serif', cjk: true, files: {
                 100: _NSTC + '6CzzC1Esg.ttf', 200: _NSTC + 'yCyzC1Esg.ttf', 300: _NSTC + '_6yzC1Esg.ttf',
                 400: _NSTC + '6CyzC1Esg.ttf', 500: _NSTC + '5KyzC1Esg.ttf', 600: _NSTC + '361zC1Esg.ttf',
