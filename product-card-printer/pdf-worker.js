@@ -9,7 +9,7 @@
  */
 /* global importScripts, self, CardLayout */
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-importScripts('card-layout.js?v=20260529b');   // shared config + layout algorithm (keep ?v= in sync with index.html)
+importScripts('card-layout.js?v=20260530a');   // shared config + layout algorithm (keep ?v= in sync with index.html)
 
 const CARD_W_MM = CardLayout.CARD_W_MM;
 const CARD_H_MM = CardLayout.CARD_H_MM;
@@ -28,24 +28,76 @@ const PAGES = {
 
 // Fonts cached across messages (keyed by CardLayout.fontKey) so re-renders don't
 // re-download. The main thread sends a { fontKey: ttfUrl } map of every face used
-// by the selected cards; each is embedded under its key as a 'normal' jsPDF font.
+// by the selected cards. Each font is SUBSET to just the glyphs actually used on the
+// cards before embedding (a full CJK TTF is ~12 MB / 10k+ glyphs; the cards use a few
+// hundred chars), which turns a ~6 s / ~23 MB build into a sub-second / <1 MB one.
 // The background is supplied as a ready data URL (fetched once on the main thread),
 // so the worker never touches S3 and there's no CORS to worry about here.
-let fontB64Map = {};
+let fontBytesMap = {};      // fontKey -> Uint8Array (full TTF, downloaded once)
+let subsetB64Cache = {};    // "fontKey|codepoint-signature" -> base64 subset (or full) TTF
 let embeddedKeys = new Set();
 let defaultFontKey = null;
 
-async function fetchAsBase64(url) {
+async function fetchAsBytes(url) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(url + ' → HTTP ' + resp.status);
-    const buf = await resp.arrayBuffer();
-    const bytes = new Uint8Array(buf);
+    return new Uint8Array(await resp.arrayBuffer());
+}
+
+function bytesToBase64(bytes) {
     let binary = '';
     const chunk = 0x8000;
     for (let i = 0; i < bytes.length; i += chunk) {
         binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
     }
     return btoa(binary);
+}
+
+// ---- Font subsetting via hb-subset (harfbuzz WASM) ----
+// Loaded lazily once. If it fails to load/run we fall back to embedding the full font
+// (slower, but correct), so subsetting can never break rendering — only speed it up.
+const HB_SUBSET_WASM = 'https://cdn.jsdelivr.net/npm/harfbuzzjs@0.4.6/hb-subset.wasm';
+let _hbPromise = null;
+function getHbSubset() {
+    if (!_hbPromise) {
+        _hbPromise = fetch(HB_SUBSET_WASM)
+            .then(r => { if (!r.ok) throw new Error('hb-subset.wasm HTTP ' + r.status); return r.arrayBuffer(); })
+            .then(buf => WebAssembly.instantiate(buf, {}))
+            .then(res => res.instance.exports)
+            .catch(err => { _hbPromise = null; throw err; });   // allow retry next render
+    }
+    return _hbPromise;
+}
+
+// Subset `fontBytes` to the given Unicode codepoints; returns a Uint8Array TTF.
+// Throws on any failure so the caller can fall back to the full font.
+function subsetFont(hb, fontBytes, codepoints) {
+    const heap = () => new Uint8Array(hb.memory.buffer);
+    const fontPtr = hb.malloc(fontBytes.length);
+    heap().set(fontBytes, fontPtr);                        // view taken AFTER malloc (memory may grow)
+    const blob = hb.hb_blob_create(fontPtr, fontBytes.length, 2 /* WRITABLE */, 0, 0);
+    const face = hb.hb_face_create(blob, 0);
+    hb.hb_blob_destroy(blob);
+    const input = hb.hb_subset_input_create_or_fail();
+    try {
+        if (!input) throw new Error('hb_subset_input_create_or_fail');
+        const unicodes = hb.hb_subset_input_unicode_set(input);
+        hb.hb_set_add(unicodes, 0x20);                     // always keep space
+        for (let i = 0; i < codepoints.length; i++) hb.hb_set_add(unicodes, codepoints[i]);
+        const subsetFace = hb.hb_subset_or_fail(face, input);
+        if (!subsetFace) throw new Error('hb_subset_or_fail');
+        const resultBlob = hb.hb_face_reference_blob(subsetFace);
+        const dataPtr = hb.hb_blob_get_data(resultBlob, 0);
+        const len = hb.hb_blob_get_length(resultBlob);
+        const out = heap().slice(dataPtr, dataPtr + len);  // copy out before freeing
+        hb.hb_blob_destroy(resultBlob);
+        hb.hb_face_destroy(subsetFace);
+        return out;
+    } finally {
+        hb.hb_subset_input_destroy(input);
+        hb.hb_face_destroy(face);
+        hb.free(fontPtr);
+    }
 }
 
 function unescapeNewlines(s) {
@@ -56,6 +108,18 @@ function cellFor(row, map, fieldId) {
     const idx = map[fieldId];
     if (idx === undefined || idx < 0 || idx >= row.length) return '';
     return unescapeNewlines(row[idx]);
+}
+
+// The display text per card element (mirrors the editor). Used by both drawCard and
+// the subsetting pass, so the glyphs we keep exactly match the glyphs we draw.
+function buildFields(row, map) {
+    return {
+        title: cellFor(row, map, 'title'),
+        englishTitle: cellFor(row, map, 'englishTitle'),
+        ingredients: ['cnIngredients', 'enIngredients'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
+        allergens: ['diet', 'allergens'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
+        priceLines: ['priceWhole', 'priceHalf'].map(s => cellFor(row, map, s)).filter(Boolean),
+    };
 }
 
 // ---- MaxRects bin packing (identical cards, rotation allowed) ----
@@ -155,13 +219,7 @@ function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
         return embeddedKeys.has(k) ? k : defaultFontKey;
     };
 
-    const fields = {
-        title: cellFor(row, map, 'title'),
-        englishTitle: cellFor(row, map, 'englishTitle'),
-        ingredients: ['cnIngredients', 'enIngredients'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
-        allergens: ['diet', 'allergens'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
-        priceLines: ['priceWhole', 'priceHalf'].map(s => cellFor(row, map, s)).filter(Boolean),
-    };
+    const fields = buildFields(row, map);
     // jsPDF text measurement — the engine-specific half of the shared algorithm.
     // Advance widths depend on the face, so set the element's font before measuring.
     const measure = (text, sizePt, wrapWidthMm, font, weight) => {
@@ -196,6 +254,29 @@ function placeCard(doc, page, x, y, rotated, row, map, bg, cfg) {
     doc.restoreGraphicsState();
 }
 
+// Which Unicode codepoints each embedded face actually needs, by walking every card's
+// text and the font assigned to each element. An element whose font wasn't supplied
+// falls back to the default face (matching drawCard), so its glyphs go to that key.
+function collectCodepoints(rows, map, config, cardConfigs, faces) {
+    const byKey = {};
+    const ensure = k => (byKey[k] || (byKey[k] = new Set()));
+    const effKey = (c) => {
+        const k = CardLayout.fontKey((c && c.font), (c && c.weight));
+        return faces[k] ? k : defaultFontKey;
+    };
+    const addText = (set, text) => { for (const ch of String(text || '')) set.add(ch.codePointAt(0)); };
+    rows.forEach((row, i) => {
+        const cfg = (cardConfigs && cardConfigs[i]) || config || CardLayout.DEFAULT_CONFIG;
+        const f = buildFields(row, map);
+        const elems = {
+            title: f.title, englishTitle: f.englishTitle, ingredients: f.ingredients,
+            allergens: f.allergens, price: f.priceLines.join('\n'),
+        };
+        Object.keys(elems).forEach(id => { if (cfg[id]) addText(ensure(effKey(cfg[id])), elems[id]); });
+    });
+    return byKey;
+}
+
 self.onmessage = async (e) => {
     const { rows, map, pageFormat, margin, gutter, fontUrl, fontFiles, defaultKey, bgDataUrl, bgCmykDataUrl, config, cardConfigs } = e.data;
     try {
@@ -204,9 +285,13 @@ self.onmessage = async (e) => {
         const faces = fontFiles || {};
         defaultFontKey = defaultKey || CardLayout.fontKey(CardLayout.DEFAULT_FONT, CardLayout.DEFAULT_WEIGHT);
         if (!faces[defaultFontKey] && fontUrl) faces[defaultFontKey] = fontUrl;
+        // Download each full font once (raw bytes, for subsetting).
         for (const key in faces) {
-            if (!fontB64Map[key]) fontB64Map[key] = await fetchAsBase64(faces[key]);
+            if (!fontBytesMap[key]) fontBytesMap[key] = await fetchAsBytes(faces[key]);
         }
+        const usedByKey = collectCodepoints(rows, map, config, cardConfigs, faces);
+        const hb = await getHbSubset().catch(() => null);   // null → fall back to full fonts
+
         const bg = { png: bgDataUrl, cmyk: bgCmykDataUrl || null };
 
         const layout = computeLayout(pageFormat, margin, gutter);
@@ -219,8 +304,22 @@ self.onmessage = async (e) => {
         });
         embeddedKeys = new Set();
         for (const key in faces) {
+            const codepoints = Array.from(usedByKey[key] || []).sort((a, b) => a - b);
+            // Cache the subset by face + exact glyph set, so layout-only re-renders
+            // (position/size/weight tweaks that don't change text) skip re-subsetting.
+            const cacheKey = key + '|' + (hb ? codepoints.join(',') : 'FULL');
+            let b64 = subsetB64Cache[cacheKey];
+            if (!b64) {
+                let bytes = fontBytesMap[key];
+                if (hb) {
+                    try { bytes = subsetFont(hb, fontBytesMap[key], codepoints); }
+                    catch (_) { bytes = fontBytesMap[key]; }   // subsetting failed → embed full font
+                }
+                b64 = bytesToBase64(bytes);
+                subsetB64Cache[cacheKey] = b64;
+            }
             const file = key + '.ttf';
-            doc.addFileToVFS(file, fontB64Map[key]);
+            doc.addFileToVFS(file, b64);
             doc.addFont(file, key, 'normal');
             embeddedKeys.add(key);
         }
