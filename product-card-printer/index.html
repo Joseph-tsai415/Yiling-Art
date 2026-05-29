@@ -1027,7 +1027,7 @@
             { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: PDF_FONT_URL } },   // default; single weight, full CJK
             // Self-hosted custom font (not on Google Fonts) — bundled in the repo and
             // deployed under assets/fonts/. Latin-only; the default for the English title.
-            { family: 'Queensila', category: 'handwriting', cjk: false, files: { 400: 'assets/fonts/queensila/Queensila-Regular.ttf' } },
+            { family: 'Queensila', category: 'handwriting', cjk: false, custom: true, files: { 400: 'assets/fonts/queensila/Queensila-Regular.ttf' } },
             { family: 'Noto Sans TC', category: 'sans-serif', cjk: true, files: {
                 100: _NSTC + '6CzzC1Esg.ttf', 200: _NSTC + 'yCyzC1Esg.ttf', 300: _NSTC + '_6yzC1Esg.ttf',
                 400: _NSTC + '6CyzC1Esg.ttf', 500: _NSTC + '5KyzC1Esg.ttf', 600: _NSTC + '361zC1Esg.ttf',
@@ -1142,14 +1142,19 @@
             const sel = document.getElementById('propFont');
             if (!sel) return;
             filter = (filter || '').trim().toLowerCase();
+            const match = e => !filter || e.family.toLowerCase().indexOf(filter) >= 0;
+            const opt = e => '<option value="' + esc(e.family) + '">' + esc(e.family) + (e.cjk ? '  ✓ 中文' : '') + '</option>';
+            let html = '';
+            // Pinned at top: bundled/custom fonts (self-hosted, not on Google) so any
+            // element can pick them in one click instead of hunting through the library.
+            const custom = FONT_CATALOG.filter(e => e.custom && match(e)).sort((a, b) => a.family.localeCompare(b.family));
+            if (custom.length) html += '<optgroup label="★ Bundled (this project)">' + custom.map(opt).join('') + '</optgroup>';
             const cats = {};
             FONT_CATALOG.forEach(e => {
-                if (filter && e.family.toLowerCase().indexOf(filter) < 0) return;
+                if (e.custom || !match(e)) return;     // custom fonts are pinned above
                 const c = e.category || 'other';
                 (cats[c] = cats[c] || []).push(e);
             });
-            const opt = e => '<option value="' + esc(e.family) + '">' + esc(e.family) + (e.cjk ? '  ✓ 中文' : '') + '</option>';
-            let html = '';
             CAT_ORDER.forEach(cat => {
                 const list = cats[cat];
                 if (!list || !list.length) return;
