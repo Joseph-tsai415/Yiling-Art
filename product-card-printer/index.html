@@ -625,13 +625,14 @@
         const genId = () => (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
         // ---- Config persistence — single source of truth is CardLayout.DEFAULT_CONFIG ----
-        // Template (the reusable baseline) persists in localStorage across sessions and is
-        // loaded on every reload. Per-card overrides persist in sessionStorage and are
-        // restored only when the SAME dataset reloads (matched by a headers+row-count
-        // signature). "Restore default" clears the saved template and reloads the latest
-        // CardLayout.DEFAULT_CONFIG from card-layout.js.
+        // BOTH the template (reusable baseline) AND the per-card overrides persist in
+        // localStorage, so every card's unique tweaks survive closing the browser and come
+        // back next time. Per-card configs are restored by position whenever the SAME sheet
+        // reloads — matched by HEADER signature only (not row count), so adding or removing
+        // a product keeps the other cards' settings. "Restore default" clears both and
+        // reloads the latest CardLayout.DEFAULT_CONFIG from card-layout.js.
         const LS_TEMPLATE = 'cardPrinter.template.v1';
-        const SS_CARDS = 'cardPrinter.cards.v1';
+        const LS_CARDS = 'cardPrinter.cards.v2';
         function defaultTemplate() { return clone(CardLayout.DEFAULT_CONFIG); }
         function loadTemplate() {
             try { const s = localStorage.getItem(LS_TEMPLATE); if (s) return JSON.parse(s); } catch (e) {}
@@ -640,13 +641,13 @@
         function saveTemplate() {
             try { localStorage.setItem(LS_TEMPLATE, JSON.stringify(templateConfig)); } catch (e) {}
         }
-        function datasetSig() { return JSON.stringify({ h: state.headers || [], n: (state.rows || []).length }); }
+        function datasetSig() { return JSON.stringify(state.headers || []); }   // headers only → row add/remove keeps tweaks
         function loadCardStore() {
-            try { const s = sessionStorage.getItem(SS_CARDS); if (s) return JSON.parse(s); } catch (e) {}
+            try { const s = localStorage.getItem(LS_CARDS); if (s) return JSON.parse(s); } catch (e) {}
             return null;
         }
         function saveCardStore() {
-            try { sessionStorage.setItem(SS_CARDS, JSON.stringify({ sig: datasetSig(), cards: (state.ids || []).map(id => cardConfig[id]) })); } catch (e) {}
+            try { localStorage.setItem(LS_CARDS, JSON.stringify({ sig: datasetSig(), cards: (state.ids || []).map(id => cardConfig[id]) })); } catch (e) {}
         }
 
         let templateConfig = loadTemplate();   // localStorage if saved, else CardLayout.DEFAULT_CONFIG
