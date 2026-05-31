@@ -6,6 +6,10 @@
     <title>Product Card Printer — 103×73 mm Cards on A3/A4</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- Designer-only: loads the DEFAULT font's glyphs in unicode-range chunks (only what's
+         on screen, ~KBs) — far lighter than FontFace-ing the full 12 MB TTF for every session.
+         The PDF embeds the self-hosted TTF (subset); same font v1.005, identical metrics.
+         This is the one deliberate exception to "all fonts load via FontFace from the catalog". -->
     <link href="https://fonts.googleapis.com/css2?family=Chocolate+Classical+Sans&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -667,7 +671,14 @@
                 rows: sel.map(i => state.rows[i]),
                 cfgs: sel.map(i => {
                     const cfg = cardConfig[state.ids[i]] || templateConfig;
-                    reflowConfig(cfg, editorFields(i));   // auto-stack each card before it's sent to the PDF worker
+                    // NB: this mutates the card's config (clamp overlaps). It's idempotent, so
+                    // calling it here — including from renderSignature() — is safe and the
+                    // signature stays stable across renders. The worker never reflows; it
+                    // trusts this main-thread (canvas-measured) y, which matches the PDF as
+                    // long as jsPDF wraps the title to the same line count as the canvas.
+                    // Skip the element under an active grace on the active card (don't clamp
+                    // it out from under the user mid-edit).
+                    reflowConfig(cfg, editorFields(i), state.ids[i] === activeId() ? flowHold : null);
                     return cfg;
                 }),
             };
@@ -1291,33 +1302,48 @@
             return out.length ? out : [''];
         }
 
-        // ===================== Auto-flow (vertical stacking) =====================
-        // A multi-line Chinese title pushes the English title and ingredients DOWN so they
-        // don't overlap. It WRITES the computed y back into THIS card's config, so the
-        // designer, the property panel, and the PDF all read the same config-driven value.
-        // The floor is the TEMPLATE's y (the "default"), so it's idempotent — a shrinking
-        // title returns them to default. title / allergens / price keep their configured y.
-        // Runs in the render pipeline, so it always re-applies (even after you move text).
+        // ===================== Auto-flow (overlap prevention) =====================
+        // Keeps the English title / ingredients from overlapping the (possibly multi-line)
+        // Chinese title by clamping each DOWN to a no-overlap floor only when it actually
+        // overlaps — moving an element DOWN is always kept (the floor is a minimum, not a
+        // target). It writes the result into THIS card's config, so designer, property
+        // panel and PDF read the same config-driven y.
+        //   minimal-interaction grace: an element you're actively moving (flowHold) is NOT
+        //   clamped, so you can drag it up freely; ~1s after you stop, the clamp + refresh
+        //   apply and it snaps to the correct position (see flowGrace / endDrag / onPropInput).
         const FLOW_GAP_MM = 1.5;
-        function reflowConfig(cfg, fields) {
+        let flowHold = null;        // id of a flow element whose clamp is paused during the grace window
+        let flowHoldTimer = null;
+        function reflowConfig(cfg, fields, holdId) {
             if (!cfg || cfg === templateConfig) return;   // never reflow the template anchor itself
-            const tpl = templateConfig || CardLayout.DEFAULT_CONFIG;
             const lh = c => (c && c.lineHeight) || DEF_LINE_HEIGHT;
             const blockH = (text, c, wrapFallback) => {
                 if (!text || !c) return 0;
                 const lines = editorMeasure(text, c.size, CardLayout.wrapMm(c, wrapFallback), c.font || DEF_FONT, c.weight || DEF_WEIGHT);
                 return lines.length * c.size * lh(c) * CardLayout.PT_TO_MM;
             };
-            const push = (anchorY, bottom) => bottom > anchorY ? Math.round((bottom + FLOW_GAP_MM) * 2) / 2 : anchorY;
-            let bottom = -Infinity;
+            // Push `id` to bottom+gap ONLY if the element above actually overlaps it
+            // (bottom past its top); otherwise keep its y (so down-moves & defaults stick).
+            const clampBelow = (id, bottom) => {
+                if (holdId === id || bottom === null || bottom <= cfg[id].y) return;
+                cfg[id].y = Math.round((bottom + FLOW_GAP_MM) * 2) / 2;
+            };
+            let bottom = null;
             if (cfg.title && fields.title) bottom = cfg.title.y + blockH(fields.title, cfg.title, 80);
-            if (cfg.englishTitle) {
-                cfg.englishTitle.y = push(((tpl.englishTitle) || cfg.englishTitle).y, bottom);
-                if (fields.englishTitle) bottom = cfg.englishTitle.y + blockH(fields.englishTitle, cfg.englishTitle, 80);
+            if (cfg.englishTitle && fields.englishTitle) {
+                clampBelow('englishTitle', bottom);
+                bottom = cfg.englishTitle.y + blockH(fields.englishTitle, cfg.englishTitle, 80);
             }
-            if (cfg.ingredients) {
-                cfg.ingredients.y = push(((tpl.ingredients) || cfg.ingredients).y, bottom);
+            if (cfg.ingredients && fields.ingredients) {
+                clampBelow('ingredients', bottom);
             }
+        }
+        // Pause the clamp on a just-moved flow element for 1s, then snap it to the floor
+        // (clamp), re-render, and refresh/persist. Lets you nudge up without it fighting you.
+        function flowGrace(id) {
+            flowHold = id;
+            clearTimeout(flowHoldTimer);
+            flowHoldTimer = setTimeout(() => { flowHold = null; renderEditor(); afterEdit(); }, 1000);
         }
 
         function renderEditor() {
@@ -1331,7 +1357,7 @@
 
             const cfg = activeCfg();
             ensureCfgFaces(cfg);   // lazy-load any non-default faces; re-renders on arrival
-            reflowConfig(cfg, editorFields(activeCardIndex));   // auto-stack y before laying out
+            reflowConfig(cfg, editorFields(activeCardIndex), flowHold);   // clamp overlaps (skips the element being moved)
             const items = CardLayout.layoutCard(editorFields(activeCardIndex), cfg, editorMeasure);
             const byId = {};
             items.forEach(it => { byId[it.id] = it; });
@@ -1389,12 +1415,19 @@
             syncPropInputs();
         }
         function endDrag() {
+            const movedId = drag ? drag.id : null;
             if (drag) drag.el.classList.remove('dragging');
             drag = null;
             window.removeEventListener('mousemove', onDrag);
             window.removeEventListener('mouseup', endDrag);
-            renderEditor();   // re-apply auto-flow (e.g. moving the title restacks the rest)
-            afterEdit();
+            if (isFlowElem(movedId)) {
+                flowHold = movedId;   // show where you dropped it...
+                renderEditor();
+                flowGrace(movedId);   // ...then snap to the no-overlap floor ~1s later
+            } else {
+                renderEditor();       // moving the title (etc.) restacks the rest immediately
+                afterEdit();
+            }
         }
 
         function selectElem(id) {
@@ -1404,6 +1437,8 @@
                 .forEach(el => el.classList.toggle('selected', el.dataset.id === id));
             syncPropInputs();
         }
+        // English title & ingredients participate in the auto-flow (overlap prevention).
+        function isFlowElem(id) { return id === 'englishTitle' || id === 'ingredients'; }
         function syncPropInputs() {
             const c = activeCfg()[selectedElem];
             const setv = (id, v) => { const el = document.getElementById(id); if (document.activeElement !== el) el.value = v; };
@@ -1457,8 +1492,15 @@
             if (typeof c.wrapPct === 'number') {
                 c.wrapPct = clamp(parseFloat(document.getElementById('propWrap').value) || 100, 10, 100);
             }
-            renderEditor();   // re-layout (wrap depends on size + wrap %)
-            afterEdit();
+            if (isFlowElem(selectedElem)) {
+                // Editing a flow element: show your value now, snap to the no-overlap floor ~1s later.
+                flowHold = selectedElem;
+                renderEditor();
+                flowGrace(selectedElem);
+            } else {
+                renderEditor();   // re-layout (wrap depends on size + wrap %)
+                afterEdit();
+            }
         }
 
         function cardLabel(rowIdx) {
