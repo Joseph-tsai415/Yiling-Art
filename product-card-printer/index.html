@@ -950,7 +950,8 @@
         let activeRenders = 0;
 
         function showSpinner(on) {
-            document.getElementById('spinner').hidden = !on;
+            document.getElementById('spinner').hidden = !on;        // overlay on the PDF preview
+            setCalib('render', on ? 'Rendering PDF…' : null);       // and the status chip on the designer
         }
 
         function reportPdfError(err) {
@@ -1205,9 +1206,9 @@
                 if (!c) return;
                 const k = CardLayout.fontKey(c.font || DEF_FONT, c.weight || DEF_WEIGHT);
                 if (_faceReady[k] || _faceLoading[k]) return;   // ready or already in flight
-                calib('font', true, 'Loading font…');
+                setCalib('font', 'Loading font…');
                 ensureFace(c.font || DEF_FONT, c.weight || DEF_WEIGHT).then(() => {
-                    if (Object.keys(_faceLoading).length === 0) calib('font', false);   // all faces in
+                    if (Object.keys(_faceLoading).length === 0) setCalib('font', null);   // all faces in
                     scheduleEditorRerender();
                 });
             });
@@ -1362,23 +1363,26 @@
                 clampBelow('ingredients', bottom);
             }
         }
-        // Status chip on the card designer so the user sees when the layout is auto-calibrating
-        // (settling a moved element, or loading fonts). Reason-counted so multiple causes coexist.
-        const _calibReasons = new Set();
-        function calib(reason, on, text) {
-            if (on) _calibReasons.add(reason); else _calibReasons.delete(reason);
+        // General status chip on the card designer. Any number of concurrent reasons, each
+        // with arbitrary text; the most recently-set one is shown, and the chip hides when
+        // none remain. Used for font loading, auto-calibration, PDF rendering — call
+        // setCalib('<reason>', '<text>') to show, setCalib('<reason>', null) to clear.
+        const _calibStatus = new Map();   // reason -> status text
+        function setCalib(reason, text) {
+            _calibStatus.delete(reason);
+            if (text) _calibStatus.set(reason, text);
             const badge = document.getElementById('calibBadge');
             if (!badge) return;
-            badge.hidden = _calibReasons.size === 0;
-            if (text && !badge.hidden) document.getElementById('calibText').textContent = text;
+            badge.hidden = _calibStatus.size === 0;
+            if (_calibStatus.size) document.getElementById('calibText').textContent = [..._calibStatus.values()].pop();
         }
         // Pause the clamp on a just-moved flow element for 1s, then snap it to the floor
         // (clamp), re-render, and refresh/persist. Lets you nudge up without it fighting you.
         function flowGrace(id) {
             flowHold = id;
-            calib('grace', true, 'Auto-adjusting layout…');
+            setCalib('grace', 'Auto-adjusting layout…');
             clearTimeout(flowHoldTimer);
-            flowHoldTimer = setTimeout(() => { flowHold = null; calib('grace', false); renderEditor(); afterEdit(); }, 1000);
+            flowHoldTimer = setTimeout(() => { flowHold = null; setCalib('grace', null); renderEditor(); afterEdit(); }, 1000);
         }
 
         function renderEditor() {
