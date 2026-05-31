@@ -1004,40 +1004,36 @@
         function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
         // ===================== Font catalog (lazy-loaded) =====================
-        // Each entry: { family, files: { 100..900: ttfUrl }, category, cjk }.
-        //   category — Google Fonts category (sans-serif / serif / display / handwriting
-        //              / monospace), used to group the picker.
-        //   cjk      — true if the family covers the chinese-traditional subset. The
-        //              cards contain Chinese, so non-CJK fonts drop glyphs in the PDF;
-        //              the picker flags CJK families and sorts them first per category.
-        // Live source: the Google Fonts Developer API (needs window.GOOGLE_API_KEY,
-        // injected at deploy) — the FULL library (~1900 families). When no key is present
-        // (local dev) we fall back to this curated list of static CJK TTFs.
-        // Standard CSS weight stops (100–900). Only weights a family actually ships as
-        // a real face are offered — each maps to its own TTF so screen == PDF (no faux
-        // bolding). The live Fonts API supplies the full set per family; the curated
-        // fallback below lists every static weight Google serves for these families.
+        // Each entry: { family, files: { 100..900: ttfUrl }, category, cjk, custom? }.
+        //   category — sans-serif / serif / display / handwriting / monospace (groups the picker)
+        //   cjk      — covers the chinese-traditional subset? Non-CJK fonts drop glyphs on
+        //              Chinese fields, so the picker flags CJK families and sorts them first.
+        //   custom   — self-hosted/bundled (pinned in the "★ Bundled" group).
+        // The catalog is the union of two sources, rebuilt by rebuildCatalog():
+        //   • apiFonts — the FULL Google Fonts library (~1900) from the Web Fonts API.
+        //   • BUNDLED  — the default (Chocolate, from CDN) PLUS the self-hosted fonts read
+        //                from assets/fonts/manifest.json. Drop a .ttf + add a manifest entry
+        //                and it appears here — no code change.
         const WEIGHT_LABEL = {
             100: 'Thin', 200: 'ExtraLight', 300: 'Light', 400: 'Regular', 500: 'Medium',
             600: 'SemiBold', 700: 'Bold', 800: 'ExtraBold', 900: 'Black',
         };
-        const _NSTC = 'https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz7';
-        const _NSER = 'https://fonts.gstatic.com/s/notoseriftc/v36/XLYzIZb5bJNDGYxLBibeHZ0BnHwmuanx8cUaGX';
-        const FONT_FALLBACK = [
-            { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: PDF_FONT_URL } },   // default; single weight, full CJK
-            // Self-hosted custom font (not on Google Fonts) — bundled in the repo and
-            // deployed under assets/fonts/. Latin-only; the default for the English title.
-            { family: 'Queensila', category: 'handwriting', cjk: false, custom: true, files: { 400: 'assets/fonts/queensila/Queensila-Regular.ttf' } },
-            { family: 'Noto Sans TC', category: 'sans-serif', cjk: true, files: {
-                100: _NSTC + '6CzzC1Esg.ttf', 200: _NSTC + 'yCyzC1Esg.ttf', 300: _NSTC + '_6yzC1Esg.ttf',
-                400: _NSTC + '6CyzC1Esg.ttf', 500: _NSTC + '5KyzC1Esg.ttf', 600: _NSTC + '361zC1Esg.ttf',
-                700: _NSTC + '0e1zC1Esg.ttf', 800: _NSTC + 'yC1zC1Esg.ttf', 900: _NSTC + 'wm1zC1Esg.ttf' } },
-            { family: 'Noto Serif TC', category: 'serif', cjk: true, files: {
-                200: _NSER + '_aMNpEM2I.ttf', 300: _NSER + '8EMNpEM2I.ttf', 400: _NSER + '9aMNpEM2I.ttf',
-                500: _NSER + '9oMNpEM2I.ttf', 600: _NSER + '-EN9pEM2I.ttf', 700: _NSER + '-9N9pEM2I.ttf',
-                800: _NSER + '_aN9pEM2I.ttf', 900: _NSER + '_zN9pEM2I.ttf' } },
+        const FONTS_DIR = 'assets/fonts/';
+        let apiFonts = [];   // from the Google Web Fonts API (empty until loaded)
+        let BUNDLED = [       // default + self-hosted; manifest fonts are appended at runtime
+            { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: PDF_FONT_URL } },
         ];
-        let FONT_CATALOG = FONT_FALLBACK.slice();
+        let FONT_CATALOG = BUNDLED.slice();
+
+        // Bundled fonts win over the API entry of the same name (so our self-hosted URLs
+        // are used), and bundled-but-not-on-Google fonts are always kept.
+        function rebuildCatalog() {
+            const byFam = {};
+            apiFonts.forEach(e => { byFam[e.family] = e; });
+            BUNDLED.forEach(b => { byFam[b.family] = b; });
+            FONT_CATALOG = Object.keys(byFam).map(f => byFam[f]);
+            populateFontSelect(currentSearch(), currentFamily());
+        }
 
         function fontApiKey() {
             const k = window.GOOGLE_API_KEY;
@@ -1054,8 +1050,27 @@
             return files[weight] || files[400] || files[Object.keys(files)[0]];
         }
 
+        // Read the self-hosted fonts listed in assets/fonts/manifest.json into the catalog.
+        // This is the "drop a font in the folder" mechanism. Silent no-op on failure.
+        async function loadBundledFonts() {
+            try {
+                const r = await fetch(FONTS_DIR + 'manifest.json');
+                if (!r.ok) return;
+                const data = await r.json();
+                (data.fonts || []).forEach(f => {
+                    if (!f.family || !f.weights) return;
+                    const files = {};
+                    Object.keys(f.weights).forEach(w => { files[Number(w)] = FONTS_DIR + f.weights[w]; });
+                    const entry = { family: f.family, category: f.category || 'other', cjk: !!f.cjk, custom: true, files: files };
+                    const i = BUNDLED.findIndex(b => b.family === f.family);
+                    if (i >= 0) BUNDLED[i] = entry; else BUNDLED.push(entry);
+                });
+                rebuildCatalog();
+            } catch (_) { /* keep what we have */ }
+        }
+
         // Pull the FULL Google Fonts library, capturing per-family weights, category and
-        // CJK coverage, then merge over the curated fallback. Silent no-op on failure.
+        // CJK coverage. Silent no-op on failure (catalog keeps the bundled fonts).
         async function loadFontCatalog() {
             const key = fontApiKey();
             if (!key) return;
@@ -1064,7 +1079,7 @@
                 const r = await fetch(url);
                 if (!r.ok) return;
                 const data = await r.json();
-                const byFam = {};
+                const list = [];
                 (data.items || []).forEach(it => {
                     const files = {};
                     Object.keys(it.files || {}).forEach(variant => {
@@ -1072,16 +1087,15 @@
                         const w = variant === 'regular' ? 400 : (/^\d+$/.test(variant) ? Number(variant) : null);
                         if (w) files[w] = it.files[variant].replace(/^http:/, 'https:');
                     });
-                    if (Object.keys(files).length) byFam[it.family] = {
+                    if (Object.keys(files).length) list.push({
                         family: it.family, files: files,
                         category: it.category || 'other',
                         cjk: (it.subsets || []).indexOf('chinese-traditional') >= 0,
-                    };
+                    });
                 });
-                FONT_FALLBACK.forEach(b => { if (!byFam[b.family]) byFam[b.family] = b; });
-                FONT_CATALOG = Object.keys(byFam).map(f => byFam[f]);
-                populateFontSelect(currentSearch(), currentFamily());
-            } catch (_) { /* keep fallback */ }
+                apiFonts = list;
+                rebuildCatalog();
+            } catch (_) { /* keep bundled */ }
         }
 
         // Lazy FontFace loading for the editor. The default font is already provided by
@@ -1467,7 +1481,8 @@
         document.getElementById('propWeight').addEventListener('change', onWeightChange);
         document.getElementById('fontSearch').addEventListener('input', (e) => populateFontSelect(e.target.value, currentFamily()));
         populateFontSelect('', DEF_FONT);
-        loadFontCatalog();   // upgrade the curated fallback to the full live Fonts API when a key is present
+        loadBundledFonts();  // self-hosted fonts from assets/fonts/manifest.json
+        loadFontCatalog();   // the full live Google Fonts library when an API key is present
         document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); renderContentInputs(); });
         document.getElementById('cardSearch').addEventListener('input', rebuildCardPicker);
         document.getElementById('designModeSelect').addEventListener('change', (e) => {
