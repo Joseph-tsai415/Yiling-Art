@@ -27,8 +27,8 @@
     var DEFAULT_WEIGHT = 400;
     var DEFAULT_CONFIG = {
         title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT },
-        englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 85, font: 'Queensila', weight: DEFAULT_WEIGHT },
-        ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 85, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT },
+        englishTitle: { x: 51.5, y: 30.5, size: 12, wrapPct: 85, font: 'Queenia', weight: DEFAULT_WEIGHT },
+        ingredients:  { x: 51.5, y: 40, size: 9,  wrapPct: 85, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT },
         allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT },
         price:        { x: 97.5, y: 60, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT },
     };

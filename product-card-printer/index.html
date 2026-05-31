@@ -529,10 +529,13 @@
         window.GOOGLE_API_KEY = '__GOOGLE_API_KEY__';
     </script>
     <script src="google-config.local.js"></script>
-    <!-- ?v= cache-buster: BUMP THIS on any change to card-layout.js / pdf-worker.js so
-         a redeployed index.html can't run against a stale cached copy. Keep all three
-         (here, the Worker(), and pdf-worker.js's importScripts) on the SAME value. -->
-    <script src="card-layout.js?v=20260530a"></script>
+    <!-- Auto cache-bust: card-layout.js and pdf-worker.js are re-fetched fresh every load
+         (they're tiny) via a per-load token, so a deploy is NEVER served stale and there
+         are no manual version bumps to forget. The token also flows to the worker (its
+         URL query) and to the worker's importScripts. Large assets (fonts, background)
+         keep their own stable URLs and stay cached. -->
+    <script>window.__BUST = Date.now();
+        document.write('<script src="card-layout.js?v=' + window.__BUST + '"><\/script>');</script>
     <script>
         // PDF building runs in pdf-worker.js (off the main thread). These are the
         // assets the worker fetches.
@@ -592,17 +595,35 @@
         // BOTH the editor and the worker so line breaks match. Price doesn't wrap.
         const DEF_FONT = CardLayout.DEFAULT_FONT;      // 'Chocolate Classical Sans'
         const DEF_WEIGHT = CardLayout.DEFAULT_WEIGHT;  // 400
-        const TEMPLATE_DEFAULT = {
-            title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEF_FONT, weight: DEF_WEIGHT },
-            englishTitle: { x: 51.5, y: 30, size: 12, wrapPct: 80, font: 'Queensila', weight: DEF_WEIGHT },
-            ingredients:  { x: 51.5, y: 44, size: 9,  wrapPct: 90, font: DEF_FONT, weight: DEF_WEIGHT },
-            allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEF_FONT, weight: DEF_WEIGHT },
-            price:        { x: 97.5, y: 60, size: 14, font: DEF_FONT, weight: DEF_WEIGHT },
-        };
         const clone = (o) => JSON.parse(JSON.stringify(o));
         const genId = () => (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-        let templateConfig = clone(TEMPLATE_DEFAULT);  // shared baseline
+        // ---- Config persistence — single source of truth is CardLayout.DEFAULT_CONFIG ----
+        // Template (the reusable baseline) persists in localStorage across sessions and is
+        // loaded on every reload. Per-card overrides persist in sessionStorage and are
+        // restored only when the SAME dataset reloads (matched by a headers+row-count
+        // signature). "Restore default" clears the saved template and reloads the latest
+        // CardLayout.DEFAULT_CONFIG from card-layout.js.
+        const LS_TEMPLATE = 'cardPrinter.template.v1';
+        const SS_CARDS = 'cardPrinter.cards.v1';
+        function defaultTemplate() { return clone(CardLayout.DEFAULT_CONFIG); }
+        function loadTemplate() {
+            try { const s = localStorage.getItem(LS_TEMPLATE); if (s) return JSON.parse(s); } catch (e) {}
+            return defaultTemplate();
+        }
+        function saveTemplate() {
+            try { localStorage.setItem(LS_TEMPLATE, JSON.stringify(templateConfig)); } catch (e) {}
+        }
+        function datasetSig() { return JSON.stringify({ h: state.headers || [], n: (state.rows || []).length }); }
+        function loadCardStore() {
+            try { const s = sessionStorage.getItem(SS_CARDS); if (s) return JSON.parse(s); } catch (e) {}
+            return null;
+        }
+        function saveCardStore() {
+            try { sessionStorage.setItem(SS_CARDS, JSON.stringify({ sig: datasetSig(), cards: (state.ids || []).map(id => cardConfig[id]) })); } catch (e) {}
+        }
+
+        let templateConfig = loadTemplate();   // localStorage if saved, else CardLayout.DEFAULT_CONFIG
         let cardConfig = {};                            // uuid -> per-card config
         let cardSelected = {};                          // uuid -> bool (print this card?)
         let designMode = 'percard';                     // 'percard' | 'template'
@@ -614,7 +635,14 @@
             state.ids = state.rows.map(genId);
             cardConfig = {};
             cardSelected = {};
-            state.ids.forEach(id => { cardConfig[id] = clone(templateConfig); cardSelected[id] = true; });
+            // Restore per-card overrides from sessionStorage only if it's the same dataset.
+            const store = loadCardStore();
+            const reuse = (store && store.sig === datasetSig()) ? (store.cards || []) : null;
+            state.ids.forEach((id, i) => {
+                cardConfig[id] = (reuse && reuse[i]) ? clone(reuse[i]) : clone(templateConfig);
+                cardSelected[id] = true;
+            });
+            saveCardStore();
         }
         // Content-only refresh: keep ids/configs/selection by index, add new at tail.
         function reconcileCardConfigs() {
@@ -624,6 +652,7 @@
                 if (!cardConfig[id]) cardConfig[id] = clone(templateConfig);
                 if (!(id in cardSelected)) cardSelected[id] = true;
             });
+            saveCardStore();
         }
         // Indices of cards selected for printing.
         function selectedIndices() {
@@ -828,7 +857,7 @@
 
         let pdfWorker = null;
         function getWorker() {
-            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js?v=20260530a');   // keep ?v= in sync with card-layout.js above
+            if (!pdfWorker) pdfWorker = new Worker('pdf-worker.js?v=' + window.__BUST);   // fresh worker each load; token flows to its importScripts
             return pdfWorker;
         }
 
@@ -1372,7 +1401,11 @@
             afterEdit();
         }
         function afterEdit() {
-            if (designMode === 'template') applyTemplateToAll();
+            // Template-scope edits mutate templateConfig → persist it (localStorage) and
+            // push to every card. Per-card edits mutate one card. Either way, persist the
+            // per-card set to sessionStorage.
+            if (designMode === 'template') { saveTemplate(); applyTemplateToAll(); }
+            saveCardStore();
             scheduleRefresh();
         }
         function onPropInput() {
@@ -1497,13 +1530,12 @@
             renderEditor();
         });
         document.getElementById('resetLayoutBtn').addEventListener('click', () => {
-            if (designMode === 'template') {
-                templateConfig = clone(TEMPLATE_DEFAULT);
-                applyTemplateToAll();
-            } else {
-                const id = activeId();
-                if (id) cardConfig[id] = clone(templateConfig);
-            }
+            // Restore default: reload the latest CardLayout.DEFAULT_CONFIG from card-layout.js,
+            // discard the saved template, and reset every card back to it.
+            templateConfig = defaultTemplate();
+            try { localStorage.removeItem(LS_TEMPLATE); } catch (e) {}
+            applyTemplateToAll();
+            saveCardStore();
             renderEditor();
             scheduleRefresh();
         });

@@ -9,7 +9,9 @@
  */
 /* global importScripts, self, CardLayout */
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-importScripts('card-layout.js?v=20260530a');   // shared config + layout algorithm (keep ?v= in sync with index.html)
+// Reuse this worker's own cache-bust token (?v=… from the Worker URL) so the shared
+// layout module is always the same fresh copy the page loaded — no manual versioning.
+importScripts('card-layout.js' + (self.location.search || ''));
 
 const CARD_W_MM = CardLayout.CARD_W_MM;
 const CARD_H_MM = CardLayout.CARD_H_MM;
