@@ -244,6 +244,25 @@
         .card-elem:hover { border-color: rgba(255,255,255,0.55); }
         .card-elem.selected { border-color: #4982cf; background: rgba(73,130,207,0.18); }
         .card-elem.dragging { cursor: grabbing; }
+        /* Auto-calibration feedback: the element being auto-positioned softly pulses/blurs
+           until it settles, and a status chip explains what's happening. */
+        .card-elem.calibrating { animation: calibPulse 0.85s ease-in-out infinite; }
+        @keyframes calibPulse { 0%, 100% { opacity: 1; filter: none; } 50% { opacity: 0.5; filter: blur(0.5px); } }
+        .calib-badge {
+            position: absolute; top: 8px; right: 8px; z-index: 6;
+            display: flex; align-items: center; gap: 6px;
+            background: rgba(18,18,29,0.82); color: #cfe0ff;
+            border: 1px solid rgba(127,155,212,0.45); border-radius: 999px;
+            padding: 4px 10px; font-size: 0.7rem; letter-spacing: 0.02em;
+            pointer-events: none; backdrop-filter: blur(2px);
+        }
+        .calib-badge[hidden] { display: none; }
+        .calib-spin {
+            width: 10px; height: 10px; border-radius: 50%; flex: none;
+            border: 2px solid rgba(127,155,212,0.3); border-top-color: #7f9bd4;
+            animation: calibSpin 0.7s linear infinite;
+        }
+        @keyframes calibSpin { to { transform: rotate(360deg); } }
         .elem-props {
             background: var(--input-bg);
             border: 1px solid var(--border-subtle);
@@ -436,6 +455,7 @@
                 <div class="card-editor-wrap">
                     <div id="cardEditor" class="card-editor">
                         <img id="editorBg" class="card-editor-bg" alt="" crossorigin="anonymous">
+                        <div id="calibBadge" class="calib-badge" hidden><span class="calib-spin"></span><span id="calibText">Auto-adjusting…</span></div>
                     </div>
                 </div>
                 <div class="elem-props">
@@ -1184,8 +1204,12 @@
                 const c = cfg[d.id];
                 if (!c) return;
                 const k = CardLayout.fontKey(c.font || DEF_FONT, c.weight || DEF_WEIGHT);
-                if (_faceReady[k]) return;
-                ensureFace(c.font || DEF_FONT, c.weight || DEF_WEIGHT).then(scheduleEditorRerender);
+                if (_faceReady[k] || _faceLoading[k]) return;   // ready or already in flight
+                calib('font', true, 'Loading font…');
+                ensureFace(c.font || DEF_FONT, c.weight || DEF_WEIGHT).then(() => {
+                    if (Object.keys(_faceLoading).length === 0) calib('font', false);   // all faces in
+                    scheduleEditorRerender();
+                });
             });
         }
         // { fontKey: ttfUrl } for every face used across the given configs (+ default),
@@ -1338,12 +1362,23 @@
                 clampBelow('ingredients', bottom);
             }
         }
+        // Status chip on the card designer so the user sees when the layout is auto-calibrating
+        // (settling a moved element, or loading fonts). Reason-counted so multiple causes coexist.
+        const _calibReasons = new Set();
+        function calib(reason, on, text) {
+            if (on) _calibReasons.add(reason); else _calibReasons.delete(reason);
+            const badge = document.getElementById('calibBadge');
+            if (!badge) return;
+            badge.hidden = _calibReasons.size === 0;
+            if (text && !badge.hidden) document.getElementById('calibText').textContent = text;
+        }
         // Pause the clamp on a just-moved flow element for 1s, then snap it to the floor
         // (clamp), re-render, and refresh/persist. Lets you nudge up without it fighting you.
         function flowGrace(id) {
             flowHold = id;
+            calib('grace', true, 'Auto-adjusting layout…');
             clearTimeout(flowHoldTimer);
-            flowHoldTimer = setTimeout(() => { flowHold = null; renderEditor(); afterEdit(); }, 1000);
+            flowHoldTimer = setTimeout(() => { flowHold = null; calib('grace', false); renderEditor(); afterEdit(); }, 1000);
         }
 
         function renderEditor() {
@@ -1368,7 +1403,7 @@
                 if (!c) return;
                 const it = byId[def.id];
                 const el = document.createElement('div');
-                el.className = 'card-elem' + (def.id === selectedElem ? ' selected' : '');
+                el.className = 'card-elem' + (def.id === selectedElem ? ' selected' : '') + (def.id === flowHold ? ' calibrating' : '');
                 el.dataset.id = def.id;
                 el.style.position = 'absolute';
                 el.style.whiteSpace = 'pre';           // lines already wrapped by the algorithm
