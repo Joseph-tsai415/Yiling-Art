@@ -36,7 +36,7 @@
         englishTitle: { x: 51.5, y: 30.5, size: 12, wrapPct: 85, font: 'Queenia', weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0.25 },
         ingredients:  { x: 51.5, y: 40, size: 9,  wrapPct: 85, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
         allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.25, stroke: 0 },
-        price:        { x: 97.5, y: 60, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0.25 },
+        price:        { x: 97.5, y: 60, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
     };
 
     function wrapMm(c, fallback) {
