@@ -667,7 +667,11 @@
             const sel = selectedIndices();
             return {
                 rows: sel.map(i => state.rows[i]),
-                cfgs: sel.map(i => cardConfig[state.ids[i]] || templateConfig),
+                cfgs: sel.map(i => {
+                    const cfg = cardConfig[state.ids[i]] || templateConfig;
+                    reflowConfig(cfg, editorFields(i));   // auto-stack each card before it's sent to the PDF worker
+                    return cfg;
+                }),
             };
         }
         function activeId() { return state.ids ? state.ids[activeCardIndex] : null; }
@@ -1285,6 +1289,35 @@
             return out.length ? out : [''];
         }
 
+        // ===================== Auto-flow (vertical stacking) =====================
+        // A multi-line Chinese title pushes the English title and ingredients DOWN so they
+        // don't overlap. It WRITES the computed y back into THIS card's config, so the
+        // designer, the property panel, and the PDF all read the same config-driven value.
+        // The floor is the TEMPLATE's y (the "default"), so it's idempotent — a shrinking
+        // title returns them to default. title / allergens / price keep their configured y.
+        // Runs in the render pipeline, so it always re-applies (even after you move text).
+        const FLOW_GAP_MM = 1.5;
+        function reflowConfig(cfg, fields) {
+            if (!cfg || cfg === templateConfig) return;   // never reflow the template anchor itself
+            const tpl = templateConfig || CardLayout.DEFAULT_CONFIG;
+            const lh = c => (c && c.lineHeight) || DEF_LINE_HEIGHT;
+            const blockH = (text, c, wrapFallback) => {
+                if (!text || !c) return 0;
+                const lines = editorMeasure(text, c.size, CardLayout.wrapMm(c, wrapFallback), c.font || DEF_FONT, c.weight || DEF_WEIGHT);
+                return lines.length * c.size * lh(c) * CardLayout.PT_TO_MM;
+            };
+            const push = (anchorY, bottom) => bottom > anchorY ? Math.round((bottom + FLOW_GAP_MM) * 2) / 2 : anchorY;
+            let bottom = -Infinity;
+            if (cfg.title && fields.title) bottom = cfg.title.y + blockH(fields.title, cfg.title, 80);
+            if (cfg.englishTitle) {
+                cfg.englishTitle.y = push(((tpl.englishTitle) || cfg.englishTitle).y, bottom);
+                if (fields.englishTitle) bottom = cfg.englishTitle.y + blockH(fields.englishTitle, cfg.englishTitle, 80);
+            }
+            if (cfg.ingredients) {
+                cfg.ingredients.y = push(((tpl.ingredients) || cfg.ingredients).y, bottom);
+            }
+        }
+
         function renderEditor() {
             const editor = document.getElementById('cardEditor');
             editor.style.width = (CARD_W_MM * EDITOR_PPMM) + 'px';
@@ -1296,6 +1329,7 @@
 
             const cfg = activeCfg();
             ensureCfgFaces(cfg);   // lazy-load any non-default faces; re-renders on arrival
+            reflowConfig(cfg, editorFields(activeCardIndex));   // auto-stack y before laying out
             const items = CardLayout.layoutCard(editorFields(activeCardIndex), cfg, editorMeasure);
             const byId = {};
             items.forEach(it => { byId[it.id] = it; });
@@ -1357,6 +1391,7 @@
             drag = null;
             window.removeEventListener('mousemove', onDrag);
             window.removeEventListener('mouseup', endDrag);
+            renderEditor();   // re-apply auto-flow (e.g. moving the title restacks the rest)
             afterEdit();
         }
 
