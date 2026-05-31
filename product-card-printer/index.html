@@ -543,8 +543,6 @@
         const BG_URL = 'https://db-doc-tw1.s3.ap-east-2.amazonaws.com/background.png';
         // Optional: a CMYK-encoded JPEG here yields a fully-CMYK PDF (background too).
         const BG_CMYK_URL = 'https://db-doc-tw1.s3.ap-east-2.amazonaws.com/background.cmyk.jpg';
-        // Full unsubsetted Chocolate Classical Sans TTF (incl. CJK) from the google/fonts repo.
-        const PDF_FONT_URL = 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/chocolateclassicalsans/ChocolateClassicalSans-Regular.ttf';
 
         // Each field: optional `match` predicate (runs first, against the lowercased+
         // trimmed header) for tricky cases, then `aliases` (exact pass, then includes).
@@ -894,7 +892,7 @@
                     pageFormat: document.getElementById('pageFormat').value,
                     margin: parseFloat(document.getElementById('margin').value) || 0,
                     gutter: parseFloat(document.getElementById('gutter').value) || 0,
-                    fontUrl: PDF_FONT_URL,
+                    fontUrl: faceUrl(DEF_FONT, DEF_WEIGHT),   // default face URL, resolved via the catalog (defensive fallback)
                     fontFiles: collectFontFiles(inp.cfgs),
                     defaultKey: CardLayout.fontKey(DEF_FONT, DEF_WEIGHT),
                     bgDataUrl: bgDataUrl,
@@ -1062,8 +1060,12 @@
         };
         const FONTS_DIR = 'assets/fonts/';
         let apiFonts = [];   // from the Google Web Fonts API (empty until loaded)
-        let BUNDLED = [       // default + self-hosted; manifest fonts are appended at runtime
-            { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: PDF_FONT_URL } },
+        // Bootstrap so the DEFAULT font exists in the catalog before the async manifest
+        // loads (an empty catalog would crash an early render). manifest.json lists the
+        // same self-hosted file; loadBundledFonts() reconciles it. No special CDN URL —
+        // every font (incl. the default) resolves through faceUrl()/the catalog.
+        let BUNDLED = [
+            { family: DEF_FONT, category: 'sans-serif', cjk: true, files: { 400: FONTS_DIR + 'chocolate-classical-sans/ChocolateClassicalSans-Regular.ttf' } },
         ];
         let FONT_CATALOG = BUNDLED.slice();
 

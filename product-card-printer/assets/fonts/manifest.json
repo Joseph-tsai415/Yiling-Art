@@ -2,6 +2,12 @@
   "_comment": "Self-hosted fonts bundled with the app. The card printer reads THIS file to populate the picker's '★ Bundled' group. To add a font: drop a TrueType .ttf under assets/fonts/<dir>/ and add an entry below. jsPDF embeds TrueType (glyf) only — convert .otf/CFF to .ttf first (otf2ttf / fontTools). 'weights' maps CSS weight -> path relative to assets/fonts/. 'cjk': true only if it covers Traditional Chinese (else it drops glyphs on Chinese fields).",
   "fonts": [
     {
+      "family": "Chocolate Classical Sans",
+      "category": "sans-serif",
+      "cjk": true,
+      "weights": { "400": "chocolate-classical-sans/ChocolateClassicalSans-Regular.ttf" }
+    },
+    {
       "family": "Queensila",
       "category": "handwriting",
       "cjk": false,
