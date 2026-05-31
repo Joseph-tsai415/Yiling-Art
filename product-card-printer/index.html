@@ -255,8 +255,15 @@
         .elem-props select option, #cardPicker option {
             background-color: #1a1a2e; color: #fff;
         }
+        /* Category headers in the font picker — match the dark tune (native default is white). */
+        .elem-props select optgroup {
+            background-color: #12121d; color: #7f9bd4; font-weight: 700; font-style: normal;
+        }
         :root.light-mode .elem-props select option, :root.light-mode #cardPicker option {
             background-color: #ffffff; color: #1a1a2e;
+        }
+        :root.light-mode .elem-props select optgroup {
+            background-color: #eef1f6; color: #2563eb; font-weight: 700; font-style: normal;
         }
         .content-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
         .content-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: var(--text-muted); }
