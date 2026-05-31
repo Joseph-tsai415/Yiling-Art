@@ -234,7 +234,15 @@ function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
         doc.setFont(faceKey(it.font, it.weight), 'normal');
         doc.setFontSize(it.size);
         doc.setLineHeightFactor(it.lineHeight);
-        doc.text(it.lines, cardX + it.x, cardY + it.y, { align: it.align, baseline: 'top' });
+        const opts = { align: it.align, baseline: 'top' };
+        if (it.stroke > 0) {
+            // Outline the glyphs in the text colour (pt → mm) to thicken them. jsPDF resets
+            // the render mode to fill after a fillThenStroke call, so plain items are unaffected.
+            doc.setLineWidth(it.stroke * CardLayout.PT_TO_MM);
+            doc.setDrawColor.apply(doc, CARD_TEXT_CMYK);
+            opts.renderingMode = 'fillThenStroke';
+        }
+        doc.text(it.lines, cardX + it.x, cardY + it.y, opts);
     });
 }
 

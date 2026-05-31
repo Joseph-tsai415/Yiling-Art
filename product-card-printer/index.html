@@ -480,6 +480,7 @@
                     <div class="prop-row"><label for="propY">Y (mm)</label><input type="number" id="propY" step="0.5"></div>
                     <div class="prop-row"><label for="propSize">Size (pt)</label><input type="number" id="propSize" step="0.5" min="3"></div>
                     <div class="prop-row"><label for="propLineHeight">Line height</label><input type="number" id="propLineHeight" step="0.05" min="0.8" max="2.5"></div>
+                    <div class="prop-row"><label for="propStroke">Stroke (pt)</label><input type="number" id="propStroke" step="0.05" min="0" max="3"></div>
                     <div class="prop-row"><label for="fontSearch">Find font</label><input type="text" id="fontSearch" placeholder="type to filter…" autocomplete="off"></div>
                     <div class="prop-row"><label for="propFont">Font</label><select id="propFont"></select></div>
                     <div class="prop-row"><label for="propWeight">Weight</label><select id="propWeight"></select></div>
@@ -619,6 +620,7 @@
         const DEF_FONT = CardLayout.DEFAULT_FONT;      // 'Chocolate Classical Sans'
         const DEF_WEIGHT = CardLayout.DEFAULT_WEIGHT;  // 400
         const DEF_LINE_HEIGHT = CardLayout.DEFAULT_LINE_HEIGHT;  // 1.1
+        const DEF_STROKE = CardLayout.DEFAULT_STROKE;            // 0.25pt outline
         const clone = (o) => JSON.parse(JSON.stringify(o));
         const genId = () => (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
@@ -1415,6 +1417,10 @@
                 el.style.top = (c.y * ppmm) + 'px';
                 el.style.fontFamily = '"' + (c.font || DEF_FONT) + '", serif';
                 el.style.fontWeight = String(c.weight || DEF_WEIGHT);
+                // Stroke: outline the glyphs in the text colour to thicken them (pt → px).
+                const strokePt = it ? it.stroke : (typeof c.stroke === 'number' ? c.stroke : DEF_STROKE);
+                const strokePx = (strokePt || 0) * CardLayout.PT_TO_MM * ppmm;
+                el.style.webkitTextStroke = strokePx > 0 ? (strokePx.toFixed(2) + 'px #fbf6ed') : '0';
                 if (it) {
                     el.textContent = it.lines.join('\n');
                     el.style.fontSize = (it.size * ppmm * CardLayout.PT_TO_MM) + 'px';
@@ -1485,6 +1491,7 @@
             setv('propY', c.y);
             setv('propSize', c.size);
             setv('propLineHeight', c.lineHeight || DEF_LINE_HEIGHT);
+            setv('propStroke', typeof c.stroke === 'number' ? c.stroke : DEF_STROKE);
             // Cheap path: just select the family. Only rebuild the (large) list if the
             // family isn't currently an option (e.g. element switched, or filtered out).
             const fontSel = document.getElementById('propFont');
@@ -1528,6 +1535,7 @@
             c.y = parseFloat(document.getElementById('propY').value) || 0;
             c.size = Math.max(3, parseFloat(document.getElementById('propSize').value) || 3);
             c.lineHeight = clamp(parseFloat(document.getElementById('propLineHeight').value) || DEF_LINE_HEIGHT, 0.8, 2.5);
+            c.stroke = clamp(parseFloat(document.getElementById('propStroke').value) || 0, 0, 3);
             if (typeof c.wrapPct === 'number') {
                 c.wrapPct = clamp(parseFloat(document.getElementById('propWrap').value) || 100, 10, 100);
             }
@@ -1638,7 +1646,7 @@
         document.getElementById('selectNoneBtn').addEventListener('click', () => setAllSelected(false));
 
         document.getElementById('elemSelect').addEventListener('change', (e) => selectElem(e.target.value));
-        ['propX', 'propY', 'propSize', 'propLineHeight', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
+        ['propX', 'propY', 'propSize', 'propLineHeight', 'propStroke', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
         document.getElementById('propFont').addEventListener('change', onFontChange);
         document.getElementById('propWeight').addEventListener('change', onWeightChange);
         document.getElementById('fontSearch').addEventListener('input', (e) => populateFontSelect(e.target.value, currentFamily()));

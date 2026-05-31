@@ -24,15 +24,19 @@
     // numeric CSS weight (400 regular, 700 bold) — both editor and worker resolve the
     // matching TTF so screen and PDF use the identical face + advance widths.
     // lineHeight = line spacing multiplier (1.1 default; smaller packs lines tighter).
+    // stroke = outline width in pt drawn around glyphs in the text colour (thickens the
+    // letters; works on any font, e.g. to make single-weight Chocolate look heavier).
+    // Cosmetic only — does NOT affect wrapping/layout.
     var DEFAULT_FONT = 'Chocolate Classical Sans';
     var DEFAULT_WEIGHT = 400;
     var DEFAULT_LINE_HEIGHT = 1.1;
+    var DEFAULT_STROKE = 0.25;
     var DEFAULT_CONFIG = {
-        title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1 },
-        englishTitle: { x: 51.5, y: 30.5, size: 12, wrapPct: 85, font: 'Queenia', weight: DEFAULT_WEIGHT, lineHeight: 1.1 },
-        ingredients:  { x: 51.5, y: 40, size: 9,  wrapPct: 85, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1 },
-        allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.25 },
-        price:        { x: 97.5, y: 60, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1 },
+        title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
+        englishTitle: { x: 51.5, y: 30.5, size: 12, wrapPct: 85, font: 'Queenia', weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0.25 },
+        ingredients:  { x: 51.5, y: 40, size: 9,  wrapPct: 85, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
+        allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.25, stroke: 0 },
+        price:        { x: 97.5, y: 60, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0.25 },
     };
 
     function wrapMm(c, fallback) {
@@ -64,6 +68,7 @@
     function fontOf(c) { return (c && c.font) || DEFAULT_FONT; }
     function weightOf(c) { return (c && c.weight) || DEFAULT_WEIGHT; }
     function lineHeightOf(c) { return (c && c.lineHeight) || DEFAULT_LINE_HEIGHT; }
+    function strokeOf(c) { return (c && typeof c.stroke === 'number') ? c.stroke : DEFAULT_STROKE; }  // 0 is valid
 
     function layoutCard(fields, cfg, measure) {
         cfg = cfg || DEFAULT_CONFIG;
@@ -72,28 +77,28 @@
         if (fields.title && cfg.title) {
             var ct = cfg.title;
             var ft = fitText(measure, fields.title, { wrapWidthMm: wrapMm(ct, 80), maxSize: ct.size, minSize: Math.max(6, ct.size * 0.6), lineHeight: lineHeightOf(ct), font: fontOf(ct), weight: weightOf(ct) });
-            items.push({ id: 'title', align: 'center', x: ct.x, y: ct.y, size: ft.size, lineHeight: ft.lineHeight, lines: ft.lines, font: fontOf(ct), weight: weightOf(ct) });
+            items.push({ id: 'title', align: 'center', x: ct.x, y: ct.y, size: ft.size, lineHeight: ft.lineHeight, lines: ft.lines, font: fontOf(ct), weight: weightOf(ct), stroke: strokeOf(ct) });
         }
         if (fields.englishTitle && cfg.englishTitle) {
             var ce = cfg.englishTitle;
             var fe = fitText(measure, fields.englishTitle, { wrapWidthMm: wrapMm(ce, 80), maxSize: ce.size, minSize: Math.max(5, ce.size * 0.6), lineHeight: lineHeightOf(ce), font: fontOf(ce), weight: weightOf(ce) });
-            items.push({ id: 'englishTitle', align: 'center', x: ce.x, y: ce.y, size: fe.size, lineHeight: fe.lineHeight, lines: fe.lines, font: fontOf(ce), weight: weightOf(ce) });
+            items.push({ id: 'englishTitle', align: 'center', x: ce.x, y: ce.y, size: fe.size, lineHeight: fe.lineHeight, lines: fe.lines, font: fontOf(ce), weight: weightOf(ce), stroke: strokeOf(ce) });
         }
         if (fields.ingredients && cfg.ingredients) {
             var ci = cfg.ingredients;
             var priceY = cfg.price ? cfg.price.y : CARD_H_MM;
             var budget = Math.max(3, priceY - 2 - ci.y);
             var fi = fitText(measure, fields.ingredients, { wrapWidthMm: wrapMm(ci, 90), maxHeightMm: budget, maxSize: ci.size, minSize: 4.5, lineHeight: lineHeightOf(ci), font: fontOf(ci), weight: weightOf(ci) });
-            items.push({ id: 'ingredients', align: 'center', x: ci.x, y: ci.y, size: fi.size, lineHeight: fi.lineHeight, lines: fi.lines, font: fontOf(ci), weight: weightOf(ci) });
+            items.push({ id: 'ingredients', align: 'center', x: ci.x, y: ci.y, size: fi.size, lineHeight: fi.lineHeight, lines: fi.lines, font: fontOf(ci), weight: weightOf(ci), stroke: strokeOf(ci) });
         }
         if (fields.allergens && cfg.allergens) {
             var ca = cfg.allergens;
             var fa = fitText(measure, fields.allergens, { wrapWidthMm: wrapMm(ca, 68), maxHeightMm: Math.max(3, CARD_H_MM - ca.y - 1), maxSize: ca.size, minSize: 5, lineHeight: lineHeightOf(ca), font: fontOf(ca), weight: weightOf(ca) });
-            items.push({ id: 'allergens', align: 'left', x: ca.x, y: ca.y, size: fa.size, lineHeight: fa.lineHeight, lines: fa.lines, font: fontOf(ca), weight: weightOf(ca) });
+            items.push({ id: 'allergens', align: 'left', x: ca.x, y: ca.y, size: fa.size, lineHeight: fa.lineHeight, lines: fa.lines, font: fontOf(ca), weight: weightOf(ca), stroke: strokeOf(ca) });
         }
         if (fields.priceLines && fields.priceLines.length && cfg.price) {
             var cp = cfg.price;
-            items.push({ id: 'price', align: 'right', x: cp.x, y: cp.y, size: cp.size, lineHeight: lineHeightOf(cp), lines: fields.priceLines, font: fontOf(cp), weight: weightOf(cp) });
+            items.push({ id: 'price', align: 'right', x: cp.x, y: cp.y, size: cp.size, lineHeight: lineHeightOf(cp), lines: fields.priceLines, font: fontOf(cp), weight: weightOf(cp), stroke: strokeOf(cp) });
         }
         return items;
     }
@@ -113,6 +118,7 @@
         DEFAULT_FONT: DEFAULT_FONT,
         DEFAULT_WEIGHT: DEFAULT_WEIGHT,
         DEFAULT_LINE_HEIGHT: DEFAULT_LINE_HEIGHT,
+        DEFAULT_STROKE: DEFAULT_STROKE,
         wrapMm: wrapMm,
         fitText: fitText,
         layoutCard: layoutCard,
