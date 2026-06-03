@@ -1656,6 +1656,45 @@
         loadFontCatalog();   // the full live Google Fonts library when an API key is present
         document.getElementById('cardPicker').addEventListener('change', (e) => { activeCardIndex = +e.target.value; renderEditor(); renderContentInputs(); });
         document.getElementById('cardSearch').addEventListener('input', rebuildCardPicker);
+
+        // Step to the prev/next card among the currently visible (search-filtered) picker options.
+        function navigateCard(delta) {
+            const picker = document.getElementById('cardPicker');
+            const opts = Array.prototype.slice.call(picker.options);
+            if (!opts.length) return;
+            let cur = opts.findIndex(o => +o.value === activeCardIndex);
+            if (cur < 0) cur = 0;
+            const next = Math.max(0, Math.min(opts.length - 1, cur + delta));
+            if (next === cur) return;
+            activeCardIndex = +opts[next].value;
+            picker.value = activeCardIndex;
+            renderEditor();
+            renderContentInputs();
+        }
+        // Arrow-key card navigation, scoped to the card designer (not a page-wide shortcut):
+        // it only fires while the mouse is over the designer panel or focus is inside it.
+        // Works regardless of OS — on macOS a focused <select> opens its dropdown on arrow
+        // keys instead of changing value inline, so we drive navigation ourselves.
+        let designerHover = false;
+        const designerPanel = document.getElementById('designerPanel');
+        designerPanel.addEventListener('pointerenter', () => { designerHover = true; });
+        designerPanel.addEventListener('pointerleave', () => { designerHover = false; });
+        document.addEventListener('keydown', (e) => {
+            if (designerPanel.hidden) return;
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1
+                      : (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 0;
+            if (!dir) return;
+            const ae = document.activeElement;
+            // Only when the designer has the user's attention: pointer over it, or focus inside it.
+            if (!designerHover && !designerPanel.contains(ae)) return;
+            const tag = ae && ae.tagName;
+            // Leave typing and other dropdowns alone; only the card picker is hijacked.
+            if (ae && (ae.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA')) return;
+            if (tag === 'SELECT' && ae.id !== 'cardPicker') return;
+            e.preventDefault();
+            navigateCard(dir);
+        });
         document.getElementById('designModeSelect').addEventListener('change', (e) => {
             designMode = e.target.value;
             renderEditor();
