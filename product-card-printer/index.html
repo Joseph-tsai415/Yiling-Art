@@ -458,7 +458,8 @@
                             <option value="englishTitle">Title (English)</option>
                             <option value="ingredients">Ingredients</option>
                             <option value="allergens">Diet + Allergens</option>
-                            <option value="price">Price</option>
+                            <option value="price">Price (whole)</option>
+                            <option value="priceHalf">Price (half/slice)</option>
                         </select>
                     </div>
                     <div class="prop-row"><label for="propX">X (mm)</label><input type="number" id="propX" step="0.5"></div>
@@ -470,6 +471,7 @@
                     <div class="prop-row"><label for="propFont">Font</label><select id="propFont"></select></div>
                     <div class="prop-row"><label for="propWeight">Weight</label><select id="propWeight"></select></div>
                     <div class="prop-row" id="wrapRow"><label for="propWrap">Wrap (% width)</label><input type="number" id="propWrap" step="1" min="10" max="100"></div>
+                    <div class="prop-row" id="legendRow"><label for="propLegend" title="Text in (…) or （…） renders at this % of the element size">(…) size (%)</label><input type="number" id="propLegend" step="5" min="20" max="100"></div>
                     <p style="font-size: 0.72rem; color: var(--text-muted); margin: 2px 0 0;">
                         Fonts cover Traditional Chinese. Each distinct font on a sheet is embedded in the PDF (several MB each) — keep the variety small to keep PDFs fast.
                     </p>
@@ -743,7 +745,9 @@
 
         const _tplStore = loadTemplateStore();
         let templateDirty = _tplStore ? !!_tplStore.dirty : false;   // local template not yet in the sheet
-        let templateConfig = _tplStore ? _tplStore.config : defaultTemplate();
+        // Merge over the code default so stores saved before a new element existed
+        // (e.g. priceHalf) come back complete (pre-split right-anchored price dropped).
+        let templateConfig = _tplStore ? mergeConfig(defaultTemplate(), dropStalePrice(_tplStore.config)) : defaultTemplate();
         let sheetTemplate = null;                       // template config as last seen IN the sheet
         let sheetCardMeta = [];                         // per kept row: parsed metaData (or null)
         let cardConfig = {};                            // uuid -> per-card config (working copy)
@@ -753,10 +757,18 @@
         let designMode = 'percard';                     // 'percard' | 'template'
         let activeCardIndex = 0;
 
+        // A config saved before the price split (no priceHalf) carries a price block
+        // whose x was a RIGHT-edge anchor; prices are left-aligned now, so that
+        // position is stale — drop it and let the template/default price apply.
+        // Post-migration configs have priceHalf, so this never strips fresh edits.
+        function dropStalePrice(cfg) {
+            if (cfg && cfg.price && !cfg.priceHalf) { cfg = clone(cfg); delete cfg.price; }
+            return cfg;
+        }
         // What a card's config would be if it had NO local tweaks: sheet metaData
         // merged over the template, or a plain copy of the template.
         function baseConfigFor(i) {
-            const meta = cardMetaConfig(sheetCardMeta[i]);
+            const meta = dropStalePrice(cardMetaConfig(sheetCardMeta[i]));
             return meta ? mergeConfig(templateConfig, meta) : clone(templateConfig);
         }
         // A dirty card whose sheet-derived base now matches the local config has been
@@ -774,10 +786,20 @@
         // THIS session is unsaved/in flight (it must not be clobbered mid-edit; it
         // goes clean when the sheet echoes back exactly what we have).
         let sessionTemplateEdited = false;
+        // True while the sheet's t0 row needs a corrective rewrite: element(s) missing
+        // (config saved before they existed, e.g. priceHalf) or a wrong type marker.
+        // Consumed by materializeSheetConfigs at sign-in ("missing fields → defaults").
+        let templateRowNeedsRewrite = false;
+        const CONFIG_ELEM_KEYS = Object.keys(CardLayout.DEFAULT_CONFIG);
+        function configMissingElems(cfg) { return !cfg || CONFIG_ELEM_KEYS.some(k => !cfg[k]); }
         function adoptSheetTemplate(polled) {
             if (!polled) return;
-            sheetTemplate = polled;
-            if (sessionTemplateEdited && JSON.stringify(polled) !== JSON.stringify(templateConfig)) return;
+            // Complete configs saved before a new element existed (e.g. priceHalf) so
+            // everything downstream can assume the full element set.
+            if (configMissingElems(polled)) templateRowNeedsRewrite = true;
+            polled = dropStalePrice(polled);   // pre-split price was right-anchored — superseded
+            sheetTemplate = mergeConfig(defaultTemplate(), polled);
+            if (sessionTemplateEdited && JSON.stringify(sheetTemplate) !== JSON.stringify(templateConfig)) return;
             sessionTemplateEdited = false;
             if (templateDirty) { templateDirty = false; saveTemplate(); }
             templateConfig = clone(sheetTemplate);
@@ -799,7 +821,9 @@
                 if (sheetCardMeta[i]) {
                     cardConfig[id] = baseConfigFor(i);
                 } else if (overlay[i]) {
-                    cardConfig[id] = clone(overlay[i]);
+                    // Local tweak from before a new element existed → complete it
+                    // (and drop a pre-split right-anchored price block).
+                    cardConfig[id] = mergeConfig(templateConfig, dropStalePrice(overlay[i]));
                     cardDirty[id] = true;
                 } else {
                     cardConfig[id] = clone(templateConfig);
@@ -987,7 +1011,12 @@
                     // CONTENT (label cells may hold text like "default template") —
                     // never a card.
                     if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
-                    else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) { /* template row without parseable config — skip */ }
+                    else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) {
+                        // t0 row carrying a card-typed (e.g. hand-edited) config: adopt it
+                        // as the template anyway; the wrong marker gets rewritten at sign-in.
+                        const cfg = metas[idx] && metas[idx].config;
+                        if (cfg) { polledTemplate = cfg; templateRowNeedsRewrite = true; }
+                    }
                     else if (String(r[ti] || '').trim()) keep.push(idx);
                 });
                 if (keep.length) {
@@ -1249,8 +1278,13 @@
             { id: 'englishTitle', align: 'center' },
             { id: 'ingredients',  align: 'center' },
             { id: 'allergens',    align: 'left' },
-            { id: 'price',        align: 'right' },
+            { id: 'price',        align: 'left' },
+            { id: 'priceHalf',    align: 'left' },
         ];
+        // The two price elements move as a group in the designer (they were a single
+        // element before the whole/half split) — moving either carries the other,
+        // preserving their relative offset. Size/font/etc. stay independent.
+        const PRICE_GROUP = { price: 'priceHalf', priceHalf: 'price' };
         let selectedElem = 'title';
         let drag = null;
 
@@ -1463,18 +1497,19 @@
                 case 'englishTitle': return get('englishTitle');
                 case 'ingredients': return [get('cnIngredients'), get('enIngredients')].filter(Boolean).join('\n');
                 case 'allergens': return [get('diet'), get('allergens')].filter(Boolean).join('\n');
-                case 'price': return [get('priceWhole'), get('priceHalf')].filter(Boolean).join('\n');
+                case 'price': return get('priceWhole');
+                case 'priceHalf': return get('priceHalf');
             }
             return '';
         }
         function editorFields(rowIdx) {
-            const price = elemText(rowIdx, 'price');
             return {
                 title: elemText(rowIdx, 'title'),
                 englishTitle: elemText(rowIdx, 'englishTitle'),
                 ingredients: elemText(rowIdx, 'ingredients'),
                 allergens: elemText(rowIdx, 'allergens'),
-                priceLines: price ? price.split('\n') : [],
+                price: elemText(rowIdx, 'price'),
+                priceHalf: elemText(rowIdx, 'priceHalf'),
             };
         }
 
@@ -1601,7 +1636,29 @@
                 const strokePx = (strokePt || 0) * CardLayout.PT_TO_MM * ppmm;
                 el.style.webkitTextStroke = strokePx > 0 ? (strokePx.toFixed(2) + 'px #fbf6ed') : '0';
                 if (it) {
-                    el.textContent = it.lines.join('\n');
+                    const hasLegend = typeof it.legendPct === 'number' && it.legendPct < 100 &&
+                        it.lines.some(l => CardLayout.legendSegments(l).some(s => s.legend));
+                    if (hasLegend) {
+                        // Mixed-size line: "(全)"/"（半）" legends in a smaller span —
+                        // the browser baseline-aligns inline text natively.
+                        el.textContent = '';
+                        const legendPx = (it.size * (it.legendPct / 100) * ppmm * CardLayout.PT_TO_MM) + 'px';
+                        it.lines.forEach((line, li) => {
+                            if (li) el.appendChild(document.createTextNode('\n'));
+                            CardLayout.legendSegments(line).forEach(seg => {
+                                if (seg.legend) {
+                                    const sp = document.createElement('span');
+                                    sp.textContent = seg.text;
+                                    sp.style.fontSize = legendPx;
+                                    el.appendChild(sp);
+                                } else {
+                                    el.appendChild(document.createTextNode(seg.text));
+                                }
+                            });
+                        });
+                    } else {
+                        el.textContent = it.lines.join('\n');
+                    }
                     el.style.fontSize = (it.size * ppmm * CardLayout.PT_TO_MM) + 'px';
                     el.style.lineHeight = it.lineHeight;
                 } else {
@@ -1625,6 +1682,17 @@
             selectElem(id);
             const c = activeCfg()[id];
             drag = { id: id, el: e.currentTarget, startMx: e.clientX, startMy: e.clientY, startX: c.x, startY: c.y };
+            // Price group: the two price elements were one before the split — dragging
+            // either one carries the other along, keeping their relative offset.
+            // Hold Shift/Alt to move just the grabbed one (adjusts the gap).
+            const followId = (e.shiftKey || e.altKey) ? null : PRICE_GROUP[id];
+            const fc = followId ? activeCfg()[followId] : null;
+            if (fc) {
+                drag.follow = {
+                    id: followId, startX: fc.x, startY: fc.y,
+                    el: document.querySelector('.card-elem[data-id="' + followId + '"]'),
+                };
+            }
             e.currentTarget.classList.add('dragging');
             window.addEventListener('mousemove', onDrag);
             window.addEventListener('mouseup', endDrag);
@@ -1636,6 +1704,17 @@
             c.y = Math.round(clamp(drag.startY + (e.clientY - drag.startMy) / EDITOR_PPMM, 0, CARD_H_MM) * 2) / 2;
             drag.el.style.left = (c.x * EDITOR_PPMM) + 'px';   // position-only; no re-wrap needed
             drag.el.style.top = (c.y * EDITOR_PPMM) + 'px';
+            if (drag.follow) {
+                const f = activeCfg()[drag.follow.id];
+                if (f) {
+                    f.x = clamp(drag.follow.startX + (c.x - drag.startX), 0, CARD_W_MM);
+                    f.y = clamp(drag.follow.startY + (c.y - drag.startY), 0, CARD_H_MM);
+                    if (drag.follow.el) {
+                        drag.follow.el.style.left = (f.x * EDITOR_PPMM) + 'px';
+                        drag.follow.el.style.top = (f.y * EDITOR_PPMM) + 'px';
+                    }
+                }
+            }
             syncPropInputs();
         }
         function endDrag() {
@@ -1665,6 +1744,7 @@
         function isFlowElem(id) { return id === 'englishTitle' || id === 'ingredients'; }
         function syncPropInputs() {
             const c = activeCfg()[selectedElem];
+            if (!c) return;   // element missing from a legacy config — completion fills it on next load
             const setv = (id, v) => { const el = document.getElementById(id); if (document.activeElement !== el) el.value = v; };
             setv('propX', c.x);
             setv('propY', c.y);
@@ -1680,11 +1760,15 @@
             const hasWrap = typeof c.wrapPct === 'number';
             document.getElementById('wrapRow').style.display = hasWrap ? '' : 'none';
             if (hasWrap) setv('propWrap', c.wrapPct);
+            const hasLegend = typeof c.legendPct === 'number';
+            document.getElementById('legendRow').style.display = hasLegend ? '' : 'none';
+            if (hasLegend) setv('propLegend', c.legendPct);
         }
         // Font / weight changes: clamp the weight to what the family offers, load the
         // face, then re-layout (advance widths change, so wrap can shift).
         function onFontChange() {
             const c = activeCfg()[selectedElem];
+            if (!c) return;
             c.font = document.getElementById('propFont').value;
             const ws = weightsFor(c.font);
             if (ws.indexOf(c.weight) < 0) c.weight = ws[0];
@@ -1695,6 +1779,7 @@
         }
         function onWeightChange() {
             const c = activeCfg()[selectedElem];
+            if (!c) return;
             c.weight = parseInt(document.getElementById('propWeight').value, 10) || DEF_WEIGHT;
             ensureFace(c.font || DEF_FONT, c.weight).then(renderEditor);
             renderEditor();
@@ -1722,13 +1807,27 @@
         }
         function onPropInput() {
             const c = activeCfg()[selectedElem];
+            if (!c) return;
+            const oldX = c.x, oldY = c.y;
             c.x = parseFloat(document.getElementById('propX').value) || 0;
             c.y = parseFloat(document.getElementById('propY').value) || 0;
+            // Price group: typing a new position for either price element carries the
+            // other along by the same delta (mirrors the drag behaviour).
+            if (PRICE_GROUP[selectedElem] && (c.x !== oldX || c.y !== oldY)) {
+                const f = activeCfg()[PRICE_GROUP[selectedElem]];
+                if (f) {
+                    f.x = clamp(f.x + (c.x - oldX), 0, CARD_W_MM);
+                    f.y = clamp(f.y + (c.y - oldY), 0, CARD_H_MM);
+                }
+            }
             c.size = Math.max(3, parseFloat(document.getElementById('propSize').value) || 3);
             c.lineHeight = clamp(parseFloat(document.getElementById('propLineHeight').value) || DEF_LINE_HEIGHT, 0.8, 2.5);
             c.stroke = clamp(parseFloat(document.getElementById('propStroke').value) || 0, 0, 3);
             if (typeof c.wrapPct === 'number') {
                 c.wrapPct = clamp(parseFloat(document.getElementById('propWrap').value) || 100, 10, 100);
+            }
+            if (typeof c.legendPct === 'number') {
+                c.legendPct = clamp(parseFloat(document.getElementById('propLegend').value) || CardLayout.DEFAULT_LEGEND_PCT, 20, 100);
             }
             if (isFlowElem(selectedElem)) {
                 // Editing a flow element: show your value now, snap to the no-overlap floor ~1s later.
@@ -1862,7 +1961,7 @@
         document.getElementById('selectNoneBtn').addEventListener('click', () => setAllSelected(false));
 
         document.getElementById('elemSelect').addEventListener('change', (e) => selectElem(e.target.value));
-        ['propX', 'propY', 'propSize', 'propLineHeight', 'propStroke', 'propWrap'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
+        ['propX', 'propY', 'propSize', 'propLineHeight', 'propStroke', 'propWrap', 'propLegend'].forEach(id => document.getElementById(id).addEventListener('input', onPropInput));
         document.getElementById('propFont').addEventListener('change', onFontChange);
         document.getElementById('propWeight').addEventListener('change', onWeightChange);
         document.getElementById('fontSearch').addEventListener('input', (e) => populateFontSelect(e.target.value, currentFamily()));
@@ -2031,7 +2130,11 @@
                     keptRows = []; keptMetas = [];
                     all.forEach((r, idx) => {
                         if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
-                        else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) { /* template row — skip */ }
+                        else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) {
+                            // t0 with a card-typed config — adopt as template (see initial load).
+                            const cfg = metas[idx] && metas[idx].config;
+                            if (cfg) { polledTemplate = cfg; templateRowNeedsRewrite = true; }
+                        }
                         else if (String(r[ti] || '').trim()) { keptRows.push(r); keptMetas.push(metas[idx]); }
                     });
                 }
@@ -2416,19 +2519,33 @@
         // current config queued (this browser's local tweak if it had one, otherwise
         // the template/default) — so after the first sign-in the whole column is
         // populated and every visitor loads identical cards from the same source.
-        // Cells that already hold a config are never touched here.
+        // MIGRATION: cells whose stored config is missing newer elements (e.g.
+        // priceHalf) are rewritten complete — the missing fields filled from the
+        // template/default chain. Same for a t0 row that is missing elements or
+        // carries the wrong type marker. Complete cells are never touched.
         async function materializeSheetConfigs() {
             if (!canWriteSheet() || state.metaCol < 0) return;
             let n = 0;
             (state.ids || []).forEach((id, i) => {
-                if (!sheetCardMeta[i]) { const a1 = metaA1(i); if (a1) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); n++; } }
+                const a1 = metaA1(i);
+                if (!a1) return;
+                if (!sheetCardMeta[i]) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); n++; }
+                else if (configMissingElems(cardMetaConfig(sheetCardMeta[i]))) {
+                    // baseConfigFor = the sheet's own config completed over the template
+                    // (NOT this browser's local tweaks — those queue on their own edits).
+                    sync.enqueue(a1, cardMetaJson(baseConfigFor(i)), true); n++;
+                }
             });
-            if (!state.templateRowNum) {
+            // Write t0 when: the row is missing entirely, its cell is empty (no
+            // template seen in the sheet), or it needs a corrective rewrite
+            // (missing elements / wrong type marker).
+            if (!state.templateRowNum || !sheetTemplate || templateRowNeedsRewrite) {
                 await resolveTemplateRow();
                 sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+                templateRowNeedsRewrite = false;
                 n++;
             }
-            if (n) setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty metaData cells…');
+            if (n) setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty/outdated metaData cells…');
         }
         document.getElementById('googlePickBtn').addEventListener('click', googleSignInAndPick);
         document.getElementById('googleTab').addEventListener('change', (e) => {

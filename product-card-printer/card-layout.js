@@ -31,13 +31,34 @@
     var DEFAULT_WEIGHT = 400;
     var DEFAULT_LINE_HEIGHT = 1.1;
     var DEFAULT_STROKE = 0.25;
+    // price = whole price; priceHalf = half/slice price — independent elements since
+    // v priceHalf split (each has its own position/size/font). priceHalf's default
+    // sits one 12pt line below price, matching the old combined two-line stack.
+    // legendPct: a parenthesised legend inside the price text — "(全)" or "（半）",
+    // ASCII or fullwidth parens — auto-renders at this % of the element's size.
+    var DEFAULT_LEGEND_PCT = 60;
     var DEFAULT_CONFIG = {
         title:        { x: 51.5, y: 23, size: 17, wrapPct: 80, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
         englishTitle: { x: 51.5, y: 30.5, size: 12, wrapPct: 85, font: 'Queenia', weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0.25 },
-        ingredients:  { x: 51.5, y: 40, size: 9,  wrapPct: 85, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
-        allergens:    { x: 5.5,  y: 60, size: 9,  wrapPct: 68, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.25, stroke: 0 },
-        price:        { x: 97.5, y: 60, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
+        ingredients:  { x: 51.5, y: 38, size: 9,  wrapPct: 79, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0 },
+        allergens:    { x: 5.5,  y: 57.5, size: 9,  wrapPct: 68, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.25, stroke: 0 },
+        price:        { x: 83, y: 57.5, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0, legendPct: DEFAULT_LEGEND_PCT },
+        priceHalf:    { x: 83, y: 62.5, size: 12, font: DEFAULT_FONT, weight: DEFAULT_WEIGHT, lineHeight: 1.1,  stroke: 0, legendPct: DEFAULT_LEGEND_PCT },
     };
+
+    // Split a price line into main/legend segments. A legend is any parenthesised
+    // run — ASCII "(全)" or fullwidth "（半）" — drawn at legendPct% of the element
+    // size by both the editor and the PDF worker.
+    var LEGEND_SPLIT_RE = /([(（][^)）]*[)）])/;
+    var LEGEND_MATCH_RE = /^[(（][^)）]*[)）]$/;
+    function legendSegments(line) {
+        var out = [];
+        String(line).split(LEGEND_SPLIT_RE).forEach(function (part) {
+            if (!part) return;
+            out.push({ text: part, legend: LEGEND_MATCH_RE.test(part) });
+        });
+        return out.length ? out : [{ text: String(line), legend: false }];
+    }
 
     function wrapMm(c, fallback) {
         return CARD_W_MM * ((c && c.wrapPct ? c.wrapPct : fallback) / 100);
@@ -61,14 +82,15 @@
         return { size: chosen, lines: lines, heightMm: lines.length * chosen * lineHeight * PT_TO_MM, lineHeight: lineHeight };
     }
 
-    // fields: { title, englishTitle, ingredients, allergens (strings, may contain \n),
-    //           priceLines (array of strings) }
+    // fields: { title, englishTitle, ingredients, allergens, price, priceHalf
+    //           (strings, may contain \n) }
     // Resolve an element's font/weight, falling back to the defaults so older
     // configs (no font field) and partial configs still render.
     function fontOf(c) { return (c && c.font) || DEFAULT_FONT; }
     function weightOf(c) { return (c && c.weight) || DEFAULT_WEIGHT; }
     function lineHeightOf(c) { return (c && c.lineHeight) || DEFAULT_LINE_HEIGHT; }
     function strokeOf(c) { return (c && typeof c.stroke === 'number') ? c.stroke : DEFAULT_STROKE; }  // 0 is valid
+    function legendPctOf(c) { return (c && typeof c.legendPct === 'number') ? c.legendPct : DEFAULT_LEGEND_PCT; }
 
     function layoutCard(fields, cfg, measure) {
         cfg = cfg || DEFAULT_CONFIG;
@@ -96,9 +118,21 @@
             var fa = fitText(measure, fields.allergens, { wrapWidthMm: wrapMm(ca, 68), maxHeightMm: Math.max(3, CARD_H_MM - ca.y - 1), maxSize: ca.size, minSize: 5, lineHeight: lineHeightOf(ca), font: fontOf(ca), weight: weightOf(ca) });
             items.push({ id: 'allergens', align: 'left', x: ca.x, y: ca.y, size: fa.size, lineHeight: fa.lineHeight, lines: fa.lines, font: fontOf(ca), weight: weightOf(ca), stroke: strokeOf(ca) });
         }
-        if (fields.priceLines && fields.priceLines.length && cfg.price) {
-            var cp = cfg.price;
-            items.push({ id: 'price', align: 'right', x: cp.x, y: cp.y, size: cp.size, lineHeight: lineHeightOf(cp), lines: fields.priceLines, font: fontOf(cp), weight: weightOf(cp), stroke: strokeOf(cp) });
+        // Whole and half price are independent elements. Legacy fallbacks: a config
+        // without priceHalf stacks both under price (the old combined behaviour);
+        // old callers passing fields.priceLines still render under price.
+        var priceText = fields.price || (fields.priceLines && fields.priceLines.length ? fields.priceLines.join('\n') : '');
+        if (cfg.price) {
+            var priceLines = priceText ? String(priceText).split('\n') : [];
+            if (fields.priceHalf && !cfg.priceHalf) priceLines = priceLines.concat(String(fields.priceHalf).split('\n'));
+            if (priceLines.length) {
+                var cp = cfg.price;
+                items.push({ id: 'price', align: 'left', x: cp.x, y: cp.y, size: cp.size, lineHeight: lineHeightOf(cp), lines: priceLines, font: fontOf(cp), weight: weightOf(cp), stroke: strokeOf(cp), legendPct: legendPctOf(cp) });
+            }
+        }
+        if (fields.priceHalf && cfg.priceHalf) {
+            var ch = cfg.priceHalf;
+            items.push({ id: 'priceHalf', align: 'left', x: ch.x, y: ch.y, size: ch.size, lineHeight: lineHeightOf(ch), lines: String(fields.priceHalf).split('\n'), font: fontOf(ch), weight: weightOf(ch), stroke: strokeOf(ch), legendPct: legendPctOf(ch) });
         }
         return items;
     }
@@ -119,9 +153,11 @@
         DEFAULT_WEIGHT: DEFAULT_WEIGHT,
         DEFAULT_LINE_HEIGHT: DEFAULT_LINE_HEIGHT,
         DEFAULT_STROKE: DEFAULT_STROKE,
+        DEFAULT_LEGEND_PCT: DEFAULT_LEGEND_PCT,
         wrapMm: wrapMm,
         fitText: fitText,
         layoutCard: layoutCard,
+        legendSegments: legendSegments,
         fontKey: fontKey,
     };
 })(typeof self !== 'undefined' ? self : this);

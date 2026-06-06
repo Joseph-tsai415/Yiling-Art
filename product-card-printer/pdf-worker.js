@@ -120,7 +120,8 @@ function buildFields(row, map) {
         englishTitle: cellFor(row, map, 'englishTitle'),
         ingredients: ['cnIngredients', 'enIngredients'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
         allergens: ['diet', 'allergens'].map(s => cellFor(row, map, s)).filter(Boolean).join('\n'),
-        priceLines: ['priceWhole', 'priceHalf'].map(s => cellFor(row, map, s)).filter(Boolean),
+        price: cellFor(row, map, 'priceWhole'),
+        priceHalf: cellFor(row, map, 'priceHalf'),
     };
 }
 
@@ -242,7 +243,33 @@ function drawCard(doc, cardX, cardY, row, map, bg, cfg) {
             doc.setDrawColor.apply(doc, CARD_TEXT_CMYK);
             opts.renderingMode = 'fillThenStroke';
         }
-        doc.text(it.lines, cardX + it.x, cardY + it.y, opts);
+        // Legend-aware elements (prices): a parenthesised "(全)"/"（半）" run renders
+        // at legendPct% of the element size. Composed segment-by-segment — from the
+        // left edge for left-aligned items, from the right edge for right-aligned —
+        // with legend tops nudged down so baselines visually align.
+        const hasLegend = typeof it.legendPct === 'number' && it.legendPct < 100 &&
+            it.lines.some(l => CardLayout.legendSegments(l).some(s => s.legend));
+        if (hasLegend && it.align !== 'center') {
+            const legendSize = it.size * (it.legendPct / 100);
+            it.lines.forEach((line, li) => {
+                const yTop = cardY + it.y + li * it.size * it.lineHeight * CardLayout.PT_TO_MM;
+                const segs = CardLayout.legendSegments(line);
+                if (it.align === 'right') segs.reverse();   // walk right→left from the right edge
+                let cursor = cardX + it.x;
+                segs.forEach(seg => {
+                    const size = seg.legend ? legendSize : it.size;
+                    doc.setFontSize(size);
+                    const w = doc.getTextWidth(seg.text);
+                    if (it.align === 'right') cursor -= w;
+                    const yOff = seg.legend ? (it.size - size) * 0.8 * CardLayout.PT_TO_MM : 0;
+                    doc.text(seg.text, cursor, yTop + yOff, { align: 'left', baseline: 'top', renderingMode: opts.renderingMode });
+                    if (it.align !== 'right') cursor += w;
+                });
+            });
+            doc.setFontSize(it.size);   // restore for the next item
+        } else {
+            doc.text(it.lines, cardX + it.x, cardY + it.y, opts);
+        }
     });
 }
 
@@ -280,9 +307,12 @@ function collectCodepoints(rows, map, config, cardConfigs, faces) {
         const f = buildFields(row, map);
         const elems = {
             title: f.title, englishTitle: f.englishTitle, ingredients: f.ingredients,
-            allergens: f.allergens, price: f.priceLines.join('\n'),
+            allergens: f.allergens, price: f.price, priceHalf: f.priceHalf,
         };
         Object.keys(elems).forEach(id => { if (cfg[id]) addText(ensure(effKey(cfg[id])), elems[id]); });
+        // Legacy config without a priceHalf element: its text renders under `price`
+        // (see layoutCard fallback), so its glyphs must land in price's face subset.
+        if (!cfg.priceHalf && cfg.price && f.priceHalf) addText(ensure(effKey(cfg.price)), f.priceHalf);
     });
     return byKey;
 }
