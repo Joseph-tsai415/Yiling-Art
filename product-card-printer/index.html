@@ -454,7 +454,7 @@
         <section class="panel" id="designerPanel" hidden>
             <h2>3. Card designer</h2>
             <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
-                Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card or all cards. Signed in: every layout edit saves to the sheet’s <code>metaData</code> column (shared with everyone). Not signed in: edits stay in this browser only and the 15s refresh won’t clobber them.
+                Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card, or the shared <strong>template (t0)</strong> — template edits save only to the t0 row and never overwrite a card’s own saved layout (cards without one follow the template). Signed in: every layout edit saves to the sheet’s <code>metaData</code> column (shared with everyone). Not signed in: edits stay in this browser only and the 15s refresh won’t clobber them.
             </p>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 14px;">
                 <input type="text" id="cardSearch" placeholder="Search card by name…"
@@ -473,7 +473,7 @@
                         <label>Edit scope</label>
                         <select id="designModeSelect">
                             <option value="percard" selected>This card</option>
-                            <option value="template">All cards (template)</option>
+                            <option value="template">Template (t0 baseline)</option>
                         </select>
                     </div>
                     <div class="prop-row" style="margin-bottom:10px;">
@@ -852,7 +852,8 @@
             if (id && !cardConfig[id]) cardConfig[id] = clone(templateConfig);
             return id ? cardConfig[id] : templateConfig;
         }
-        // Template-wide edits overwrite every card's config.
+        // Overwrite every card's config with the template — used ONLY by the explicit
+        // "Reset ALL cards" action (template-scope edits no longer touch cards).
         function applyTemplateToAll() {
             (state.ids || []).forEach(id => { cardConfig[id] = clone(templateConfig); });
         }
@@ -1685,18 +1686,18 @@
             afterEdit();
         }
         function afterEdit() {
-            // Template-scope edits mutate templateConfig and push to every card (the
-            // template becomes the new baseline). Per-card edits mutate one card. Both
-            // mark the touched configs dirty (poll-proof) and — when signed in — write
-            // back to the sheet, debounced. Dirty configs persist in localStorage so
-            // anonymous tweaks survive reloads.
+            // Template-scope edits mutate templateConfig (the t0 row) ONLY — per-card
+            // saved layouts are never touched. Clean cards without their own sheet
+            // config re-derive from the new baseline; cards with a saved layout keep
+            // it. Per-card edits mutate one card. Both mark the touched configs dirty
+            // (poll-proof) and — when signed in — write back to the sheet, debounced.
+            // Dirty configs persist in localStorage so anonymous tweaks survive reloads.
             if (designMode === 'template') {
                 templateDirty = true;
                 sessionTemplateEdited = true;
                 saveTemplate();
-                applyTemplateToAll();
-                (state.ids || []).forEach(id => { cardDirty[id] = true; });
-                queueTemplate();
+                reconcileCardConfigs();   // clean cards follow the new t0 baseline
+                queueTemplate();          // writes ONLY the t0 row
             } else {
                 const id = activeId();
                 if (id) { cardDirty[id] = true; queueCardMeta(id); }
@@ -1905,6 +1906,7 @@
                 applyTemplateToAll();
                 (state.ids || []).forEach(id => { cardDirty[id] = true; });
                 queueTemplate();
+                queueAllCardMetas();   // reset rewrites every card's saved layout too
             } else {
                 // Anonymous template-scope reset: drop this browser's local tweaks and
                 // follow the sheet again (or the code default when the sheet is empty).
@@ -2356,13 +2358,18 @@
             }
             return _tplRowResolving;
         }
-        // Template save: write the template row AND re-materialize every card's
-        // metaData cell under the new baseline (applying the template overwrote every
-        // card, and the metaData column stays fully populated).
+        // Template save: write ONLY the template (t0) row. Per-card metaData cells
+        // are never touched by template-scope edits — each card keeps its own saved
+        // layout; cards without one follow the t0 baseline.
         async function queueTemplate() {
             if (!canWriteSheet() || state.metaCol < 0) return;
             await resolveTemplateRow();
             sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+        }
+        // Re-enqueue every card's metaData cell — used only by the explicit
+        // "Reset ALL cards" action, which intentionally rewrites the whole column.
+        function queueAllCardMetas() {
+            if (!canWriteSheet() || state.metaCol < 0) return;
             (state.ids || []).forEach((id, i) => { const a1 = metaA1(i); if (a1) sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); });
         }
         // On sign-in: fill the gaps. Every card whose metaData cell is EMPTY gets its
