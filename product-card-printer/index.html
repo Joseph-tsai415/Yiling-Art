@@ -399,31 +399,6 @@
                 </div>
             </div>
 
-            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-subtle);">
-                <div class="controls">
-                    <div class="field">
-                        <label for="pageFormat">Page format</label>
-                        <select id="pageFormat">
-                            <option value="a4-portrait" selected>A4 portrait</option>
-                            <option value="a4-landscape">A4 landscape</option>
-                            <option value="a3-portrait">A3 portrait</option>
-                            <option value="a3-landscape">A3 landscape</option>
-                        </select>
-                    </div>
-                    <div class="field">
-                        <label for="margin">Page margin (mm)</label>
-                        <input type="number" id="margin" min="0" max="30" step="1" value="10">
-                    </div>
-                    <div class="field">
-                        <label for="gutter">Gap between cards (mm)</label>
-                        <input type="number" id="gutter" min="0" max="20" step="1" value="3">
-                    </div>
-                </div>
-                <div class="row">
-                    <button id="generatePdfBtn" type="button" disabled>Generate PDF</button>
-                </div>
-                <div class="status" id="status">Loading products…</div>
-            </div>
         </section>
 
         <section class="panel" id="mappingPanel" hidden>
@@ -540,6 +515,25 @@
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
                 This is the actual generated PDF — what you see is exactly what “Generate PDF” downloads.
             </p>
+            <div class="controls" style="margin-bottom: 12px;">
+                <div class="field">
+                    <label for="pageFormat">Page format</label>
+                    <select id="pageFormat">
+                        <option value="a4-portrait" selected>A4 portrait</option>
+                        <option value="a4-landscape">A4 landscape</option>
+                        <option value="a3-portrait">A3 portrait</option>
+                        <option value="a3-landscape">A3 landscape</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="margin">Page margin (mm)</label>
+                    <input type="number" id="margin" min="0" max="30" step="1" value="10">
+                </div>
+                <div class="field">
+                    <label for="gutter">Gap between cards (mm)</label>
+                    <input type="number" id="gutter" min="0" max="20" step="1" value="3">
+                </div>
+            </div>
             <div class="preview-wrap">
                 <iframe id="pdfPreview" title="PDF preview"></iframe>
                 <div id="spinner" class="spinner-overlay" hidden>
@@ -547,6 +541,10 @@
                     <div class="spinner-label">Rendering…</div>
                 </div>
             </div>
+            <div class="row" style="margin-top: 12px;">
+                <button id="generatePdfBtn" type="button" disabled>Generate PDF</button>
+            </div>
+            <div class="status" id="status">Loading products…</div>
         </section>
     </div>
 
@@ -751,6 +749,7 @@
         let cardConfig = {};                            // uuid -> per-card config (working copy)
         let cardDirty = {};                             // uuid -> true while local config ≠ sheet
         let cardSelected = {};                          // uuid -> bool (print this card?)
+        let cardCopies = {};                            // uuid -> copies to print (default 1)
         let designMode = 'percard';                     // 'percard' | 'template'
         let activeCardIndex = 0;
 
@@ -793,6 +792,7 @@
             cardConfig = {};
             cardDirty = {};
             cardSelected = {};
+            cardCopies = {};
             const store = loadCardStore();
             const overlay = (store && store.sig === datasetSig()) ? (store.dirty || {}) : {};
             state.ids.forEach((id, i) => {
@@ -805,6 +805,7 @@
                     cardConfig[id] = clone(templateConfig);
                 }
                 cardSelected[id] = true;
+                cardCopies[id] = 1;
             });
             saveCardStore();
         }
@@ -817,6 +818,7 @@
                 settleDirty(id, i);
                 if (!cardDirty[id]) cardConfig[id] = baseConfigFor(i);
                 if (!(id in cardSelected)) cardSelected[id] = true;
+                if (!(id in cardCopies)) cardCopies[id] = 1;
             });
             saveCardStore();
         }
@@ -826,9 +828,22 @@
             (state.ids || []).forEach((id, i) => { if (cardSelected[id]) out.push(i); });
             return out;
         }
-        // The rows + per-card configs that actually get rendered (selection applied).
+        // Copies to print for a card (clamped 1–99; bad input counts as 1).
+        function copiesFor(id) {
+            const n = parseInt(cardCopies[id], 10);
+            return isNaN(n) ? 1 : Math.max(1, Math.min(99, n));
+        }
+        // Total cards that will be printed (selection × copies).
+        function totalPrintCount() {
+            return selectedIndices().reduce((sum, i) => sum + copiesFor(state.ids[i]), 0);
+        }
+        // The rows + per-card configs that actually get rendered (selection applied,
+        // each selected card repeated by its copies count).
         function renderInputs() {
-            const sel = selectedIndices();
+            const sel = [];
+            selectedIndices().forEach(i => {
+                for (let k = copiesFor(state.ids[i]); k > 0; k--) sel.push(i);
+            });
             return {
                 rows: sel.map(i => state.rows[i]),
                 cfgs: sel.map(i => {
@@ -1214,7 +1229,7 @@
                     a.click();
                     a.remove();
                     setTimeout(() => URL.revokeObjectURL(url), 2000);
-                    setStatus(`Saved product-cards.pdf (${state.rows.length} cards).`);
+                    setStatus(`Saved product-cards.pdf (${totalPrintCount()} cards).`);
                 }
             } catch (err) {
                 reportPdfError(err);
@@ -1784,8 +1799,10 @@
 
         // ----- Print selector -----
         function updateSelectSummary() {
+            const sel = selectedIndices().length;
+            const total = totalPrintCount();
             document.getElementById('selectSummary').textContent =
-                selectedIndices().length + ' of ' + state.rows.length + ' selected';
+                sel + ' of ' + state.rows.length + ' selected · ' + total + ' card' + (total === 1 ? '' : 's') + ' to print';
         }
         function renderSelector() {
             const list = document.getElementById('cardSelectList');
@@ -1801,12 +1818,35 @@
                 cb.type = 'checkbox';
                 cb.checked = !!cardSelected[id];
                 cb.addEventListener('change', () => { cardSelected[id] = cb.checked; updateSelectSummary(); scheduleRefresh(); });
+                // Copies — how many times this card appears on the printed sheet.
+                const num = document.createElement('input');
+                num.type = 'number';
+                num.min = '1';
+                num.max = '99';
+                num.value = copiesFor(id);
+                num.title = 'Copies of this card';
+                num.style.width = '46px';
+                num.style.flex = 'none';
+                num.style.background = 'var(--input-bg)';
+                num.style.border = '1px solid var(--border-medium)';
+                num.style.borderRadius = '6px';
+                num.style.padding = '2px 4px';
+                num.style.color = 'var(--text-primary)';
+                num.style.fontSize = '0.8rem';
+                num.addEventListener('click', (e) => e.stopPropagation());   // don't toggle the checkbox
+                num.addEventListener('input', () => {
+                    cardCopies[id] = parseInt(num.value, 10) || 1;
+                    updateSelectSummary();
+                    scheduleRefresh();
+                });
                 const span = document.createElement('span');
                 span.textContent = cardLabel(i);
+                span.title = cardLabel(i);   // hover tooltip — full name even when cropped
                 span.style.overflow = 'hidden';
                 span.style.textOverflow = 'ellipsis';
                 span.style.whiteSpace = 'nowrap';
                 label.appendChild(cb);
+                label.appendChild(num);
                 label.appendChild(span);
                 list.appendChild(label);
             });
