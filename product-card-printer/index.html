@@ -180,6 +180,16 @@
             font-size: 0.85rem;
         }
         .field-map label { color: var(--text-muted); align-self: center; }
+        /* Match the designer panel's select styling (dark, rounded) — these were
+           rendering as unstyled native controls (white, square). */
+        .field-map select {
+            background: var(--input-bg);
+            border: 1px solid var(--border-medium);
+            border-radius: 6px;
+            padding: 7px 9px;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
 
         .preview-meta {
             display: flex;
@@ -374,6 +384,15 @@
         .sync-pill.error  { color: #f87171; border-color: rgba(248, 113, 113, 0.55); }
         .sync-pill.off    { color: var(--text-muted); border-color: var(--border-medium); }
 
+        /* Card picker dropdown: options keep their native popup rendering — ONLY
+           the optgroup banner labels get an explicit dark font (they were
+           rendering white on the white popup). */
+        #cardPicker optgroup {
+            color: #111;
+            font-weight: 700;
+            font-style: normal;
+        }
+
         .version-strip {
             position: fixed;
             bottom: 8px;
@@ -482,7 +501,7 @@
                 Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card, or the shared <strong>template (t0)</strong> — template edits save only to the t0 row and never overwrite a card’s own saved layout (cards without one follow the template). Signed in: every layout edit saves to the sheet’s <code>metaData</code> column (shared with everyone). Not signed in: edits stay in this browser only and the 15s refresh won’t clobber them.
             </p>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 14px;">
-                <input type="text" id="cardSearch" placeholder="Search card by name…"
+                <input type="text" id="cardSearch" placeholder="Search cards — id, name, or any content…"
                        style="flex:1; min-width:220px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;">
                 <select id="cardPicker" style="flex:2; min-width:240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;"></select>
             </div>
@@ -535,14 +554,16 @@
                     Editing a field updates this card and, when signed in, writes that cell back to the Google Sheet.
                 </p>
                 <div class="content-grid">
-                    <label>Title 中文<input type="text" data-field="title"></label>
-                    <label>Title English<input type="text" data-field="englishTitle"></label>
+                    <!-- All fields are multi-line: line breaks typed here become real
+                         line breaks on the card (and save to the sheet as such). -->
+                    <label>Title 中文<textarea data-field="title" rows="2"></textarea></label>
+                    <label>Title English<textarea data-field="englishTitle" rows="2"></textarea></label>
                     <label>Ingredients 中文<textarea data-field="cnIngredients" rows="2"></textarea></label>
                     <label>Ingredients English<textarea data-field="enIngredients" rows="2"></textarea></label>
-                    <label>素別 (Veg type)<input type="text" data-field="diet"></label>
-                    <label>過敏原 (Allergens)<input type="text" data-field="allergens"></label>
-                    <label>Price (whole)<input type="text" data-field="priceWhole"></label>
-                    <label>Price (half/slice)<input type="text" data-field="priceHalf"></label>
+                    <label>素別 (Veg type)<textarea data-field="diet" rows="2"></textarea></label>
+                    <label>過敏原 (Allergens)<textarea data-field="allergens" rows="2"></textarea></label>
+                    <label>Price (whole)<textarea data-field="priceWhole" rows="2"></textarea></label>
+                    <label>Price (half/slice)<textarea data-field="priceHalf" rows="2"></textarea></label>
                 </div>
             </div>
         </section>
@@ -593,7 +614,10 @@
                     <div class="spinner-label">Rendering…</div>
                 </div>
             </div>
-            <div class="row" style="margin-top: 12px;">
+            <div class="row" style="margin-top: 12px; justify-content: flex-end; align-items: center;">
+                <label for="pdfFileName" style="font-size: 0.8rem; color: var(--text-muted);">File name</label>
+                <input type="text" id="pdfFileName" spellcheck="false"
+                       style="min-width: 240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.85rem; font-variant-numeric: tabular-nums;">
                 <button id="generatePdfBtn" type="button" disabled>Generate PDF</button>
             </div>
             <div class="status" id="status">Loading products…</div>
@@ -673,6 +697,8 @@
             ids: [],
             metaCol: -1,   // index of the sheet's `metaData` column (-1 = none → layouts stay local)
             idCol: -1,     // index of the sheet's `id` column (template row id = "t0")
+            itemCol: -1,   // index of the 品項 column (card-detection identity only)
+            sections: [],  // per kept card: its section banner text (e.g. "(ㄧ）酸種麵包"), '' = none
             map: { title: -1, englishTitle: -1, cnIngredients: -1, enIngredients: -1, diet: -1, allergens: -1, priceWhole: -1, priceHalf: -1 },
         };
 
@@ -1032,6 +1058,24 @@
             ingestRows(header, dataRows, sheetRowNums);
         }
 
+        // Card detection: a row is a card only when it holds at least one REAL
+        // identity field — 品項, mamalili品名 (title) or mamalili品名(英文).
+        // An id ALONE does not qualify (ids also mark system rows like t0, which
+        // is additionally excluded earlier by its reserved id).
+        function hasIdentityCols() {
+            return state.itemCol >= 0 || state.map.title >= 0 || state.map.englishTitle >= 0;
+        }
+        function isCardRow(r) {
+            const has = (c) => c >= 0 && String(r[c] || '').trim();
+            return !!(has(state.itemCol) || has(state.map.title) || has(state.map.englishTitle));
+        }
+        // Section banner: an INDIVIDUAL label row — the id cell holds the label and
+        // every other cell is empty. (The system metaData column is tolerated:
+        // legacy writes left stray configs on some banner rows.)
+        function isBannerRow(r) {
+            if (state.idCol < 0 || !String(r[state.idCol] || '').trim()) return false;
+            return r.every((c, i) => i === state.idCol || i === state.metaCol || !String(c || '').trim());
+        }
         // Shared post-parse pipeline for any source (CSV, gviz, or the Sheets API).
         // headerRow + dataRows are arrays of cell-string arrays. sheetRowNums (optional)
         // gives each data row's 1-based sheet row, used for write-back.
@@ -1042,6 +1086,9 @@
             FIELDS.forEach(f => { state.map[f.id] = findHeaderIndex(state.headers, f); });
             state.metaCol = findMetaCol(state.headers);
             state.idCol = findIdCol(state.headers);
+            // 品項 (item) column — an identity column for card detection only; it is
+            // not a card field.
+            state.itemCol = state.headers.findIndex(h => String(h || '').includes('品項'));
 
             // Parse the metaData column: per-row card configs + the template row —
             // found either as a data row (empty title + template JSON) or folded into
@@ -1049,13 +1096,16 @@
             const metas = state.rows.map(r => state.metaCol >= 0 ? parseMetaCell(r[state.metaCol]) : null);
             let polledTemplate = state.metaCol >= 0 ? templateFromHeaderCell(state.headers[state.metaCol]) : null;
 
-            // Only rows with a product title become cards — drops any category/section
-            // rows that slipped through (so they don't render as blank/junk cards).
+            // A row becomes a card when ANY identity column has a value — id, 品項,
+            // mamalili品名 (title) or mamalili品名(英文) — dropping category/section
+            // rows that have none (so they don't render as blank/junk cards).
             // The template marker row (no title, metaData JSON) is captured here too.
-            const ti = state.map.title;
             sheetCardMeta = metas;
-            if (ti >= 0) {
+            state.sections = [];
+            if (hasIdentityCols()) {
                 const keep = [];
+                const sections = [];
+                let currentSection = '';
                 state.rows.forEach((r, idx) => {
                     // The template row is identified by its id ("t0") or its metaData
                     // CONTENT (label cells may hold text like "default template") —
@@ -1067,11 +1117,17 @@
                         const cfg = metas[idx] && metas[idx].config;
                         if (cfg) { polledTemplate = cfg; templateRowNeedsRewrite = true; }
                     }
-                    else if (String(r[ti] || '').trim()) keep.push(idx);
+                    else if (isCardRow(r)) { keep.push(idx); sections.push(currentSection); }
+                    else if (isBannerRow(r)) {
+                        // Individual label row — e.g. "(ㄧ）酸種麵包" — starts a section
+                        // grouping the cards below it.
+                        currentSection = String(r[state.idCol] || '').trim();
+                    }
                 });
                 if (keep.length) {
                     state.rows = keep.map(i => state.rows[i]);
                     sheetCardMeta = keep.map(i => metas[i]);
+                    state.sections = sections;
                     if (state.sheetRowNums) state.sheetRowNums = keep.map(i => state.sheetRowNums[i]);
                 }
             }
@@ -1283,6 +1339,20 @@
             refreshTimer = setTimeout(refreshPreview, 400);
         }
 
+        // Download file name — defaults to product-cards-DD-MM-YYYY.pdf (today),
+        // editable in the box next to the Generate button. ".pdf" is enforced.
+        function defaultPdfName() {
+            const d = new Date();
+            const p = (n) => String(n).padStart(2, '0');
+            return 'product-cards-' + p(d.getDate()) + '-' + p(d.getMonth() + 1) + '-' + d.getFullYear() + '.pdf';
+        }
+        function pdfFileName() {
+            let name = (document.getElementById('pdfFileName').value || '').trim() || defaultPdfName();
+            if (!/\.pdf$/i.test(name)) name += '.pdf';
+            return name;
+        }
+        document.getElementById('pdfFileName').value = defaultPdfName();
+
         async function downloadPDF() {
             const btn = document.getElementById('generatePdfBtn');
             btn.disabled = true;
@@ -1300,15 +1370,16 @@
                     }
                 }
                 if (lastBuffer) {
+                    const name = pdfFileName();
                     const url = URL.createObjectURL(new Blob([lastBuffer], { type: 'application/pdf' }));
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'product-cards.pdf';
+                    a.download = name;
                     document.body.appendChild(a);
                     a.click();
                     a.remove();
                     setTimeout(() => URL.revokeObjectURL(url), 2000);
-                    setStatus(`Saved product-cards.pdf (${totalPrintCount()} cards).`);
+                    setStatus(`Saved ${name} (${totalPrintCount()} cards).`);
                 }
             } catch (err) {
                 reportPdfError(err);
@@ -1891,25 +1962,83 @@
             }
         }
 
+        function cardRowId(rowIdx) {
+            return state.idCol >= 0 ? String((state.rows[rowIdx] || [])[state.idCol] || '').trim() : '';
+        }
+        // Card label: sheet id + Chinese title + English title (row number when
+        // the sheet has no id column).
         function cardLabel(rowIdx) {
             const name = [elemText(rowIdx, 'title'), elemText(rowIdx, 'englishTitle')]
                 .filter(Boolean).join(' / ') || ('Card ' + (rowIdx + 1));
-            return (rowIdx + 1) + '. ' + name.replace(/\n/g, ' ');
+            const id = cardRowId(rowIdx);
+            return (id ? id + ' · ' : (rowIdx + 1) + '. ') + name.replace(/\n/g, ' ');
         }
+        // Searchable text per card: id + EVERY mapped content field — the search box
+        // matches any card content (ingredients, allergens, prices…), not just names.
+        function cardSearchText(rowIdx) {
+            const parts = [cardRowId(rowIdx)];
+            const row = state.rows[rowIdx] || [];
+            if (state.itemCol >= 0) parts.push(String(row[state.itemCol] || ''));   // 品項
+            Object.keys(state.map).forEach(f => {
+                const c = state.map[f];
+                if (c >= 0) parts.push(String(row[c] || ''));
+            });
+            return parts.join(' ').toLowerCase();
+        }
+        // Relevance rank (lower = better): id match > name match > content match.
+        function cardSearchScore(rowIdx, q) {
+            const id = cardRowId(rowIdx).toLowerCase();
+            if (id === q) return 0;
+            if (id && id.indexOf(q) === 0) return 1;
+            const name = (elemText(rowIdx, 'title') + ' ' + elemText(rowIdx, 'englishTitle')).toLowerCase();
+            if (name.indexOf(q) === 0) return 2;
+            if (name.includes(q)) return 3;
+            if (cardSearchText(rowIdx).includes(q)) return 4;
+            return -1;   // no match
+        }
+        let lastCardQuery = '';
         function rebuildCardPicker() {
             const picker = document.getElementById('cardPicker');
-            const q = (document.getElementById('cardSearch').value || '').toLowerCase();
+            const q = (document.getElementById('cardSearch').value || '').trim().toLowerCase();
+            const queryChanged = q !== lastCardQuery;
+            lastCardQuery = q;
             picker.innerHTML = '';
-            state.rows.forEach((_, i) => {
-                const label = cardLabel(i);
-                if (q && !label.toLowerCase().includes(q)) return;
+            // Matches only, ordered most-relevant first (stable by row order within
+            // the same rank); no query → all cards in sheet order.
+            const entries = state.rows.map((_, i) => ({ i: i, score: q ? cardSearchScore(i, q) : 0 }))
+                .filter(e => e.score >= 0);
+            if (q) entries.sort((a, b) => a.score - b.score || a.i - b.i);
+            // Browsing (no query): group options under their section banners.
+            // Searching: flat list — relevance order trumps grouping.
+            const grouped = !q && (state.sections || []).some(s => s);
+            let curLabel = null, parent = picker, n = 0;
+            entries.forEach(e => {
+                if (grouped) {
+                    const sec = state.sections[e.i] || '';
+                    if (sec !== curLabel) {
+                        curLabel = sec;
+                        if (sec) { parent = document.createElement('optgroup'); parent.label = sec; picker.appendChild(parent); }
+                        else parent = picker;
+                    }
+                }
                 const opt = document.createElement('option');
-                opt.value = i; opt.textContent = label;
-                picker.appendChild(opt);
+                // "n." is just the position in this (filtered/ranked) list — a plain
+                // counter, not a sheet value.
+                opt.value = e.i; opt.textContent = (++n) + '. ' + cardLabel(e.i);
+                parent.appendChild(opt);
             });
             const opts = Array.prototype.slice.call(picker.options);
-            if (opts.some(o => +o.value === activeCardIndex)) picker.value = activeCardIndex;
-            else if (opts.length) { activeCardIndex = +opts[0].value; picker.value = activeCardIndex; }
+            if (!opts.length) return;
+            const prev = activeCardIndex;
+            if (q && queryChanged) {
+                // Typing: jump the designer to the most relevant match. (Poll-driven
+                // rebuilds with an unchanged query keep a manual pick instead.)
+                activeCardIndex = +opts[0].value;
+            } else if (!opts.some(o => +o.value === activeCardIndex)) {
+                activeCardIndex = +opts[0].value;
+            }
+            picker.value = activeCardIndex;
+            if (activeCardIndex !== prev) { renderEditor(); renderContentInputs(); }
         }
         function initDesigner() {
             if (activeCardIndex >= state.rows.length) activeCardIndex = 0;
@@ -1958,7 +2087,23 @@
         function renderSelector() {
             const list = document.getElementById('cardSelectList');
             list.innerHTML = '';
+            let lastSection = null;
             state.rows.forEach((_, i) => {
+                // Section banner header (full grid width) whenever the section changes.
+                const sec = (state.sections || [])[i] || '';
+                if (sec && sec !== lastSection) {
+                    const h = document.createElement('div');
+                    h.textContent = sec;
+                    h.style.gridColumn = '1 / -1';
+                    h.style.marginTop = '8px';
+                    h.style.fontWeight = '600';
+                    h.style.fontSize = '0.82rem';
+                    h.style.color = 'var(--text-secondary)';
+                    h.style.borderBottom = '1px solid var(--border-subtle)';
+                    h.style.paddingBottom = '3px';
+                    list.appendChild(h);
+                }
+                lastSection = sec;
                 const id = state.ids[i];
                 const label = document.createElement('label');
                 label.style.display = 'flex';
@@ -1991,8 +2136,9 @@
                     scheduleRefresh();
                 });
                 const span = document.createElement('span');
-                span.textContent = cardLabel(i);
-                span.title = cardLabel(i);   // hover tooltip — full name even when cropped
+                // Same "n." counter format as the designer dropdown (sheet order here).
+                span.textContent = (i + 1) + '. ' + cardLabel(i);
+                span.title = (i + 1) + '. ' + cardLabel(i);   // hover tooltip — full name even when cropped
                 span.style.overflow = 'hidden';
                 span.style.textOverflow = 'ellipsis';
                 span.style.whiteSpace = 'nowrap';
@@ -2142,17 +2288,68 @@
         }
 
         // Build the gviz CSV endpoint from a pasted Sheet URL (or bare ID).
+        // Side effect: remembers the doc id + gid for the keyed-API read below.
+        let sheetDocId = null;
+        let sheetDocGid = null;
+        let apiTabTitle = null;   // resolved lazily from gid; null = not yet, '' = use first sheet
         function sheetCsvUrlFrom(input) {
             const idMatch = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/) || input.match(/^([a-zA-Z0-9-_]{20,})$/);
             if (!idMatch) return null;
             const id = idMatch[1];
             const gidMatch = input.match(/[#&?]gid=(\d+)/);
-            let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
+            sheetDocId = id;
+            sheetDocGid = gidMatch ? gidMatch[1] : null;
+            apiTabTitle = sheetDocGid ? null : '';
+            // headers=2 = the banner row + the REAL header row. This stops gviz
+            // auto-folding further sparse rows (Config banner, t0, the 空卡 row…)
+            // into its header, while keeping the real header cells as column LABELS.
+            // (headers=1 would make the real header a DATA row — gviz then types the
+            // price columns as currency and coerces their text headers to empty.)
+            let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&headers=2`;
             if (gidMatch) url += `&gid=${gidMatch[1]}`;
             return url;
         }
 
+        // Serialize an API values grid to CSV text so the whole existing CSV
+        // pipeline (lastSheetText compare, parseCSV, detectHeaderRow) is reused.
+        // NB: parseCSV deliberately filters fully-empty rows from EVERY source, so
+        // their serialized form here is irrelevant; true sheet row numbers for
+        // write-back always come from buildSheetRowIndex, never from CSV position.
+        function csvFromRows(rows) {
+            return rows.map(r => (r || []).map(c => {
+                const s = String(c == null ? '' : c);
+                return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            }).join(',')).join('\n');
+        }
+
+        // Anonymous read. Preferred source: the keyed Sheets API — it returns the
+        // grid VERBATIM (formatted text, every row). gviz CSV types each column and
+        // coerces non-conforming cells to empty — e.g. a text half-price like
+        // "$100(2入)" in the otherwise-currency 一半/一片價格 column simply
+        // disappears for anonymous readers. Falls back to gviz when no API key is
+        // configured (local dev) or the keyed call fails.
         async function fetchSheetCsv() {
+            const key = String(window.GOOGLE_API_KEY || '');
+            if (sheetDocId && key && key.indexOf('__') !== 0) {
+                try {
+                    if (apiTabTitle === null) {
+                        // gid in the URL → resolve the tab title once (values.get
+                        // addresses tabs by name, not gid).
+                        const meta = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetDocId + '?key=' + key + '&fields=sheets(properties(sheetId,title))');
+                        if (meta.ok) {
+                            const tabs = ((await meta.json()).sheets || []).map(s => s.properties);
+                            const tab = tabs.find(p => String(p.sheetId) === String(sheetDocGid));
+                            apiTabTitle = tab ? tab.title : '';
+                        }
+                    }
+                    const range = apiTabTitle ? encodeURIComponent(quoteTab(apiTabTitle)) : 'A1:ZZ100000';
+                    const resp = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetDocId + '/values/' + range + '?key=' + key + '&majorDimension=ROWS');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.values && data.values.length) return csvFromRows(data.values);
+                    }
+                } catch (_) { /* fall through to gviz */ }
+            }
             const resp = await fetch(sheetCsvUrl);
             if (!resp.ok) throw new Error('Sheet fetch HTTP ' + resp.status);
             return resp.text();
@@ -2168,7 +2365,11 @@
             sync.confirmed.clear();
             const rows = parseCSV(text);
             if (rows.length < 2) { setSheetStatus('Sheet has a header row but no data rows.', true); return false; }
-            const headers = rows[0].map(h => h.trim());
+            // The grid may carry banner rows above the REAL header (keyed-API reads
+            // always do; gviz headers=2 folds them) — locate the header the same way
+            // the initial ingest does instead of assuming row 0.
+            const hdr = detectHeaderRow(rows);
+            const headers = (rows[hdr] || []).map(h => String(h || '').trim());
             const sameHeaders = headers.length === state.headers.length && headers.every((h, i) => h === state.headers[i]);
             if (!sameHeaders) {
                 ingestCSV(text);
@@ -2176,13 +2377,13 @@
                 // Content-only refresh: update text + sheet-side configs. Clean cards
                 // follow the sheet; dirty (locally tweaked) cards keep their layout.
                 // Filter mirrors ingestRows (title required) so metaData stays aligned.
-                const all = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
+                const all = rows.slice(hdr + 1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
                 const metas = all.map(r => state.metaCol >= 0 ? parseMetaCell(r[state.metaCol]) : null);
-                const ti = state.map.title;
-                let keptRows = all, keptMetas = metas;
+                let keptRows = all, keptMetas = metas, keptSections = all.map(() => '');
                 let polledTemplate = state.metaCol >= 0 ? templateFromHeaderCell(state.headers[state.metaCol]) : null;
-                if (ti >= 0) {
-                    keptRows = []; keptMetas = [];
+                if (hasIdentityCols()) {
+                    keptRows = []; keptMetas = []; keptSections = [];
+                    let currentSection = '';
                     all.forEach((r, idx) => {
                         if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
                         else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) {
@@ -2190,12 +2391,17 @@
                             const cfg = metas[idx] && metas[idx].config;
                             if (cfg) { polledTemplate = cfg; templateRowNeedsRewrite = true; }
                         }
-                        else if (String(r[ti] || '').trim()) { keptRows.push(r); keptMetas.push(metas[idx]); }
+                        else if (isCardRow(r)) { keptRows.push(r); keptMetas.push(metas[idx]); keptSections.push(currentSection); }
+                        else if (isBannerRow(r)) {
+                            // Individual label row = section banner (see initial load).
+                            currentSection = String(r[state.idCol] || '').trim();
+                        }
                     });
                 }
                 const rowCountChanged = keptRows.length !== state.rows.length;
                 state.rows = keptRows;
                 sheetCardMeta = keptMetas;
+                state.sections = keptSections;
                 adoptSheetTemplate(polledTemplate);
                 reconcileCardConfigs();
                 // Rows added/removed → the cached sheet row numbers may have shifted;
@@ -2450,23 +2656,23 @@
             state.rawRowCount = 0;
             if (!gToken || !gSpreadsheetId || !gTabTitle) return;
             const titleCol = state.map.title;
-            if (titleCol < 0) return;
+            if (!hasIdentityCols()) return;   // nothing to match rows by
             try {
                 const vals = await gapiGet('https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values/' + encodeURIComponent(quoteTab(gTabTitle)) + '?majorDimension=ROWS');
                 const raw = vals.values || [];
                 state.rawRowCount = raw.length;
                 state.sheetRowNums = state.rows.map(r => {
                     // Prefer the id column (s1, s2, …) — stable across renames and
-                    // duplicate titles. Fall back to title matching for rows without one.
-                    const id = state.idCol >= 0 ? String(r[state.idCol] || '').trim() : '';
-                    if (id) {
-                        const idx = raw.findIndex(rr => String((rr && rr[state.idCol]) || '').trim() === id);
-                        if (idx >= 0) return idx + 1;
-                    }
-                    const title = String(r[titleCol] || '').trim();
-                    if (!title) return null;
-                    const idx = raw.findIndex(rr => String((rr && rr[titleCol]) || '').trim() === title);
-                    return idx >= 0 ? idx + 1 : null;
+                    // duplicate titles. Fall back through the other identity columns
+                    // (title → 品項 → english title) for rows without one.
+                    const matchBy = (col) => {
+                        if (col < 0) return null;
+                        const v = String(r[col] || '').trim();
+                        if (!v) return null;
+                        const idx = raw.findIndex(rr => String((rr && rr[col]) || '').trim() === v);
+                        return idx >= 0 ? idx + 1 : null;
+                    };
+                    return matchBy(state.idCol) || matchBy(titleCol) || matchBy(state.itemCol) || matchBy(state.map.englishTitle);
                 });
                 if (state.metaCol >= 0) {
                     raw.forEach((rr, idx) => {
@@ -2563,7 +2769,11 @@
                 try {
                     const raws = items.filter(it => it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
                     const texts = items.filter(it => !it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
-                    if (raws.length) await sheetsBatchPut(raws, 'RAW');
+                    // System record: stamp the t0 row's 中文成分描述 with the last
+                    // write time (UTC). Piggybacked on the SAME batch — never queued,
+                    // so the stamp can't re-trigger a flush (infinite loop).
+                    const stamp = await systemRecordStamp();
+                    if (stamp.length || raws.length) await sheetsBatchPut(raws.concat(stamp), 'RAW');
                     if (texts.length) await sheetsBatchPut(texts, 'USER_ENTERED');   // content cells: prices/numbers parse
                     writeError = null;   // pill owns save state; googleStatus stays account-only
                     // Remember what landed → future identical enqueues are skipped.
@@ -2633,6 +2843,48 @@
                 if (texts.length) post(texts, 'USER_ENTERED');
             },
         };
+        // ---- System record (the t0 row doubles as a status row) ----
+        // Cells written alongside every flush. All OVERWRITE (last writer wins —
+        // nothing appends, so the cells never grow):
+        //   中文成分描述   last write: <UTC time>
+        //   英文成分描述   app: <deployed build version>
+        //   特色           schema: <config schema this build writes>
+        //   內餡重量(g)    by: <session tag>
+        // The session tag records the LAST WRITER, not "currently editing": a
+        // closed tab intentionally leaves its tag behind — read it together with
+        // the adjacent last-write time to judge freshness. (Live presence would
+        // need a heartbeat write; deliberately not done to save API quota.)
+        // 照片 holds the one-time migration record (see materializeSheetConfigs).
+        // Returns [] when the t0 row can't be resolved — stamping is best-effort
+        // and never blocks the real write.
+        const SCHEMA_VERSION = 'v1+priceHalf';
+        const SESSION_TAG = Math.random().toString(36).slice(2, 8);   // new per page load
+        function appVersion() {
+            const el = document.querySelector('.version-strip span');
+            const v = el ? el.textContent.trim() : '';
+            return (!v || v.indexOf('__APP_VERSION') === 0) ? 'dev' : v;   // placeholder = local dev
+        }
+        function sysCol(header) {
+            return (state.headers || []).findIndex(h => String(h || '').includes(header));
+        }
+        async function systemRecordStamp() {
+            try {
+                if (!state.templateRowNum) await resolveTemplateRow();
+                if (!state.templateRowNum) return [];
+                const ts = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+                const cells = [
+                    [state.map.cnIngredients, 'last write: ' + ts],
+                    [state.map.enIngredients, 'app: ' + appVersion()],
+                    [sysCol('特色'), 'schema: ' + SCHEMA_VERSION],
+                    [sysCol('內餡重量'), 'by: ' + SESSION_TAG],
+                ];
+                return cells.filter(c => c[0] >= 0).map(c => ({
+                    range: quoteTab(gTabTitle) + '!' + colLetter(c[0]) + state.templateRowNum,
+                    value: c[1],
+                }));
+            } catch (_) { return []; }
+        }
+
         // Final-save on close: fire a keepalive flush, and still warn — keepalive is
         // best-effort (its response can't be observed once the page is gone).
         window.addEventListener('beforeunload', (e) => {
@@ -2816,7 +3068,16 @@
                 templateRowNeedsRewrite = false;
                 n++;
             }
-            if (n) setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty/outdated metaData cells…');
+            if (n) {
+                // System record: one-time migration audit on the t0 row (照片 column).
+                const photoCol = sysCol('照片');
+                if (photoCol >= 0 && state.templateRowNum) {
+                    const ts = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                    sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(photoCol) + state.templateRowNum,
+                        'migrated: ' + ts + ' · ' + n + ' cells · app: ' + appVersion(), true);
+                }
+                setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty/outdated metaData cells…');
+            }
         }
         document.getElementById('googlePickBtn').addEventListener('click', googleSignInAndPick);
         document.getElementById('googleTab').addEventListener('change', (e) => {
