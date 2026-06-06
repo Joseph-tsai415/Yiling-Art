@@ -498,7 +498,7 @@
                     <p style="font-size: 0.72rem; color: var(--text-muted); margin: 2px 0 0;">
                         Fonts cover Traditional Chinese. Each distinct font on a sheet is embedded in the PDF (several MB each) — keep the variety small to keep PDFs fast.
                     </p>
-                    <button id="resetLayoutBtn" class="secondary" type="button" style="margin-top:12px; width:100%;">Reset to default layout</button>
+                    <button id="resetLayoutBtn" class="secondary" type="button" style="margin-top:12px; width:100%;">Reset this card to template</button>
                 </div>
             </div>
 
@@ -622,6 +622,7 @@
             rows: [],
             ids: [],
             metaCol: -1,   // index of the sheet's `metaData` column (-1 = none → layouts stay local)
+            idCol: -1,     // index of the sheet's `id` column (template row id = "t0")
             map: { title: -1, englishTitle: -1, cnIngredients: -1, enIngredients: -1, diet: -1, allergens: -1, priceWhole: -1, priceHalf: -1 },
         };
 
@@ -650,8 +651,24 @@
         // sheet config matches the local one (i.e. our write — or an identical edit —
         // echoed back), so write→poll races can never revert an edit.
         const META_VERSION = 1;
+        // Prefix match: gviz folds multi-row headers by concatenating the cells, so
+        // when the template row sits directly under the real header the column header
+        // arrives as "metaData {json…}". The column is identified by the prefix and
+        // the folded-in template is recovered by templateFromHeaderCell below.
         function findMetaCol(headers) {
-            return (headers || []).findIndex(h => String(h || '').toLowerCase().trim() === 'metadata');
+            return (headers || []).findIndex(h => String(h || '').toLowerCase().trim().indexOf('metadata') === 0);
+        }
+        function templateFromHeaderCell(h) {
+            const m = String(h || '').trim().match(/^metadata\s+(\{[\s\S]*\})\s*$/i);
+            const o = m ? parseMetaCell(m[1]) : null;
+            return isTemplateMeta(o) ? o.config : null;
+        }
+        // The sheet's `id` column (column with an "id" header token — gviz may fold
+        // banner text around it). The template row carries the reserved id "t0",
+        // which is its primary locator for write-back.
+        const TEMPLATE_ROW_ID = 't0';
+        function findIdCol(headers) {
+            return (headers || []).findIndex(h => /(^|\s)id(\s|$)/i.test(String(h || '').trim()));
         }
         function parseMetaCell(text) {
             const s = String(text || '').trim();
@@ -745,21 +762,32 @@
         }
         // A dirty card whose sheet-derived base now matches the local config has been
         // successfully written (or identically edited elsewhere) → clean again.
+        // The base is auto-flowed first (same clamp the renderer applies to the local
+        // config), so reflow-nudged y values compare like-for-like and still settle.
         function settleDirty(id, i) {
-            if (cardDirty[id] && JSON.stringify(baseConfigFor(i)) === JSON.stringify(cardConfig[id])) cardDirty[id] = false;
+            if (!cardDirty[id]) return;
+            const base = baseConfigFor(i);
+            reflowConfig(base, editorFields(i), null);
+            if (JSON.stringify(base) === JSON.stringify(cardConfig[id])) cardDirty[id] = false;
         }
-        // Adopt a template found in the polled/loaded sheet. While the local template
-        // is dirty (unsaved or in-flight write) the sheet copy must NOT clobber it;
-        // it goes clean when the sheet echoes back exactly what we have.
+        // Adopt a template found in the polled/loaded sheet. Priority: the sheet
+        // template wins over the localStorage one — EXCEPT while a template edit made
+        // THIS session is unsaved/in flight (it must not be clobbered mid-edit; it
+        // goes clean when the sheet echoes back exactly what we have).
+        let sessionTemplateEdited = false;
         function adoptSheetTemplate(polled) {
             if (!polled) return;
             sheetTemplate = polled;
-            if (templateDirty && JSON.stringify(polled) === JSON.stringify(templateConfig)) { templateDirty = false; saveTemplate(); }
-            if (!templateDirty) templateConfig = clone(sheetTemplate);
+            if (sessionTemplateEdited && JSON.stringify(polled) !== JSON.stringify(templateConfig)) return;
+            sessionTemplateEdited = false;
+            if (templateDirty) { templateDirty = false; saveTemplate(); }
+            templateConfig = clone(sheetTemplate);
         }
 
-        // Assign a stable id + per-card config to each row (sheet metaData → template →
-        // default, with this browser's dirty overlay on top). Called on a fresh load.
+        // Assign a stable id + per-card config to each row. Load priority per card:
+        //   1. sheet metaData  2. this browser's local tweak (only when the sheet has
+        //   no config for it yet — it gets uploaded at sign-in)  3.–5. template chain
+        //   (sheet template → localStorage template → code default, resolved above).
         function initCardConfigs() {
             state.ids = state.rows.map(genId);
             cardConfig = {};
@@ -768,8 +796,14 @@
             const store = loadCardStore();
             const overlay = (store && store.sig === datasetSig()) ? (store.dirty || {}) : {};
             state.ids.forEach((id, i) => {
-                if (overlay[i]) { cardConfig[id] = clone(overlay[i]); cardDirty[id] = true; settleDirty(id, i); }
-                if (!cardDirty[id]) cardConfig[id] = baseConfigFor(i);
+                if (sheetCardMeta[i]) {
+                    cardConfig[id] = baseConfigFor(i);
+                } else if (overlay[i]) {
+                    cardConfig[id] = clone(overlay[i]);
+                    cardDirty[id] = true;
+                } else {
+                    cardConfig[id] = clone(templateConfig);
+                }
                 cardSelected[id] = true;
             });
             saveCardStore();
@@ -917,10 +951,13 @@
             state.sheetRowNums = sheetRowNums || null;
             FIELDS.forEach(f => { state.map[f.id] = findHeaderIndex(state.headers, f); });
             state.metaCol = findMetaCol(state.headers);
+            state.idCol = findIdCol(state.headers);
 
-            // Parse the metaData column: per-row card configs + the template marker row.
+            // Parse the metaData column: per-row card configs + the template row —
+            // found either as a data row (empty title + template JSON) or folded into
+            // the header cell by gviz when it sits directly under the header row.
             const metas = state.rows.map(r => state.metaCol >= 0 ? parseMetaCell(r[state.metaCol]) : null);
-            let polledTemplate = null;
+            let polledTemplate = state.metaCol >= 0 ? templateFromHeaderCell(state.headers[state.metaCol]) : null;
 
             // Only rows with a product title become cards — drops any category/section
             // rows that slipped through (so they don't render as blank/junk cards).
@@ -930,8 +967,12 @@
             if (ti >= 0) {
                 const keep = [];
                 state.rows.forEach((r, idx) => {
-                    if (String(r[ti] || '').trim()) keep.push(idx);
-                    else if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
+                    // The template row is identified by its id ("t0") or its metaData
+                    // CONTENT (label cells may hold text like "default template") —
+                    // never a card.
+                    if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
+                    else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) { /* template row without parseable config — skip */ }
+                    else if (String(r[ti] || '').trim()) keep.push(idx);
                 });
                 if (keep.length) {
                     state.rows = keep.map(i => state.rows[i]);
@@ -1648,13 +1689,14 @@
             // anonymous tweaks survive reloads.
             if (designMode === 'template') {
                 templateDirty = true;
+                sessionTemplateEdited = true;
                 saveTemplate();
                 applyTemplateToAll();
                 (state.ids || []).forEach(id => { cardDirty[id] = true; });
-                scheduleTemplateWrite();
+                queueTemplate();
             } else {
                 const id = activeId();
-                if (id) { cardDirty[id] = true; scheduleMetaWrite(id); }
+                if (id) { cardDirty[id] = true; queueCardMeta(id); }
             }
             saveCardStore();
             scheduleRefresh();
@@ -1826,24 +1868,46 @@
         });
         document.getElementById('designModeSelect').addEventListener('change', (e) => {
             designMode = e.target.value;
+            document.getElementById('resetLayoutBtn').textContent =
+                designMode === 'percard' ? 'Reset this card to template' : 'Reset ALL cards to default layout';
             renderEditor();
         });
+
+        // Re-settle whenever font faces finish loading: canvas measurement (and the
+        // auto-flow clamp) changes with real metrics, so configs that failed to settle
+        // under fallback fonts (e.g. CJK chunks still loading) settle once they're in.
+        if (document.fonts && document.fonts.addEventListener) {
+            document.fonts.addEventListener('loadingdone', () => { if (state.rows.length) reconcileCardConfigs(); });
+        }
+        // Scope-aware reset.
+        //   This card  → restore the active card to the sheet template (or the code
+        //                default when the sheet has none) and save that.
+        //   All cards  → restore the CODE default template everywhere; signed in this
+        //                rewrites the sheet (template row + every metaData cell).
         document.getElementById('resetLayoutBtn').addEventListener('click', () => {
-            if (canWriteSheet() && state.metaCol >= 0) {
-                // Signed in: reset the SHARED layout — default template written to the
-                // sheet, every card's metaData cell cleared. Affects everyone.
-                if (!confirm('Reset the SHARED layout for everyone?\n\nThis writes the default template to the Google Sheet and clears every card’s saved layout.')) return;
+            if (designMode === 'percard') {
+                const id = activeId();
+                if (!id) return;
+                cardConfig[id] = sheetTemplate ? clone(sheetTemplate) : defaultTemplate();
+                cardDirty[id] = true;
+                queueCardMeta(id);   // no-op when signed out — stays a local tweak
+            } else if (canWriteSheet() && state.metaCol >= 0) {
+                // Signed in: reset the SHARED layout — default template + every card,
+                // written to the sheet. Affects everyone.
+                if (!confirm('Reset the SHARED layout for everyone?\n\nThis writes the default template to the Google Sheet and resets every card’s saved layout.')) return;
                 templateConfig = defaultTemplate();
                 templateDirty = true;
+                sessionTemplateEdited = true;
                 saveTemplate();
                 applyTemplateToAll();
                 (state.ids || []).forEach(id => { cardDirty[id] = true; });
-                scheduleTemplateWrite();
+                queueTemplate();
             } else {
-                // Anonymous: drop this browser's local tweaks and follow the sheet
-                // again (or CardLayout.DEFAULT_CONFIG when the sheet has no configs).
+                // Anonymous template-scope reset: drop this browser's local tweaks and
+                // follow the sheet again (or the code default when the sheet is empty).
                 try { localStorage.removeItem(LS_TEMPLATE); localStorage.removeItem(LS_CARDS); } catch (e) {}
                 templateDirty = false;
+                sessionTemplateEdited = false;
                 templateConfig = sheetTemplate ? clone(sheetTemplate) : defaultTemplate();
                 cardDirty = {};
                 (state.ids || []).forEach((id, i) => { cardConfig[id] = baseConfigFor(i); });
@@ -1916,12 +1980,14 @@
                 const all = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
                 const metas = all.map(r => state.metaCol >= 0 ? parseMetaCell(r[state.metaCol]) : null);
                 const ti = state.map.title;
-                let keptRows = all, keptMetas = metas, polledTemplate = null;
+                let keptRows = all, keptMetas = metas;
+                let polledTemplate = state.metaCol >= 0 ? templateFromHeaderCell(state.headers[state.metaCol]) : null;
                 if (ti >= 0) {
                     keptRows = []; keptMetas = [];
                     all.forEach((r, idx) => {
-                        if (String(r[ti] || '').trim()) { keptRows.push(r); keptMetas.push(metas[idx]); }
-                        else if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
+                        if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
+                        else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) { /* template row — skip */ }
+                        else if (String(r[ti] || '').trim()) { keptRows.push(r); keptMetas.push(metas[idx]); }
                     });
                 }
                 const rowCountChanged = keptRows.length !== state.rows.length;
@@ -2119,7 +2185,7 @@
             setGoogleStatus('Reading “' + tab.title + '”…');
             await connectSheet();          // gviz read into the app + start 15s poll
             await buildSheetRowIndex();    // map each product to its real sheet row (for write-back)
-            await seedSheetConfigs();      // one-time: local layout tweaks → empty metaData cells
+            await materializeSheetConfigs();   // fill empty metaData cells (local tweaks win) via the write queue
             setGoogleStatus('Editable • ' + tab.title + ' • ' + state.rows.length + ' rows • text & layout writes on');
         }
 
@@ -2155,9 +2221,12 @@
                 });
                 if (state.metaCol >= 0) {
                     raw.forEach((rr, idx) => {
-                        const title = String((rr && rr[titleCol]) || '').trim();
+                        if (state.templateRowNum) return;
+                        // Template row: primarily the row whose id is "t0"; fallback —
+                        // whichever row holds template-typed metaData. First match wins.
+                        if (state.idCol >= 0 && String((rr && rr[state.idCol]) || '').trim() === TEMPLATE_ROW_ID) { state.templateRowNum = idx + 1; return; }
                         const meta = String((rr && rr[state.metaCol]) || '').trim();
-                        if (!title && meta && isTemplateMeta(parseMetaCell(meta))) state.templateRowNum = idx + 1;
+                        if (meta && isTemplateMeta(parseMetaCell(meta))) state.templateRowNum = idx + 1;
                     });
                 }
             } catch (e) {
@@ -2169,128 +2238,140 @@
         function canWriteSheet() {
             return !!(gToken && gToken.expires_at > Date.now() && gSpreadsheetId && gTabTitle);
         }
-        // PUT one cell. raw=true (RAW) for metaData JSON so Sheets never reinterprets
-        // it; content cells keep USER_ENTERED so prices/numbers parse as before.
-        async function sheetsPut(a1, value, raw) {
-            const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values/' + encodeURIComponent(a1)
-                + '?valueInputOption=' + (raw ? 'RAW' : 'USER_ENTERED');
-            const resp = await fetch(url, {
-                method: 'PUT',
-                headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ values: [[value]] }),
-            });
-            if (!resp.ok) { const t = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + t); }
-        }
-        // Batched single-cell writes (RAW): data = [{ range, value }].
-        async function sheetsBatchPut(data) {
+        // Batched single-cell writes: data = [{ range, value }].
+        async function sheetsBatchPut(data, valueInputOption) {
             const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values:batchUpdate';
             const resp = await fetch(url, {
                 method: 'POST',
                 headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ valueInputOption: 'RAW', data: data.map(d => ({ range: d.range, values: [[d.value]] })) }),
+                body: JSON.stringify({ valueInputOption: valueInputOption || 'RAW', data: data.map(d => ({ range: d.range, values: [[d.value]] })) }),
             });
             if (!resp.ok) { const t = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + t); }
         }
-        // Write a single content cell back to the sheet.
-        async function writeCell(fieldId, value) {
+
+        // ===================== Sheet sync manager =====================
+        // The single funnel for EVERY write to the sheet — per-card metaData, the
+        // template row, and content cells. Writes coalesce per A1 range (newest value
+        // wins) and flush as ONE values:batchUpdate every FLUSH_MS, so rapid edits
+        // across many cards can never burst the Sheets API quota (~60 writes/min).
+        // Reads stay on their own single channel: the 15s gviz poll (plus one grid
+        // read at sign-in / on row-count change to anchor row numbers).
+        //   • A failed flush re-queues everything (newer values win) and retries.
+        //   • Nothing flushes while signed out — edits stay dirty in localStorage and
+        //     the queue drains after the next sign-in.
+        //   • The dirty/settle cycle (settleDirty) is what confirms a write really
+        //     landed: cards stay locally authoritative until the poll echoes them.
+        const sync = {
+            FLUSH_MS: 1500,
+            RETRY_MS: 5000,
+            queue: new Map(),     // a1 -> { value, raw }
+            timer: null,
+            flushing: false,
+            enqueue(a1, value, raw) {
+                if (!a1) return;
+                this.queue.set(a1, { value: value, raw: raw });
+                this.schedule(this.FLUSH_MS);
+                this.status();
+            },
+            schedule(ms) {
+                if (this.timer) return;
+                this.timer = setTimeout(() => { this.timer = null; this.flush(); }, ms);
+            },
+            async flush() {
+                if (this.flushing) { this.schedule(this.FLUSH_MS); return; }
+                if (!this.queue.size || !canWriteSheet()) { this.status(); return; }
+                this.flushing = true;
+                const items = Array.from(this.queue.entries());
+                this.queue.clear();
+                this.status('Saving to sheet…');
+                try {
+                    const raws = items.filter(it => it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
+                    const texts = items.filter(it => !it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
+                    if (raws.length) await sheetsBatchPut(raws, 'RAW');
+                    if (texts.length) await sheetsBatchPut(texts, 'USER_ENTERED');   // content cells: prices/numbers parse
+                    setGoogleStatus('Saved ' + items.length + ' cell(s) • ' + new Date().toLocaleTimeString());
+                } catch (e) {
+                    // Re-queue everything that wasn't superseded meanwhile, retry later.
+                    items.forEach(it => { if (!this.queue.has(it[0])) this.queue.set(it[0], it[1]); });
+                    setGoogleStatus('Save failed — retrying: ' + (e.message || e), true);
+                    this.schedule(this.RETRY_MS);
+                } finally {
+                    this.flushing = false;
+                    if (this.queue.size) this.schedule(this.FLUSH_MS);
+                    this.status();
+                }
+            },
+            status(msg) {
+                setCalib('save', msg || (this.queue.size ? 'Saving… (' + this.queue.size + ' pending)' : null));
+            },
+        };
+        // Don't silently drop queued writes on close.
+        window.addEventListener('beforeunload', (e) => {
+            if (sync.queue.size || sync.flushing) { e.preventDefault(); e.returnValue = ''; }
+        });
+
+        // Queue a single content cell write.
+        function writeCell(fieldId, value) {
             if (!canWriteSheet()) return;
             const col = state.map[fieldId];
             if (col < 0) return;
             const row = state.sheetRowNums && state.sheetRowNums[activeCardIndex];
             if (!row) { setGoogleStatus('Could not locate this card’s sheet row for write-back.', true); return; }
-            const a1 = quoteTab(gTabTitle) + '!' + colLetter(col) + row;
-            try {
-                await sheetsPut(a1, value, false);
-                setGoogleStatus('Saved ' + a1 + ' • ' + new Date().toLocaleTimeString());
-            } catch (e) {
-                setGoogleStatus('Write failed (' + a1 + '): ' + (e.message || e), true);
-            }
+            sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(col) + row, value, false);
         }
 
         // ---- Layout write-back (the metaData column) ----
-        // Debounced per card. The card stays DIRTY after a successful write — it goes
-        // clean only when the polled sheet echoes the same config back (settleDirty),
-        // so a stale gviz cache can never revert a just-saved layout.
         function metaA1(rowIdx) {
             const row = state.sheetRowNums && state.sheetRowNums[rowIdx];
             if (!row || state.metaCol < 0) return null;
             return quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + row;
         }
-        const metaWriteTimers = {};
-        function scheduleMetaWrite(id) {
+        function queueCardMeta(id) {
             if (!canWriteSheet() || state.metaCol < 0) return;
-            clearTimeout(metaWriteTimers[id]);
-            metaWriteTimers[id] = setTimeout(() => { writeCardMeta(id); }, 800);
-        }
-        async function writeCardMeta(id) {
-            if (!canWriteSheet()) return;
             const i = (state.ids || []).indexOf(id);
             if (i < 0) return;
             const a1 = metaA1(i);
             if (!a1) { setGoogleStatus('Could not locate this card’s sheet row to save the layout.', true); return; }
-            setCalib('save', 'Saving layout to sheet…');
-            try {
-                await sheetsPut(a1, cardMetaJson(cardConfig[id]), true);
-                setGoogleStatus('Layout saved ' + a1 + ' • ' + new Date().toLocaleTimeString());
-            } catch (e) {
-                setGoogleStatus('Layout save failed (' + a1 + '): ' + (e.message || e), true);
-            } finally {
-                setCalib('save', null);
+            sync.enqueue(a1, cardMetaJson(cardConfig[id]), true);
+        }
+        // Resolve (or reserve, at the bottom of the tab) the template row — a row whose
+        // title stays empty so it never becomes a card.
+        let _tplRowResolving = null;
+        function resolveTemplateRow() {
+            if (state.templateRowNum) return Promise.resolve();
+            if (!_tplRowResolving) {
+                _tplRowResolving = buildSheetRowIndex().then(() => {
+                    if (!state.templateRowNum) state.templateRowNum = (state.rawRowCount || 0) + 1;
+                }).finally(() => { _tplRowResolving = null; });
             }
+            return _tplRowResolving;
         }
-        // Template save: write the template row (created at the bottom of the tab if
-        // missing — title left empty so it never becomes a card) and CLEAR every
-        // card's metaData cell, since applying the template overwrote every card.
-        let templateWriteTimer = null;
-        function scheduleTemplateWrite() {
+        // Template save: write the template row AND re-materialize every card's
+        // metaData cell under the new baseline (applying the template overwrote every
+        // card, and the metaData column stays fully populated).
+        async function queueTemplate() {
             if (!canWriteSheet() || state.metaCol < 0) return;
-            clearTimeout(templateWriteTimer);
-            templateWriteTimer = setTimeout(() => { writeTemplateMeta(); }, 800);
+            await resolveTemplateRow();
+            sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+            (state.ids || []).forEach((id, i) => { const a1 = metaA1(i); if (a1) sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); });
         }
-        async function writeTemplateMeta() {
+        // On sign-in: fill the gaps. Every card whose metaData cell is EMPTY gets its
+        // current config queued (this browser's local tweak if it had one, otherwise
+        // the template/default) — so after the first sign-in the whole column is
+        // populated and every visitor loads identical cards from the same source.
+        // Cells that already hold a config are never touched here.
+        async function materializeSheetConfigs() {
             if (!canWriteSheet() || state.metaCol < 0) return;
-            setCalib('save', 'Saving template to sheet…');
-            try {
-                if (!state.templateRowNum) {
-                    await buildSheetRowIndex();   // re-check; another session may have created it
-                    if (!state.templateRowNum) state.templateRowNum = (state.rawRowCount || 0) + 1;   // reserve the next row (PUT auto-expands the grid)
-                }
-                const data = [{ range: quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, value: templateMetaJson(templateConfig) }];
-                (state.ids || []).forEach((id, i) => {
-                    const a1 = metaA1(i);
-                    if (a1 && sheetCardMeta[i]) data.push({ range: a1, value: '' });
-                });
-                await sheetsBatchPut(data);
-                setGoogleStatus('Template saved to sheet • ' + new Date().toLocaleTimeString());
-            } catch (e) {
-                setGoogleStatus('Template save failed: ' + (e.message || e), true);
-            } finally {
-                setCalib('save', null);
-            }
-        }
-        // One-time migration on sign-in: any locally tweaked card whose metaData cell
-        // is still EMPTY gets seeded with the local config (never overwrites someone
-        // else's saved config); same for the template row if the sheet has none.
-        async function seedSheetConfigs() {
-            if (!canWriteSheet() || state.metaCol < 0) return;
-            const data = [];
+            let n = 0;
             (state.ids || []).forEach((id, i) => {
-                if (cardDirty[id] && !sheetCardMeta[i]) {
-                    const a1 = metaA1(i);
-                    if (a1) data.push({ range: a1, value: cardMetaJson(cardConfig[id]) });
-                }
+                if (!sheetCardMeta[i]) { const a1 = metaA1(i); if (a1) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); n++; } }
             });
-            if (templateDirty && !state.templateRowNum) {
-                state.templateRowNum = (state.rawRowCount || 0) + 1;
-                data.push({ range: quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, value: templateMetaJson(templateConfig) });
+            if (!state.templateRowNum) {
+                await resolveTemplateRow();
+                sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+                n++;
             }
-            if (!data.length) return;
-            try {
-                await sheetsBatchPut(data);
-                setGoogleStatus('Seeded ' + data.length + ' layout config(s) into the sheet.');
-            } catch (e) {
-                setGoogleStatus('Layout seeding failed: ' + (e.message || e), true);
-            }
+            if (n) setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty metaData cells…');
         }
         document.getElementById('googlePickBtn').addEventListener('click', googleSignInAndPick);
         document.getElementById('googleTab').addEventListener('change', (e) => {
