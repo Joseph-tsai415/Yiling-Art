@@ -148,6 +148,21 @@
             color: var(--text-primary);
             border: 1px solid var(--border-medium);
         }
+        /* Pause/Resume auto-refresh: a fill drains right→left toward the next poll
+           (driven by --poll-pct from JS); paused flips to amber so it's obvious
+           the sheet is NOT syncing. */
+        #sheetPauseBtn {
+            position: relative;
+            background: linear-gradient(to right, rgba(96,165,250,0.28) var(--poll-pct, 0%), transparent var(--poll-pct, 0%));
+            transition: none;
+            min-width: 215px;
+            font-variant-numeric: tabular-nums;
+        }
+        #sheetPauseBtn.paused {
+            background: rgba(245,158,11,0.15);
+            border-color: #f59e0b;
+            color: #fbbf24;
+        }
 
         .status {
             font-size: 0.85rem;
@@ -325,6 +340,40 @@
             border-color: rgba(0, 0, 0, 0.2);
         }
 
+        /* Unified sync pill — the ONE always-visible surface for data in/out:
+           read (poll) + write (queue) state with a strict priority. Sits left of
+           the theme toggle; colour = state at a glance. */
+        .sync-pill {
+            position: fixed;
+            top: 22px;
+            right: 72px;
+            z-index: 99;
+            display: flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 7px 14px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            background: rgba(18, 18, 29, 0.85);
+            border: 1px solid var(--border-medium);
+            color: var(--text-primary);
+            backdrop-filter: blur(4px);
+            cursor: pointer;
+            user-select: none;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            transition: filter 0.15s ease;
+        }
+        .sync-pill:hover { filter: brightness(1.35); }
+        .sync-pill.live   { color: #4ade80; border-color: rgba(74, 222, 128, 0.45); }
+        .sync-pill.saving { color: #93c5fd; border-color: rgba(96, 165, 250, 0.55); }
+        .sync-pill.saved  { color: #4ade80; border-color: rgba(74, 222, 128, 0.55); }
+        .sync-pill.paused { color: #fbbf24; border-color: rgba(245, 158, 11, 0.55); }
+        .sync-pill.local  { color: #fbbf24; border-color: rgba(245, 158, 11, 0.55); }
+        .sync-pill.error  { color: #f87171; border-color: rgba(248, 113, 113, 0.55); }
+        .sync-pill.off    { color: var(--text-muted); border-color: var(--border-medium); }
+
         .version-strip {
             position: fixed;
             bottom: 8px;
@@ -342,6 +391,7 @@
     <button class="theme-toggle" type="button" aria-label="Toggle theme" onclick="toggleTheme()">
         <span id="themeIcon">☀</span>
     </button>
+    <div id="syncPill" class="sync-pill" hidden></div>
 
     <div class="container">
         <header>
@@ -1804,6 +1854,7 @@
             }
             saveCardStore();
             scheduleRefresh();
+            noteLocalEdit();   // anonymous: pulse the "Local preview" pill hint for 3s
         }
         function onPropInput() {
             const c = activeCfg()[selectedElem];
@@ -1890,6 +1941,7 @@
             state.rows[activeCardIndex][col] = inp.value;
             renderEditor();        // reflect on the on-screen card
             scheduleRefresh();     // update the PDF
+            noteLocalEdit();       // anonymous: pulse the "Local preview" pill hint for 3s
             clearTimeout(writeTimers[field]);
             writeTimers[field] = setTimeout(() => writeCell(field, inp.value), 700);  // debounced write-back
         }
@@ -2111,6 +2163,9 @@
         function applySheetCsv(text) {
             if (text === lastSheetText) return false;
             lastSheetText = text;
+            // Sheet content changed (someone's write — possibly not ours): drop the
+            // no-op-skip cache so a revert to a previously-confirmed value still writes.
+            sync.confirmed.clear();
             const rows = parseCSV(text);
             if (rows.length < 2) { setSheetStatus('Sheet has a header row but no data rows.', true); return false; }
             const headers = rows[0].map(h => h.trim());
@@ -2161,37 +2216,73 @@
             document.getElementById('sheetPauseBtn').hidden = !connected;
         }
 
+        // Pause-button countdown: "Pause auto-refresh (12s)" plus a fill that drains
+        // toward the next poll. A 250ms ticker drives the label + the --poll-pct CSS
+        // var; nextPollAt is re-anchored every poll tick (and on resume/connect).
+        let pauseTicker = null;
+        let nextPollAt = 0;
+        function updatePauseBtn() {
+            const btn = document.getElementById('sheetPauseBtn');
+            btn.classList.toggle('paused', sheetPaused);
+            if (sheetPaused) {
+                btn.textContent = '⏸ Paused — Resume auto-refresh';
+                btn.style.removeProperty('--poll-pct');
+                return;
+            }
+            const msLeft = Math.max(0, nextPollAt - Date.now());
+            btn.textContent = 'Pause auto-refresh (' + Math.ceil(msLeft / 1000) + 's)';
+            btn.style.setProperty('--poll-pct', ((msLeft / SHEET_POLL_MS) * 100).toFixed(1) + '%');
+        }
         function startSheetTimer() {
             if (sheetTimer) clearInterval(sheetTimer);
-            sheetTimer = setInterval(pollSheetOnce, SHEET_POLL_MS);
+            nextPollAt = Date.now() + SHEET_POLL_MS;
+            sheetTimer = setInterval(() => { nextPollAt = Date.now() + SHEET_POLL_MS; pollSheetOnce(); }, SHEET_POLL_MS);
+            if (pauseTicker) clearInterval(pauseTicker);
+            pauseTicker = setInterval(updatePauseBtn, 250);
+            updatePauseBtn();
         }
         async function pollSheetOnce() {
             if (sheetPaused || !sheetCsvUrl) return;
             try {
-                const changed = applySheetCsv(await fetchSheetCsv());
-                setSheetStatus((changed ? 'Updated • ' : 'Live • synced ') + new Date().toLocaleTimeString());
+                applySheetCsv(await fetchSheetCsv());
+                lastPollOkAt = Date.now();
+                readError = null;
             } catch (err) {
-                setSheetStatus('Sync error: ' + (err.message || err), true);
+                // Steady-state read health lives on the sync pill; details → console.
+                readError = err.message || String(err);
+                console.warn('[card-printer] sheet poll failed:', err);
             }
+            updateSyncPill();
         }
 
         function setSheetPaused(paused) {
             sheetPaused = paused;
-            document.getElementById('sheetPauseBtn').textContent = paused ? 'Resume auto-refresh' : 'Pause auto-refresh';
-            if (paused) {
-                setSheetStatus('Auto-refresh paused — edit the layout freely; click Resume to pull updates.');
-            } else {
-                setSheetStatus('Live • synced ' + new Date().toLocaleTimeString());
-                pollSheetOnce();   // pull immediately on resume
+            if (!paused) {
+                // Resume in sync order: ① drain queued WRITES first, ② then READ
+                // (the poll sees our own writes already landed), ③ re-anchor the
+                // 15s cadence + countdown.
+                (async () => {
+                    try { await sync.flush(); } catch (_) {}
+                    await pollSheetOnce();
+                    startSheetTimer();
+                    updatePauseBtn();
+                    updateSyncPill();
+                })();
             }
+            updatePauseBtn();
+            updateSyncPill();         // paused/live state shows on the pill
         }
 
         function stopSheetPolling() {
             if (sheetTimer) { clearInterval(sheetTimer); sheetTimer = null; }
+            if (pauseTicker) { clearInterval(pauseTicker); pauseTicker = null; }
             sheetCsvUrl = null;
             lastSheetText = null;
             sheetPaused = false;
+            readError = null;         // stale poll health — no poll to be unhealthy
+            sync.confirmed.clear();   // data source changing — stale skip cache
             setSheetConnected(false);
+            updateSyncPill();         // reflect the disconnect immediately
         }
 
         async function connectSheet() {
@@ -2203,10 +2294,13 @@
             setSheetStatus('Connecting…');
             try {
                 applySheetCsv(await fetchSheetCsv());
+                lastPollOkAt = Date.now();
+                readError = null;
                 document.getElementById('generatePdfBtn').disabled = false;
                 setSheetConnected(true);
                 setSheetPaused(false);
                 startSheetTimer();
+                setSheetStatus('Connected to the shared sheet — live status in the top-right pill.');
             } catch (err) {
                 sheetCsvUrl = null;
                 setSheetStatus('Connect failed: ' + (err.message || err) + ' — is the sheet shared “anyone with the link can view”?', true);
@@ -2419,50 +2513,210 @@
         const sync = {
             FLUSH_MS: 1500,
             RETRY_MS: 5000,
-            queue: new Map(),     // a1 -> { value, raw }
+            queue: new Map(),     // a1 -> { value, raw, echo }
+            confirmed: new Map(), // a1 -> last value successfully written (skip no-op rewrites)
             timer: null,
+            flushAt: 0,           // when the armed flush fires (drives the countdown)
+            ticker: null,
+            flashT: null,
             flushing: false,
-            enqueue(a1, value, raw) {
+            enqueue(a1, value, raw, echo) {
                 if (!a1) return;
-                this.queue.set(a1, { value: value, raw: raw });
+                // No-op skip: the sheet already holds exactly this value — cancel any
+                // queued write for the cell instead of re-sending it.
+                if (this.confirmed.get(a1) === value) {
+                    if (this.queue.delete(a1)) this.status();
+                    return;
+                }
+                this.queue.set(a1, { value: value, raw: raw, echo: echo });
                 this.schedule(this.FLUSH_MS);
                 this.status();
             },
             schedule(ms) {
                 if (this.timer) return;
+                this.flushAt = Date.now() + ms;
                 this.timer = setTimeout(() => { this.timer = null; this.flush(); }, ms);
+                this.startTicker();
+            },
+            // 250ms ticker drives the "💾 Saving N changes (Ns)…" countdown while
+            // anything is queued/in flight; stops itself when idle.
+            startTicker() {
+                if (this.ticker) return;
+                this.ticker = setInterval(() => {
+                    if (!this.queue.size && !this.flushing && !this.timer) {
+                        clearInterval(this.ticker); this.ticker = null; return;
+                    }
+                    if (!this.flashT) this.status();
+                }, 250);
             },
             async flush() {
                 if (this.flushing) { this.schedule(this.FLUSH_MS); return; }
+                // Paused = the WHOLE sync manager is frozen, writes included. Edits
+                // keep queuing (and keepalive still rescues them on tab close);
+                // resume drains the queue first, then reads.
+                if (sheetPaused) { this.status(); return; }
                 if (!this.queue.size || !canWriteSheet()) { this.status(); return; }
                 this.flushing = true;
                 const items = Array.from(this.queue.entries());
                 this.queue.clear();
-                this.status('Saving to sheet…');
+                this.status('💾 Saving…');
                 try {
                     const raws = items.filter(it => it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
                     const texts = items.filter(it => !it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
                     if (raws.length) await sheetsBatchPut(raws, 'RAW');
                     if (texts.length) await sheetsBatchPut(texts, 'USER_ENTERED');   // content cells: prices/numbers parse
-                    setGoogleStatus('Saved ' + items.length + ' cell(s) • ' + new Date().toLocaleTimeString());
+                    writeError = null;   // pill owns save state; googleStatus stays account-only
+                    // Remember what landed → future identical enqueues are skipped.
+                    items.forEach(it => this.confirmed.set(it[0], it[1].value));
+                    // Local echo: the confirmed write IS the sheet state now — settle
+                    // dirty flags immediately instead of waiting for the 15s poll
+                    // (also the only confirmation path while auto-refresh is paused).
+                    let echoed = false;
+                    items.forEach(it => {
+                        if (!it[1].echo) return;
+                        try { it[1].echo(it[1].value); echoed = true; }
+                        catch (err) { console.warn('[sync] echo failed', err); }
+                    });
+                    if (echoed) saveCardStore();
+                    // Our own write is the likeliest next poll delta — re-anchor the
+                    // read poll so it doesn't burn a fetch just to confirm it.
+                    if (sheetTimer) startSheetTimer();
+                    this.flash('✓ All changes saved');
                 } catch (e) {
                     // Re-queue everything that wasn't superseded meanwhile, retry later.
                     items.forEach(it => { if (!this.queue.has(it[0])) this.queue.set(it[0], it[1]); });
-                    setGoogleStatus('Save failed — retrying: ' + (e.message || e), true);
+                    writeError = e.message || String(e);
+                    console.warn('[card-printer] sheet save failed:', e);
                     this.schedule(this.RETRY_MS);
                 } finally {
                     this.flushing = false;
                     if (this.queue.size) this.schedule(this.FLUSH_MS);
-                    this.status();
+                    if (!this.flashT) this.status();
+                    updateSyncPill();
                 }
             },
+            // Brief "✓ Saved" confirmation on the designer badge, then back to normal.
+            flash(msg) {
+                setCalib('save', msg);
+                clearTimeout(this.flashT);
+                this.flashT = setTimeout(() => { this.flashT = null; this.status(); }, 2000);
+            },
             status(msg) {
-                setCalib('save', msg || (this.queue.size ? 'Saving… (' + this.queue.size + ' pending)' : null));
+                let text = msg;
+                if (!text && this.queue.size) {
+                    const nChanges = this.queue.size + ' change' + (this.queue.size === 1 ? '' : 's');
+                    if (sheetPaused) {
+                        text = '⏸ ' + nChanges + ' waiting — paused';
+                    } else {
+                        const s = Math.max(0, Math.ceil((this.flushAt - Date.now()) / 1000));
+                        text = '💾 Saving ' + nChanges + ' (' + s + 's)…';
+                    }
+                }
+                setCalib('save', text || null);
+            },
+            // Best-effort final save as the page closes: keepalive POSTs survive tab
+            // close (payloads are far below the 64KB keepalive cap). The queue is NOT
+            // cleared — if the user cancels the leave dialog, the normal flush
+            // re-sends the same values (idempotent).
+            flushKeepalive() {
+                if (!this.queue.size || !canWriteSheet()) return;
+                const items = Array.from(this.queue.entries());
+                const post = (data, vio) => fetch('https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values:batchUpdate', {
+                    method: 'POST',
+                    keepalive: true,
+                    headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ valueInputOption: vio, data: data.map(d => ({ range: d[0], values: [[d[1].value]] })) }),
+                }).catch(() => {});
+                const raws = items.filter(it => it[1].raw);
+                const texts = items.filter(it => !it[1].raw);
+                if (raws.length) post(raws, 'RAW');
+                if (texts.length) post(texts, 'USER_ENTERED');
             },
         };
-        // Don't silently drop queued writes on close.
+        // Final-save on close: fire a keepalive flush, and still warn — keepalive is
+        // best-effort (its response can't be observed once the page is gone).
         window.addEventListener('beforeunload', (e) => {
-            if (sync.queue.size || sync.flushing) { e.preventDefault(); e.returnValue = ''; }
+            if (!sync.queue.size && !sync.flushing) return;
+            try { sync.flushKeepalive(); } catch (_) {}
+            e.preventDefault(); e.returnValue = '';
+        });
+
+        // ===================== Unified sync pill =====================
+        // ONE always-visible surface for data in/out. Priority (top wins):
+        //   write error > read error > saving > just-saved > paused >
+        //   anonymous-with-local-edits > live.
+        // Detailed/setup messages keep their own surfaces: connect errors in
+        // section 1, account info next to sign-in, font/auto-flow chips + save
+        // countdown on the designer badge.
+        let lastPollOkAt = 0;     // last successful sheet read
+        let readError = null;     // poll failure message (null = healthy)
+        let writeError = null;    // flush failure message (null = healthy)
+        function anyLocalDirty() {
+            return templateDirty || (state.ids || []).some(id => cardDirty[id]);
+        }
+        // "Local preview" is a transient nudge, not a permanent banner: it shows for
+        // 3s after each anonymous edit, then the pill returns to the main live/poll
+        // state. Every new edit re-triggers it.
+        const LOCAL_HINT_MS = 3000;
+        let lastLocalEditAt = 0;
+        function noteLocalEdit() {
+            if (canWriteSheet()) return;
+            lastLocalEditAt = Date.now();
+            updateSyncPill();
+        }
+        function fmtAgo(ms) {
+            const s = Math.floor(ms / 1000);
+            if (s < 5) return 'just now';
+            if (s < 60) return s + 's ago';
+            return Math.floor(s / 60) + 'min ago';
+        }
+        function updateSyncPill() {
+            const pill = document.getElementById('syncPill');
+            if (!sheetCsvUrl) {
+                // No live sheet poll. If a sheet was in play this session, say so
+                // explicitly (click = reconnect); hide for file/sample sources.
+                if (gSpreadsheetId || lastPollOkAt) {
+                    pill.hidden = false;
+                    pill.className = 'sync-pill off';
+                    pill.textContent = '○ Disconnected — click to reconnect';
+                    pill.title = 'Click to reconnect to the sheet';
+                } else {
+                    pill.hidden = true;
+                }
+                return;
+            }
+            pill.hidden = false;
+            // Next auto-refresh, shown in poll-relevant states so you always know
+            // when the sheet will pull (the poll keeps running in local preview too).
+            const refreshIn = (!sheetPaused && sheetTimer)
+                ? ' · ↻ ' + Math.max(0, Math.ceil((nextPollAt - Date.now()) / 1000)) + 's'
+                : '';
+            let cls, text;
+            const nChanges = sync.queue.size + ' change' + (sync.queue.size === 1 ? '' : 's');
+            if (writeError) { cls = 'error'; text = '⚠ Save failed — retrying'; }
+            else if (readError) { cls = 'error'; text = '⚠ Can’t reach the sheet — retrying' + refreshIn; }
+            else if (sync.flushing) { cls = 'saving'; text = '💾 Saving…'; }
+            else if (sheetPaused && sync.queue.size) { cls = 'paused'; text = '⏸ Paused — ' + nChanges + ' waiting'; }
+            else if (sync.queue.size) {
+                const s = Math.max(0, Math.ceil((sync.flushAt - Date.now()) / 1000));
+                cls = 'saving';
+                text = '💾 Saving ' + nChanges + ' (' + s + 's)…';
+            }
+            else if (sync.flashT) { cls = 'saved'; text = '✓ All changes saved'; }
+            else if (sheetPaused) { cls = 'paused'; text = '⏸ Paused — click to resume'; }
+            else if (!canWriteSheet() && anyLocalDirty() && Date.now() - lastLocalEditAt < LOCAL_HINT_MS) { cls = 'local'; text = '✏️ Local preview — sign in to save' + refreshIn; }
+            else { cls = 'live'; text = '🟢 Live — updated ' + (lastPollOkAt ? fmtAgo(Date.now() - lastPollOkAt) : '…') + refreshIn; }
+            pill.className = 'sync-pill ' + cls;
+            pill.textContent = text;
+            pill.title = sheetPaused ? 'Click to resume auto-refresh' : 'Click to pause auto-refresh';
+        }
+        setInterval(updateSyncPill, 500);
+        // The pill doubles as the pause/resume toggle — always reachable while
+        // scrolled away from the section-1 pause button. When disconnected it
+        // reconnects instead (the URL field still holds the sheet link).
+        document.getElementById('syncPill').addEventListener('click', () => {
+            if (!sheetCsvUrl) { connectSheet(); return; }
+            setSheetPaused(!sheetPaused);
         });
 
         // Queue a single content cell write.
@@ -2481,13 +2735,30 @@
             if (!row || state.metaCol < 0) return null;
             return quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + row;
         }
+        // Local-echo callback for a card's metaData write: on flush success the
+        // confirmed value becomes the in-memory sheet state and the dirty flag
+        // settles immediately (no 15s poll wait; works while paused too).
+        function metaEchoFor(id) {
+            return (val) => {
+                const i = (state.ids || []).indexOf(id);
+                if (i < 0) return;
+                sheetCardMeta[i] = parseMetaCell(val);
+                settleDirty(id, i);
+            };
+        }
+        // Same for the template (t0) row: adopt the confirmed write as the sheet
+        // template — clears templateDirty / sessionTemplateEdited when it matches.
+        function templateEcho(val) {
+            const meta = parseMetaCell(val);
+            if (isTemplateMeta(meta)) adoptSheetTemplate(meta.config);
+        }
         function queueCardMeta(id) {
             if (!canWriteSheet() || state.metaCol < 0) return;
             const i = (state.ids || []).indexOf(id);
             if (i < 0) return;
             const a1 = metaA1(i);
             if (!a1) { setGoogleStatus('Could not locate this card’s sheet row to save the layout.', true); return; }
-            sync.enqueue(a1, cardMetaJson(cardConfig[id]), true);
+            sync.enqueue(a1, cardMetaJson(cardConfig[id]), true, metaEchoFor(id));
         }
         // Resolve (or reserve, at the bottom of the tab) the template row — a row whose
         // title stays empty so it never becomes a card.
@@ -2507,13 +2778,13 @@
         async function queueTemplate() {
             if (!canWriteSheet() || state.metaCol < 0) return;
             await resolveTemplateRow();
-            sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+            sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true, templateEcho);
         }
         // Re-enqueue every card's metaData cell — used only by the explicit
         // "Reset ALL cards" action, which intentionally rewrites the whole column.
         function queueAllCardMetas() {
             if (!canWriteSheet() || state.metaCol < 0) return;
-            (state.ids || []).forEach((id, i) => { const a1 = metaA1(i); if (a1) sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); });
+            (state.ids || []).forEach((id, i) => { const a1 = metaA1(i); if (a1) sync.enqueue(a1, cardMetaJson(cardConfig[id]), true, metaEchoFor(id)); });
         }
         // On sign-in: fill the gaps. Every card whose metaData cell is EMPTY gets its
         // current config queued (this browser's local tweak if it had one, otherwise
@@ -2529,11 +2800,11 @@
             (state.ids || []).forEach((id, i) => {
                 const a1 = metaA1(i);
                 if (!a1) return;
-                if (!sheetCardMeta[i]) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); n++; }
+                if (!sheetCardMeta[i]) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true, metaEchoFor(id)); n++; }
                 else if (configMissingElems(cardMetaConfig(sheetCardMeta[i]))) {
                     // baseConfigFor = the sheet's own config completed over the template
                     // (NOT this browser's local tweaks — those queue on their own edits).
-                    sync.enqueue(a1, cardMetaJson(baseConfigFor(i)), true); n++;
+                    sync.enqueue(a1, cardMetaJson(baseConfigFor(i)), true, metaEchoFor(id)); n++;
                 }
             });
             // Write t0 when: the row is missing entirely, its cell is empty (no
@@ -2541,7 +2812,7 @@
             // (missing elements / wrong type marker).
             if (!state.templateRowNum || !sheetTemplate || templateRowNeedsRewrite) {
                 await resolveTemplateRow();
-                sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+                sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true, templateEcho);
                 templateRowNeedsRewrite = false;
                 n++;
             }
