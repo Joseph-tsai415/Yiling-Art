@@ -1001,9 +1001,12 @@
                 none.textContent = '— none —';
                 select.appendChild(none);
                 state.headers.forEach((h, i) => {
+                    if (i === state.metaCol) return;   // reserved for layout configs — never a card field
                     const opt = document.createElement('option');
                     opt.value = i;
-                    opt.textContent = h;
+                    // gviz folds banner/template rows into header names — keep the
+                    // dropdown readable by truncating long labels.
+                    opt.textContent = h.length > 42 ? h.slice(0, 42) + '…' : (h || '(column ' + colLetter(i) + ')');
                     select.appendChild(opt);
                 });
                 select.value = state.map[f.id];
@@ -2214,6 +2217,13 @@
                 const raw = vals.values || [];
                 state.rawRowCount = raw.length;
                 state.sheetRowNums = state.rows.map(r => {
+                    // Prefer the id column (s1, s2, …) — stable across renames and
+                    // duplicate titles. Fall back to title matching for rows without one.
+                    const id = state.idCol >= 0 ? String(r[state.idCol] || '').trim() : '';
+                    if (id) {
+                        const idx = raw.findIndex(rr => String((rr && rr[state.idCol]) || '').trim() === id);
+                        if (idx >= 0) return idx + 1;
+                    }
                     const title = String(r[titleCol] || '').trim();
                     if (!title) return null;
                     const idx = raw.findIndex(rr => String((rr && rr[titleCol]) || '').trim() === title);
