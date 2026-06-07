@@ -504,6 +504,32 @@
                 <input type="text" id="cardSearch" placeholder="Search cards — id, name, or any content…"
                        style="flex:1; min-width:220px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;">
                 <select id="cardPicker" style="flex:2; min-width:240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;"></select>
+                <button id="addCardBtn" class="secondary" type="button" title="Add a new product row to the sheet (sign in required)">＋ Add card</button>
+                <button id="deleteCardBtn" class="secondary" type="button" title="Delete this card's row from the sheet (sign in required)">🗑 Delete card</button>
+            </div>
+            <!-- Add card / manage sections — structural sheet edits, signed-in only. -->
+            <div id="cardMgmt" hidden style="margin-bottom: 14px; padding: 12px 14px; background: var(--input-bg); border: 1px solid var(--border-subtle); border-radius: 8px;">
+                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+                    <div class="field" style="min-width:190px;">
+                        <label for="mgmtSection">Section (legend)</label>
+                        <select id="mgmtSection"></select>
+                    </div>
+                    <div class="field" id="mgmtNewSectionWrap" hidden style="min-width:170px;">
+                        <label for="mgmtNewSection">New section name</label>
+                        <input type="text" id="mgmtNewSection" placeholder="e.g.（十）新系列">
+                    </div>
+                    <div class="field" style="flex:1; min-width:190px;">
+                        <label for="mgmtTitle">mamalili品名 — 品項 follows this</label>
+                        <input type="text" id="mgmtTitle" placeholder="新品名…">
+                    </div>
+                    <div class="field" style="width:88px;">
+                        <label for="mgmtId">id</label>
+                        <input type="text" id="mgmtId" placeholder="auto">
+                    </div>
+                    <button id="mgmtCreateBtn" type="button">Create card</button>
+                    <button id="mgmtDeleteSectionBtn" class="secondary" type="button" title="Deletes the selected section's legend row — only when it has no cards">🗑 Delete empty section</button>
+                </div>
+                <div class="status" id="mgmtStatus"></div>
             </div>
             <div class="designer-grid">
                 <div class="card-editor-wrap">
@@ -2684,6 +2710,16 @@
                         if (meta && isTemplateMeta(parseMetaCell(meta))) state.templateRowNum = idx + 1;
                     });
                 }
+                // Section (legend) rows: label -> 1-based sheet row. Used by the card
+                // management UI to insert new cards inside a section and to delete
+                // empty sections. Same banner test as the gviz path.
+                state.sectionRows = {};
+                raw.forEach((rr, idx) => {
+                    const padded = state.headers.map((_, i) => String((rr && rr[i]) || ''));
+                    if (isBannerRow(padded) && String(padded[state.idCol]).trim() !== TEMPLATE_ROW_ID) {
+                        state.sectionRows[String(padded[state.idCol]).trim()] = idx + 1;
+                    }
+                });
             } catch (e) {
                 console.warn('[card-printer] buildSheetRowIndex failed', e);
             }
@@ -3079,6 +3115,233 @@
                 setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty/outdated metaData cells…');
             }
         }
+        // ===================== Card & section management =====================
+        // Structural sheet edits (insert/delete rows) — signed-in only. Every flow:
+        //   1. drain the write queue (row shifts would invalidate queued A1 ranges),
+        //   2. ONE spreadsheets.batchUpdate (insert/delete row),
+        //   3. direct cell writes for the new row, re-anchor rows, refresh the poll.
+        // sync.confirmed is cleared after any structural change — its A1 keys point
+        // at shifted cells and must not suppress future writes.
+        async function sheetsStructural(requests) {
+            const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + ':batchUpdate';
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ requests: requests }),
+            });
+            if (!resp.ok) { const t = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + t); }
+            return resp.json();
+        }
+        // Drain the queue NOW (before structural edits). Throws if it can't.
+        async function syncDrain() {
+            clearTimeout(sync.timer); sync.timer = null;
+            for (let tries = 0; (sync.queue.size || sync.flushing) && tries < 10; tries++) {
+                if (!sync.flushing) await sync.flush();
+                else await new Promise(r => setTimeout(r, 300));
+            }
+            if (sync.queue.size || sync.flushing) throw new Error('pending saves could not be flushed');
+        }
+        function mgmtMsg(msg, isError) {
+            const el = document.getElementById('mgmtStatus');
+            el.textContent = msg || '';
+            el.classList.toggle('error', !!isError);
+        }
+        // Guard shared by all management actions.
+        function mgmtReady() {
+            if (!canWriteSheet()) { mgmtMsg('Sign in first — adding/deleting cards edits the Google Sheet.', true); return false; }
+            if (sheetPaused) { mgmtMsg('Resume auto-refresh first (sync is paused).', true); return false; }
+            return true;
+        }
+        // Ordered section labels: those that have cards (in sheet order) plus any
+        // empty legend rows found below the t0/config zone.
+        function sectionLabels() {
+            const seen = [];
+            (state.sections || []).forEach(s => { if (s && seen.indexOf(s) < 0) seen.push(s); });
+            Object.keys(state.sectionRows || {}).forEach(label => {
+                if (seen.indexOf(label) < 0 && (!state.templateRowNum || state.sectionRows[label] > state.templateRowNum)) seen.push(label);
+            });
+            return seen;
+        }
+        // Sheet row AFTER which a new card in `label` should be inserted: below the
+        // section's last card, or directly below its legend row when empty.
+        function sectionInsertRow(label) {
+            let last = null;
+            (state.sections || []).forEach((s, i) => {
+                const rn = state.sheetRowNums && state.sheetRowNums[i];
+                if (s === label && rn) last = Math.max(last || 0, rn);
+            });
+            if (last) return last;
+            if (state.sectionRows && state.sectionRows[label]) return state.sectionRows[label];
+            return state.rawRowCount || 0;
+        }
+        // Suggest the next id following the section's pattern (ch1…ch7 → ch8). The
+        // max number is taken across the WHOLE sheet so a prefix never collides.
+        function suggestCardId(label) {
+            if (state.idCol < 0) return '';
+            const counts = {};
+            let prefix = '';
+            (state.sections || []).forEach((s, i) => {
+                if (s !== label) return;
+                const m = String(state.rows[i][state.idCol] || '').trim().match(/^([A-Za-z]+)(\d+)$/);
+                if (!m) return;
+                counts[m[1]] = (counts[m[1]] || 0) + 1;
+                if (!prefix || counts[m[1]] > counts[prefix]) prefix = m[1];
+            });
+            if (!prefix) return '';
+            let maxN = 0;
+            (state.rows || []).forEach(r => {
+                const m = String(r[state.idCol] || '').trim().match(/^([A-Za-z]+)(\d+)$/);
+                if (m && m[1] === prefix) maxN = Math.max(maxN, parseInt(m[2], 10));
+            });
+            return prefix + (maxN + 1);
+        }
+        function refreshMgmtUI() {
+            const sel = document.getElementById('mgmtSection');
+            const current = sel.value;
+            sel.innerHTML = '';
+            sectionLabels().forEach(label => {
+                const o = document.createElement('option');
+                o.value = label; o.textContent = label;
+                sel.appendChild(o);
+            });
+            const nu = document.createElement('option');
+            nu.value = '__new__'; nu.textContent = '＋ New section…';
+            sel.appendChild(nu);
+            if (current && Array.prototype.some.call(sel.options, o => o.value === current)) sel.value = current;
+            onMgmtSectionChange();
+        }
+        function onMgmtSectionChange() {
+            const sel = document.getElementById('mgmtSection');
+            const isNew = sel.value === '__new__';
+            document.getElementById('mgmtNewSectionWrap').hidden = !isNew;
+            const idInput = document.getElementById('mgmtId');
+            idInput.placeholder = (!isNew && suggestCardId(sel.value)) || 'e.g. x1';
+        }
+        async function createCard() {
+            if (!mgmtReady()) return;
+            const sel = document.getElementById('mgmtSection');
+            const isNew = sel.value === '__new__';
+            const newName = document.getElementById('mgmtNewSection').value.trim();
+            const title = document.getElementById('mgmtTitle').value.trim();
+            const id = document.getElementById('mgmtId').value.trim() || (!isNew && suggestCardId(sel.value)) || '';
+            if (isNew && !newName) { mgmtMsg('Enter the new section name.', true); return; }
+            if (!title) { mgmtMsg('Enter the mamalili品名.', true); return; }
+            if (!id) { mgmtMsg('Enter an id (e.g. x1) — this section has no existing id pattern to follow.', true); return; }
+            if (id === TEMPLATE_ROW_ID || (state.idCol >= 0 && (state.rows || []).some(r => String(r[state.idCol] || '').trim() === id))) {
+                mgmtMsg('id “' + id + '” is already taken.', true); return;
+            }
+            const btn = document.getElementById('mgmtCreateBtn');
+            btn.disabled = true;
+            try {
+                mgmtMsg('Saving pending changes…');
+                await syncDrain();
+                await buildSheetRowIndex();   // fresh row anchors
+                let afterRow;
+                if (isNew) {
+                    // New legend row appended below the last data row, card goes under it.
+                    const legendRow = (state.rawRowCount || 0) + 1;
+                    await sheetsBatchPut([{ range: quoteTab(gTabTitle) + '!' + colLetter(state.idCol) + legendRow, value: newName }], 'RAW');
+                    state.sectionRows[newName] = legendRow;
+                    state.rawRowCount = legendRow;
+                    afterRow = legendRow;
+                } else {
+                    afterRow = sectionInsertRow(sel.value);
+                }
+                mgmtMsg('Inserting row…');
+                await sheetsStructural([{ insertDimension: {
+                    range: { sheetId: gTabId, dimension: 'ROWS', startIndex: afterRow, endIndex: afterRow + 1 },
+                    inheritFromBefore: true,
+                } }]);
+                sync.confirmed.clear();   // A1 keys below the insert have shifted
+                const row = afterRow + 1;
+                const cells = [];
+                const put = (col, val) => { if (col >= 0 && val) cells.push({ range: quoteTab(gTabTitle) + '!' + colLetter(col) + row, value: val }); };
+                put(state.idCol, id);
+                put(state.itemCol, title);                                  // 品項 follows mamalili品名
+                put(state.map.title, title);
+                put(state.metaCol, cardMetaJson(clone(templateConfig)));    // starts on the shared template layout
+                await sheetsBatchPut(cells, 'RAW');
+                await buildSheetRowIndex();
+                await pollSheetOnce();
+                // Focus the new card if the refresh already picked it up.
+                const idx = (state.rows || []).findIndex(r => state.idCol >= 0 && String(r[state.idCol] || '').trim() === id);
+                if (idx >= 0) { activeCardIndex = idx; rebuildCardPicker(); renderEditor(); renderContentInputs(); }
+                document.getElementById('mgmtTitle').value = '';
+                document.getElementById('mgmtId').value = '';
+                refreshMgmtUI();
+                mgmtMsg('Created “' + title + '” (' + id + ') ✓ — fill the other fields in the Content panel below.');
+            } catch (e) {
+                mgmtMsg('Create failed: ' + (e.message || e), true);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        async function deleteActiveCard() {
+            if (!mgmtReady()) return;
+            const i = activeCardIndex;
+            const row = state.sheetRowNums && state.sheetRowNums[i];
+            if (!row) { mgmtMsg('Could not locate this card’s sheet row.', true); return; }
+            if (!confirm('Delete “' + cardLabel(i) + '” PERMANENTLY?\n\nThis removes row ' + row + ' from the Google Sheet for everyone.')) return;
+            const btn = document.getElementById('deleteCardBtn');
+            btn.disabled = true;
+            try {
+                mgmtMsg('Saving pending changes…');
+                await syncDrain();
+                mgmtMsg('Deleting row ' + row + '…');
+                await sheetsStructural([{ deleteDimension: {
+                    range: { sheetId: gTabId, dimension: 'ROWS', startIndex: row - 1, endIndex: row },
+                } }]);
+                sync.confirmed.clear();
+                await buildSheetRowIndex();
+                await pollSheetOnce();
+                refreshMgmtUI();
+                mgmtMsg('Card deleted ✓');
+            } catch (e) {
+                mgmtMsg('Delete failed: ' + (e.message || e), true);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        async function deleteEmptySection() {
+            if (!mgmtReady()) return;
+            const sel = document.getElementById('mgmtSection');
+            const label = sel.value;
+            if (!label || label === '__new__') { mgmtMsg('Pick the section to delete.', true); return; }
+            if ((state.sections || []).some(s => s === label)) {
+                mgmtMsg('“' + label + '” still has cards — delete or move them first.', true); return;
+            }
+            const row = state.sectionRows && state.sectionRows[label];
+            if (!row) { mgmtMsg('Could not locate that section’s legend row.', true); return; }
+            if (!confirm('Delete the empty section “' + label + '” (row ' + row + ') from the Google Sheet?')) return;
+            try {
+                mgmtMsg('Saving pending changes…');
+                await syncDrain();
+                await sheetsStructural([{ deleteDimension: {
+                    range: { sheetId: gTabId, dimension: 'ROWS', startIndex: row - 1, endIndex: row },
+                } }]);
+                sync.confirmed.clear();
+                await buildSheetRowIndex();
+                await pollSheetOnce();
+                refreshMgmtUI();
+                mgmtMsg('Section deleted ✓');
+            } catch (e) {
+                mgmtMsg('Delete failed: ' + (e.message || e), true);
+            }
+        }
+        document.getElementById('addCardBtn').addEventListener('click', () => {
+            const box = document.getElementById('cardMgmt');
+            box.hidden = !box.hidden;
+            if (!box.hidden) {
+                if (!canWriteSheet()) mgmtMsg('Sign in first — adding/deleting cards edits the Google Sheet.', true);
+                else mgmtMsg('');
+                refreshMgmtUI();
+            }
+        });
+        document.getElementById('deleteCardBtn').addEventListener('click', deleteActiveCard);
+        document.getElementById('mgmtSection').addEventListener('change', onMgmtSectionChange);
+        document.getElementById('mgmtCreateBtn').addEventListener('click', createCard);
+        document.getElementById('mgmtDeleteSectionBtn').addEventListener('click', deleteEmptySection);
+
         document.getElementById('googlePickBtn').addEventListener('click', googleSignInAndPick);
         document.getElementById('googleTab').addEventListener('change', (e) => {
             const tab = gTabs.find(t => String(t.sheetId) === e.target.value);
