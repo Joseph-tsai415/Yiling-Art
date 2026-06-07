@@ -495,41 +495,52 @@
             </div>
         </section>
 
-        <section class="panel" id="designerPanel" hidden>
-            <h2>3. Card designer</h2>
+        <section class="panel" id="mgmtPanel" hidden>
+            <h2>3. Card management — add / remove cards &amp; sections</h2>
             <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
-                Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card, or the shared <strong>template (t0)</strong> — template edits save only to the t0 row and never overwrite a card’s own saved layout (cards without one follow the template). Every edit saves to the sheet’s <code>metaData</code> column (shared with everyone). <strong>Editing requires sign-in</strong> — without it the designer is view-only (browsing, selecting and printing stay open).
+                Adds or removes rows in the Google Sheet itself — sign in required. New cards are inserted at the end of their section (legend) with the id following the section’s pattern, 品項 mirrors mamalili品名, and the layout starts from the shared template.
+            </p>
+            <!-- Add card -->
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+                <div class="field" style="min-width:190px;">
+                    <label for="mgmtSection">Section (legend)</label>
+                    <select id="mgmtSection"></select>
+                </div>
+                <div class="field" id="mgmtNewSectionWrap" hidden style="min-width:170px;">
+                    <label for="mgmtNewSection">New section name</label>
+                    <input type="text" id="mgmtNewSection" placeholder="e.g.（十）新系列">
+                </div>
+                <div class="field" style="flex:1; min-width:190px;">
+                    <label for="mgmtTitle">mamalili品名 — 品項 follows this</label>
+                    <input type="text" id="mgmtTitle" placeholder="新品名…">
+                </div>
+                <div class="field" style="width:88px;">
+                    <label for="mgmtId">id</label>
+                    <input type="text" id="mgmtId" placeholder="auto">
+                </div>
+                <button id="mgmtCreateBtn" type="button">＋ Create card</button>
+            </div>
+            <!-- Delete card / section -->
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+                <div class="field" style="flex:1; min-width:240px;">
+                    <label for="mgmtDeleteCard">Card to delete</label>
+                    <select id="mgmtDeleteCard"></select>
+                </div>
+                <button id="deleteCardBtn" class="secondary" type="button" title="Deletes this card's row from the sheet — permanent">🗑 Delete card</button>
+                <button id="mgmtDeleteSectionBtn" class="secondary" type="button" title="Deletes the selected section's legend row (picker above) — only when it has no cards">🗑 Delete empty section</button>
+            </div>
+            <div class="status" id="mgmtStatus"></div>
+        </section>
+
+        <section class="panel" id="designerPanel" hidden>
+            <h2>4. Card designer</h2>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+                Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card, or the shared <strong>template (t0)</strong> — template edits save only to the t0 row and never overwrite a card’s own saved layout (cards without one follow the template). Signed in: every layout edit saves to the sheet’s <code>metaData</code> column (shared with everyone). Not signed in: edits stay in this browser only and the 15s refresh won’t clobber them.
             </p>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 14px;">
                 <input type="text" id="cardSearch" placeholder="Search cards — id, name, or any content…"
                        style="flex:1; min-width:220px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;">
                 <select id="cardPicker" style="flex:2; min-width:240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;"></select>
-                <button id="addCardBtn" class="secondary" type="button" title="Add a new product row to the sheet (sign in required)">＋ Add card</button>
-                <button id="deleteCardBtn" class="secondary" type="button" title="Delete this card's row from the sheet (sign in required)">🗑 Delete card</button>
-            </div>
-            <!-- Add card / manage sections — structural sheet edits, signed-in only. -->
-            <div id="cardMgmt" hidden style="margin-bottom: 14px; padding: 12px 14px; background: var(--input-bg); border: 1px solid var(--border-subtle); border-radius: 8px;">
-                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
-                    <div class="field" style="min-width:190px;">
-                        <label for="mgmtSection">Section (legend)</label>
-                        <select id="mgmtSection"></select>
-                    </div>
-                    <div class="field" id="mgmtNewSectionWrap" hidden style="min-width:170px;">
-                        <label for="mgmtNewSection">New section name</label>
-                        <input type="text" id="mgmtNewSection" placeholder="e.g.（十）新系列">
-                    </div>
-                    <div class="field" style="flex:1; min-width:190px;">
-                        <label for="mgmtTitle">mamalili品名 — 品項 follows this</label>
-                        <input type="text" id="mgmtTitle" placeholder="新品名…">
-                    </div>
-                    <div class="field" style="width:88px;">
-                        <label for="mgmtId">id</label>
-                        <input type="text" id="mgmtId" placeholder="auto">
-                    </div>
-                    <button id="mgmtCreateBtn" type="button">Create card</button>
-                    <button id="mgmtDeleteSectionBtn" class="secondary" type="button" title="Deletes the selected section's legend row — only when it has no cards">🗑 Delete empty section</button>
-                </div>
-                <div class="status" id="mgmtStatus"></div>
             </div>
             <div class="designer-grid">
                 <div class="card-editor-wrap">
@@ -596,7 +607,7 @@
 
         <section class="panel" id="selectorPanel" hidden>
             <div class="preview-meta">
-                <h2 style="margin: 0;">4. Select cards to print</h2>
+                <h2 style="margin: 0;">5. Select cards to print</h2>
                 <div class="summary" id="selectSummary"></div>
             </div>
             <div class="row" style="margin-top: 0; margin-bottom: 12px;">
@@ -608,7 +619,7 @@
 
         <section class="panel">
             <div class="preview-meta">
-                <h2 style="margin: 0;">5. Sheet preview (PDF)</h2>
+                <h2 style="margin: 0;">6. Sheet preview (PDF)</h2>
                 <div class="summary" id="layoutSummary">Cards: 0 · Pages: 0</div>
             </div>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
@@ -1825,7 +1836,6 @@
 
         function startDrag(e) {
             e.preventDefault();
-            if (!canEdit()) return;   // view-only until signed in
             const id = e.currentTarget.dataset.id;
             selectElem(id);
             const c = activeCfg()[id];
@@ -2071,6 +2081,8 @@
             if (activeCardIndex >= state.rows.length) activeCardIndex = 0;
             rebuildCardPicker();
             document.getElementById('designerPanel').hidden = false;
+            document.getElementById('mgmtPanel').hidden = false;
+            refreshMgmtUI();
             renderEditor();
             renderContentInputs();
             renderSelector();
@@ -2085,12 +2097,11 @@
             Array.prototype.slice.call(wrap.querySelectorAll('[data-field]')).forEach(inp => {
                 if (document.activeElement === inp) return;   // don't clobber while typing
                 const col = state.map[inp.dataset.field];
-                inp.disabled = col < 0 || !canEdit();
+                inp.disabled = col < 0;
                 inp.value = (col >= 0 && state.rows[activeCardIndex]) ? String(state.rows[activeCardIndex][col] || '') : '';
             });
         }
         function onContentInput(e) {
-            if (!canEdit()) return;   // view-only until signed in
             const inp = e.target;
             const field = inp.dataset.field;
             const col = state.map[field];
@@ -2113,6 +2124,9 @@
                 sel + ' of ' + state.rows.length + ' selected · ' + total + ' card' + (total === 1 ? '' : 's') + ' to print';
         }
         function renderSelector() {
+            // Data may have changed (poll/add/delete) — keep the management panel's
+            // section + delete-card pickers in step. Idempotent; preserves selection.
+            if (!document.getElementById('mgmtPanel').hidden) refreshMgmtUI();
             const list = document.getElementById('cardSelectList');
             list.innerHTML = '';
             let lastSection = null;
@@ -3000,28 +3014,7 @@
             pill.textContent = text;
             pill.title = sheetPaused ? 'Click to resume auto-refresh' : 'Click to pause auto-refresh';
         }
-        // ---- Edit gating ----
-        // Viewing, selecting and printing are open to everyone; ANY editing (layout
-        // drag/props, content fields, add/delete card or section, reset) requires
-        // sign-in. ?dev=1 unlocks offline editing for local development. The gate
-        // re-evaluates on the same 500ms tick as the pill, so sign-in, sign-out and
-        // token expiry flip it automatically.
-        function canEdit() { return DEV_MODE || canWriteSheet(); }
-        const EDIT_CONTROL_IDS = ['addCardBtn', 'deleteCardBtn', 'designModeSelect',
-            'propX', 'propY', 'propSize', 'propLineHeight', 'propStroke', 'propWrap', 'propLegend',
-            'fontSearch', 'propFont', 'propWeight', 'resetLayoutBtn'];
-        let _lastEditGate = null;
-        function updateEditGates() {
-            const on = canEdit();
-            if (on === _lastEditGate) return;
-            _lastEditGate = on;
-            EDIT_CONTROL_IDS.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = !on; });
-            if (!on) document.getElementById('cardMgmt').hidden = true;   // close the add-card form
-            renderContentInputs();                                        // re-disable content fields
-            setCalib('gate', on ? null : '🔒 View only — sign in to edit');
-        }
-        setInterval(() => { updateSyncPill(); updateEditGates(); }, 500);
-        updateEditGates();
+        setInterval(updateSyncPill, 500);
         // The pill doubles as the pause/resume toggle — always reachable while
         // scrolled away from the section-1 pause button. When disconnected it
         // reconnects instead (the URL field still holds the sheet link).
@@ -3232,6 +3225,17 @@
             sel.appendChild(nu);
             if (current && Array.prototype.some.call(sel.options, o => o.value === current)) sel.value = current;
             onMgmtSectionChange();
+            // Delete-card picker: every card, in sheet order (independent of the
+            // designer's active card).
+            const del = document.getElementById('mgmtDeleteCard');
+            const delCurrent = del.value;
+            del.innerHTML = '';
+            (state.rows || []).forEach((_, i) => {
+                const o = document.createElement('option');
+                o.value = i; o.textContent = cardLabel(i);
+                del.appendChild(o);
+            });
+            if (delCurrent && Array.prototype.some.call(del.options, o => o.value === delCurrent)) del.value = delCurrent;
         }
         function onMgmtSectionChange() {
             const sel = document.getElementById('mgmtSection');
@@ -3299,9 +3303,10 @@
                 btn.disabled = false;
             }
         }
-        async function deleteActiveCard() {
+        async function deleteSelectedCard() {
             if (!mgmtReady()) return;
-            const i = activeCardIndex;
+            const i = parseInt(document.getElementById('mgmtDeleteCard').value, 10);
+            if (isNaN(i) || !state.rows[i]) { mgmtMsg('Pick the card to delete.', true); return; }
             const row = state.sheetRowNums && state.sheetRowNums[i];
             if (!row) { mgmtMsg('Could not locate this card’s sheet row.', true); return; }
             if (!confirm('Delete “' + cardLabel(i) + '” PERMANENTLY?\n\nThis removes row ' + row + ' from the Google Sheet for everyone.')) return;
@@ -3351,16 +3356,7 @@
                 mgmtMsg('Delete failed: ' + (e.message || e), true);
             }
         }
-        document.getElementById('addCardBtn').addEventListener('click', () => {
-            const box = document.getElementById('cardMgmt');
-            box.hidden = !box.hidden;
-            if (!box.hidden) {
-                if (!canWriteSheet()) mgmtMsg('Sign in first — adding/deleting cards edits the Google Sheet.', true);
-                else mgmtMsg('');
-                refreshMgmtUI();
-            }
-        });
-        document.getElementById('deleteCardBtn').addEventListener('click', deleteActiveCard);
+        document.getElementById('deleteCardBtn').addEventListener('click', deleteSelectedCard);
         document.getElementById('mgmtSection').addEventListener('change', onMgmtSectionChange);
         document.getElementById('mgmtCreateBtn').addEventListener('click', createCard);
         document.getElementById('mgmtDeleteSectionBtn').addEventListener('click', deleteEmptySection);
