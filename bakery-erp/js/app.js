@@ -50,6 +50,7 @@ class Component extends DCLogic {
     import('./db.js').then(m => {
       this.db = new m.DB();
       this.db.onRemote = (ok, msg) => { if (!ok && msg) this.notify('⚠ ' + msg); };
+      this.db.onAuthFail = () => this.doLogout('⚠ 登入已過期,請重新登入');
       const c = this.db.cfg || {};
       this.setState({
         ready: true,
@@ -59,22 +60,79 @@ class Component extends DCLogic {
         gCid: c.clientId || this.DEF.clientId
       });
       this.prunePlan();
-      if (this.db.mode === 'cloud') {
-        this.notify('☁ 雲端模式 — 正在從 Google Sheet 同步…');
-        this.db.pullAll()
-          .then(async missing => {
-            // Sheet 還沒建表 → 自動跑 setup 再拉一次
-            if (missing.length && this.db.cfg.kind === 'gas') {
-              // migrate 只補缺分頁/欄位、保留資料(setup 會清空,絕不自動跑)
-              this.notify('Sheet 缺分頁,自動補建中(保留現有資料)…');
-              try { await this.db.api('action=migrate'); missing = await this.db.pullAll(); } catch (e2) { }
-            }
-            this.prunePlan();
-            this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 後端可能是 v1 舊版:重貼 apps-script v2 → 執行 setup → 部署新版本' : '✓ 已載入 Google Sheet 最新資料,每筆過帳將即時同步');
-          })
-          .catch(() => this.notify('✕ Sheet 同步失敗,先用本地快取(到「資料連線」檢查)'));
-      }
+      this.initAuth();
     }).catch(e => console.error('db load failed', e));
+  }
+
+  // ── 登入閘門(Phase 1:Google 登入 + email 名單)──
+  // 啟用條件:方案 B 雲端模式 + 有 OAuth Client ID;本地示範模式(無連線設定)不需登入。
+  // 名單驗證在 Apps Script 後端(user_account 分頁),前端閘門只是 UX — 沒 token 後端一律拒絕。
+  authRequired() { return !!(this.db && this.db.mode === 'cloud' && this.db.cfg.kind === 'gas' && this.db.cfg.url && this.DEF.clientId); }
+  initAuth() {
+    if (!this.authRequired()) { this.setState({ authState: 'off' }); this.startCloud(); return; }
+    const a = this.db.getAuth();
+    if (a && a.token) {
+      this.setState({ authState: 'checking' });
+      this.db.whoami()
+        .then(j => {
+          if (j && j.ok) { this.setState({ authState: 'ok', authName: a.name || j.name || '', authEmail: a.email || j.email || '', authRole: j.role || a.role || '' }); this.startCloud(); }
+          else { this.db.clearAuth(); this.setState({ authState: 'login' }); }
+        })
+        .catch(() => { this.setState({ authState: 'login' }); this.notify('✕ 連不上登入伺服器 — 請檢查網路後重試'); });
+    } else this.setState({ authState: 'login' });
+  }
+  startCloud() {
+    if (!this.db || this.db.mode !== 'cloud') return;
+    this.notify('☁ 雲端模式 — 正在從 Google Sheet 同步…');
+    this.db.pullAll()
+      .then(async missing => {
+        // Sheet 還沒建表 → 自動補建再拉一次(migrate 保留資料;setup 會清空,絕不自動跑)
+        if (missing.length && this.db.cfg.kind === 'gas') {
+          this.notify('Sheet 缺分頁,自動補建中(保留現有資料)…');
+          try { await this.db.api('action=migrate'); missing = await this.db.pullAll(); } catch (e2) { }
+        }
+        this.prunePlan();
+        this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 後端可能是舊版:重貼最新 apps-script → migrate → 部署新版本' : '✓ 已載入 Google Sheet 最新資料,每筆過帳將即時同步');
+      })
+      .catch(() => this.notify('✕ Sheet 同步失敗,先用本地快取(到「資料連線」檢查)'));
+  }
+  // Google Sign-In 按鈕:GIS 腳本非同步載入 → 輪詢到可用才 render;morph-skip 保住注入的 iframe
+  mountGsi(el) {
+    if (el) this._gsiEl = el;
+    if (!this._gsiEl || this.state.authState !== 'login') return;
+    const g = window.google && window.google.accounts && window.google.accounts.id;
+    if (!g) { clearTimeout(this._gsiT); this._gsiT = setTimeout(() => this.mountGsi(), 300); return; }
+    if (this._gsiEl.__gsiMounted) return;
+    this._gsiEl.__gsiMounted = true;
+    if (!this._gsiInit) { this._gsiInit = true; g.initialize({ client_id: this.DEF.clientId, callback: r => this.handleCredential(r) }); }
+    g.renderButton(this._gsiEl, { theme: 'outline', size: 'large', width: 320, text: 'signin_with', locale: 'zh_TW' });
+  }
+  handleCredential(resp) {
+    if (!resp || !resp.credential) return;
+    this.setState({ authBusy: true });
+    this.db.login(resp.credential)
+      .then(j => {
+        if (j && j.ok) {
+          this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role });
+          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '' });
+          this.notify('✓ 歡迎,' + (j.name || j.email));
+          this.startCloud();
+        } else if (j && j.error === 'not_on_list') {
+          this.setState({ authState: 'blocked', authBusy: false, blockedEmail: j.email || '' });
+        } else {
+          this.setState({ authBusy: false });
+          this.notify('✕ 登入失敗:' + ((j && j.error) || '未知錯誤'));
+        }
+      })
+      .catch(err => { this.setState({ authBusy: false }); this.notify('✕ 登入失敗:' + err); });
+  }
+  doLogout(msg) {
+    if (this.db) this.db.clearAuth();
+    const g = window.google && window.google.accounts && window.google.accounts.id;
+    if (g && g.disableAutoSelect) g.disableAutoSelect(); // 下次登入顯示帳號選擇器
+    if (this._gsiEl) this._gsiEl.__gsiMounted = false;
+    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authBusy: false });
+    if (msg) this.notify(msg);
   }
 
   // 永遠使用「真實今天」(本地時區);跨日自動更新
@@ -274,7 +332,7 @@ class Component extends DCLogic {
   CENTRAL = 'LOC-C';
   CENOK = { setup: 1, inventory: 1, purchase: 1, ingredients: 1, locations: 1, suppliers: 1, connect: 1, products: 1 }; // 中央倉視角可用頁(不烘焙、不零售、不管產品)
   lt(name) { const L = this.THIS_LOC; return this.t(name).filter(r => (r.location_id || 'LOC-A') === L); } // 依當前視角過濾交易列
-  setLoc(id) {
+  setLoc(id, silent) {
     if (id === this.THIS_LOC) return;
     try { localStorage.setItem('bakery_loc_v2', id); } catch (e) { }
     // 購物車/叫貨草稿是「這個地點」的暫存 → 切換即清空;排程計畫改由 plan_draft 表載回該地點自己的草稿
@@ -282,7 +340,7 @@ class Component extends DCLogic {
     if (id === this.CENTRAL) { if (!this.CENOK[this.state.screen]) patch.screen = 'purchase'; if (this.state.puView === 'store') patch.puView = 'central'; }
     else if (this.state.screen === 'purchase' && this.state.puView === 'central') patch.puView = 'store';
     this.setState(patch);
-    this.notify('已切換視角:' + this.locName(id) + (id === this.CENTRAL ? '(出貨/採購/庫存)' : ''));
+    if (!silent) this.notify('已切換視角:' + this.locName(id) + (id === this.CENTRAL ? '(出貨/採購/庫存)' : ''));
   }
   locName(id) { const l = this.t('location').find(x => x.location_id === id); return l ? l.name : id; }
   // ── 產品地點歸屬(product.location_id)：中央看全部或篩一店；門市只見自己的；舊資料/空值歸第一門市 ──
@@ -1100,7 +1158,7 @@ class Component extends DCLogic {
       ['ingredients', atCentral ? '原料目錄' : '本店備料', 1], ['locations', '門市地點', 1], ['products', '產品與配方', 1], ['suppliers', '供應商・設備', 1], ['staff', '人員', 1],
       ['reports', '報表', 2], ['closing', '日結', 2], ['connect', '資料連線', 2]
     ];
-    if (db && this.t('location').length && !this.t('location').some(l => l.location_id === this.THIS_LOC)) setTimeout(() => this.setLoc(this.CENTRAL), 0); // 目前視角的地點不存在(如雲端拉回舊資料)→ 退回中央倉
+    if (db && this.t('location').length && !this.t('location').some(l => l.location_id === this.THIS_LOC)) setTimeout(() => this.setLoc(this.CENTRAL, true), 0); // 目前視角的地點不存在(如雲端拉回舊資料)→ 靜默退回中央倉(登入畫面不跳吐司)
     if (db && atCentral && !this.CENOK[S.screen]) setTimeout(() => this.setState({ screen: 'purchase', puView: 'central' }), 0);
     if (db && atCentral && S.invTab === 'product') setTimeout(() => this.setState({ invTab: 'ingredient', selItem: (this.t('ingredient')[0] || {}).ingredient_id || '' }), 0);
     const draftCount = db ? this.lt('production_order').filter(o => o.status === '草稿').length : 0;
@@ -1147,7 +1205,23 @@ class Component extends DCLogic {
       connChipTxt: !db ? '載入中…' : db.mode === 'cloud' ? (db.cfg.kind === 'gapi' ? '☁ Google Sheet 直連' : '☁ Apps Script 已連線') : '本地示範資料(未連線)',
       connChipStyle: (!db ? this.tag(C.mut) : db.mode === 'cloud' ? this.tag(C.grn) : this.tag(C.amb)) + ';cursor:pointer',
       goConnect: () => this.setState({ screen: 'connect' }),
-      doReset: () => { if (db) { db.reset(); this.setState({ cart: {}, poLines: [], toDraft: [], closing: {}, closed: false, draft: null, finVals: {} }); this.notify('已重置為示範資料'); } }
+      doReset: () => { if (db) { db.reset(); this.setState({ cart: {}, poLines: [], toDraft: [], closing: {}, closed: false, draft: null, finVals: {} }); this.notify('已重置為示範資料'); } },
+      // ── 登入閘門顯示狀態:app 內容只在 通過名單(ok)或 免登入(off,本地示範)時渲染 ──
+      authBootOn: !db,
+      authCheckingOn: !!db && S.authState === 'checking',
+      authLoginOn: !!db && S.authState === 'login',
+      authBlockedOn: !!db && S.authState === 'blocked',
+      appOn: !!db && (S.authState === 'ok' || S.authState === 'off'),
+      gsiRef: el => this.mountGsi(el),
+      authBusyStyle: S.authBusy ? 'font-size:12.5px;color:#0e7490;font-weight:600' : 'display:none',
+      blockedEmail: S.blockedEmail || '',
+      doSwitchAccount: () => this.doLogout(),
+      userInitial: S.authState === 'ok' ? String(S.authName || S.authEmail || '?').charAt(0) : '林',
+      userChipName: S.authState === 'ok' ? (S.authName || S.authEmail) : '店長',
+      userChipTitle: S.authState === 'ok' ? [S.authEmail, S.authRole].filter(Boolean).join(' · ') : '',
+      logoutStyle: S.authState === 'ok' ? '' : 'display:none',
+      doLogoutBtn: () => this.doLogout('已登出'),
+      resetBtnStyle: db && db.mode === 'local' ? '' : 'display:none'
     }, flags);
     if (!db) return Object.assign(base, { lowRows: [], prodRows: [], saleBars: [], recentRows: [], planRows: [], prodOptions: [], mrpRows: [], feedRows: [], ganttLanes: [], conflictMsg: '', conflictStyle: 'display:none', lowNote: '載入資料中…', apStyle: 'display:none', apBackStyle: 'display:none', apDayChips: [], apTimeChips: [], apTimeVal: '', apOnTime: () => { }, apClose: () => { } });
 

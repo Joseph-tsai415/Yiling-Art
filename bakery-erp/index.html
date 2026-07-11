@@ -48,6 +48,54 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div id="app"></div>
 <script type="text/x-template" id="app-tpl">
 
+<!-- ═══ 載入/驗證中 ═══ -->
+<sc-if value="{{authBootOn}}">
+  <div style="display:flex;height:100vh;align-items:center;justify-content:center;gap:10px;color:#66707f;font-size:14px;background:#fff"><span style="width:22px;height:22px;background:#0e7490;border-radius:6px"></span>載入中…</div>
+</sc-if>
+<sc-if value="{{authCheckingOn}}">
+  <div style="display:flex;height:100vh;align-items:center;justify-content:center;gap:10px;color:#66707f;font-size:14px;background:#fff"><span style="width:22px;height:22px;background:#0e7490;border-radius:6px"></span>驗證登入中…</div>
+</sc-if>
+
+<!-- ═══ 登入(Google Sign-In;帳號由管理員開通)═══ -->
+<sc-if value="{{authLoginOn}}">
+  <div style="display:flex;height:100vh;background:#fff">
+    <div style="width:38%;min-width:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;border-right:1px solid #eef0f3;box-shadow:6px 0 24px rgba(16,24,40,.05)">
+      <span style="width:76px;height:76px;background:#0e7490;border-radius:20px;box-shadow:0 8px 24px rgba(14,116,144,.25)"></span>
+      <div style="font-size:32px;font-weight:700;letter-spacing:-.01em"><span style="color:#0e7490">Bakery</span> ERP</div>
+      <div style="color:#66707f;font-size:14px">中央倉+多門市 烘焙管理系統</div>
+    </div>
+    <div style="flex:1;display:flex;align-items:center;padding:0 8%">
+      <div style="width:340px;display:flex;flex-direction:column;gap:16px">
+        <div style="font-size:26px;font-weight:700">登入你的帳戶</div>
+        <div style="color:#66707f;font-size:13px">請使用已開通的 Google 帳戶登入</div>
+        <div ref="{{gsiRef}}" morph-skip style="min-height:44px"></div>
+        <div style="{{authBusyStyle}}">登入驗證中…</div>
+        <div style="font-size:12px;color:#9aa1ab;line-height:1.7;border-top:1px solid #eef0f3;padding-top:12px">帳號由系統管理員開通;尚未開通或無法登入,請聯繫管理員。</div>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<!-- ═══ 已登入但不在名單(封鎖)═══ -->
+<sc-if value="{{authBlockedOn}}">
+  <div style="display:flex;height:100vh;background:#fff">
+    <div style="width:38%;min-width:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;border-right:1px solid #eef0f3;box-shadow:6px 0 24px rgba(16,24,40,.05)">
+      <span style="width:76px;height:76px;background:#0e7490;border-radius:20px;box-shadow:0 8px 24px rgba(14,116,144,.25)"></span>
+      <div style="font-size:32px;font-weight:700;letter-spacing:-.01em"><span style="color:#0e7490">Bakery</span> ERP</div>
+      <div style="color:#66707f;font-size:14px">中央倉+多門市 烘焙管理系統</div>
+    </div>
+    <div style="flex:1;display:flex;align-items:center;padding:0 8%">
+      <div style="width:380px;display:flex;flex-direction:column;gap:14px">
+        <div style="font-size:26px;font-weight:700">⏳ 此帳號尚未開通</div>
+        <div style="font-size:14px;color:#1b2330;background:#f7f8fa;border:1px solid #e3e6eb;border-radius:9px;padding:10px 14px">{{blockedEmail}}</div>
+        <div style="color:#66707f;font-size:13px;line-height:1.7">這個 Google 帳號不在使用名單上。請聯繫系統管理員開通後,重新登入即可使用。</div>
+        <span class="btn3" style="text-align:center;padding:9px 0" onClick="{{doSwitchAccount}}">換一個帳號登入</span>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{appOn}}">
 <div style="display:flex;flex-direction:column;height:100vh;font-size:13px;line-height:1.45">
   <div class="htop">
     <div style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px"><span style="width:22px;height:22px;background:#0e7490;border-radius:6px"></span>Bakery ERP</div>
@@ -56,8 +104,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
       <span style="font-size:12px;color:#66707f" title="版本 __APP_VERSION__">{{nowTxt}}</span>
       <span class="tag3" style="{{connChipStyle}}" onClick="{{goConnect}}">{{connChipTxt}}</span>
-      <span class="btn3o" onClick="{{doReset}}">重置示範資料</span>
-      <div style="display:flex;align-items:center;gap:7px"><span style="width:26px;height:26px;border-radius:50%;background:#e3e6eb;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">林</span><span style="font-size:12.5px">店長</span></div>
+      <span class="btn3o" style="{{resetBtnStyle}}" onClick="{{doReset}}">重置示範資料</span>
+      <div style="display:flex;align-items:center;gap:7px" title="{{userChipTitle}}"><span style="width:26px;height:26px;border-radius:50%;background:#e3e6eb;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">{{userInitial}}</span><span style="font-size:12.5px">{{userChipName}}</span></div>
+      <span class="btn3o" style="{{logoutStyle}}" onClick="{{doLogoutBtn}}">登出</span>
     </div>
   </div>
   <div style="display:flex;flex:1;min-height:0">
@@ -1386,8 +1435,6 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <span class="btn3" onClick="{{apClose}}">確定</span>
   </div>
 </div>
-<div style="{{toastStyle}}">{{toast}}</div>
-
 
 <!-- ═══ 全域下拉面板(共用,一次只開一個) ═══ -->
 <div style="{{ddBackdrop}}" onClick="{{ddCloseFn}}"></div>
@@ -1401,6 +1448,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div style="{{ddListEmpty}}">沒有符合項目</div>
   </div>
 </div>
+</sc-if>
+<!-- toast 在登入畫面也要能顯示 → 放在 appOn 閘門外 -->
+<div style="{{toastStyle}}">{{toast}}</div>
 </script>
 <script>
   // Google Sheets 連線預設值:部署時由 GitHub Actions 以 repo secrets 取代這些佔位符;
