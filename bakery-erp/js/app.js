@@ -1213,7 +1213,9 @@ class Component extends DCLogic {
       authBlockedOn: !!db && S.authState === 'blocked',
       appOn: !!db && (S.authState === 'ok' || S.authState === 'off'),
       gsiRef: el => this.mountGsi(el),
-      authBusyStyle: S.authBusy ? 'font-size:12.5px;color:#0e7490;font-weight:600' : 'display:none',
+      // 驗證期間:藏 Google 按鈕(display:none 保住 GIS iframe)、換上 Google 色轉圈 — 防止等待中重複點擊
+      gsiWrapStyle: S.authBusy ? 'display:none' : '',
+      authBusyStyle: S.authBusy ? 'display:flex;align-items:center;gap:10px;min-height:44px;color:#66707f;font-size:13px' : 'display:none',
       blockedEmail: S.blockedEmail || '',
       doSwitchAccount: () => this.doLogout(),
       userInitial: S.authState === 'ok' ? String(S.authName || S.authEmail || '?').charAt(0) : '林',

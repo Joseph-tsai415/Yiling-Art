@@ -42,6 +42,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 .seg span:last-child{border-right:none}
 .task3{border:1px solid #e3e6eb;border-radius:8px;padding:10px 12px;background:#fff;font-size:12.5px;box-shadow:0 1px 2px rgba(16,24,40,.06)}
 .grow{position:relative;height:32px;border-bottom:1px solid #eef0f3}
+.gspin{width:26px;height:26px;border-radius:50%;border:3px solid #eef0f3;border-top-color:#4285F4;animation:gsp-rot .8s linear infinite,gsp-col 3.2s linear infinite;flex:none}
+@keyframes gsp-rot{100%{transform:rotate(360deg)}}
+@keyframes gsp-col{0%,100%{border-top-color:#4285F4}25%{border-top-color:#EA4335}50%{border-top-color:#FBBC05}75%{border-top-color:#34A853}}
 </style>
 </head>
 <body>
@@ -68,8 +71,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
       <div style="width:340px;display:flex;flex-direction:column;gap:16px">
         <div style="font-size:26px;font-weight:700">登入你的帳戶</div>
         <div style="color:#66707f;font-size:13px">請使用已開通的 Google 帳戶登入</div>
-        <div ref="{{gsiRef}}" morph-skip style="min-height:44px"></div>
-        <div style="{{authBusyStyle}}">登入驗證中…</div>
+        <div ref="{{gsiRef}}" morph-skip style="min-height:44px;{{gsiWrapStyle}}"></div>
+        <div style="{{authBusyStyle}}"><span class="gspin"></span><span>正在驗證你的帳號…</span></div>
         <div style="font-size:12px;color:#9aa1ab;line-height:1.7;border-top:1px solid #eef0f3;padding-top:12px">帳號由系統管理員開通;尚未開通或無法登入,請聯繫管理員。</div>
       </div>
     </div>
