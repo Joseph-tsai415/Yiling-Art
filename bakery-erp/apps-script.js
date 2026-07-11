@@ -1,20 +1,33 @@
 /**
- * Bakery ERP v2 — Google Apps Script 極薄後端(中央倉+多門市)
+ * Bakery ERP v3 — Google Apps Script 極薄後端(中央倉+多門市 + 登入驗證)
+ *
+ * v3 變更(登入與名單控管):
+ *  - 新增 user_account 分頁(使用者名單):email 在名單上且 active=TRUE 才能使用系統
+ *  - 前端「使用 Google 登入」→ 本後端驗證 Google ID token(比對 AUTH.CLIENT_ID)→
+ *    名單比對通過核發 6 小時工作階段 token;之後所有讀寫都必須帶 token
+ *  - setup / migrate / user_account 的讀寫僅限 super_admin
+ *  - AUTH.CLIENT_ID 留空 = 不啟用驗證(行為同 v2,僅供本機測試;正式環境務必填寫)
  *
  * v2 變更:
  *  - 所有交易表新增 location_id 欄(LOC-A 信義店/LOC-B 大安店/LOC-C 中央倉)
- *  - 新增 location(地點主檔)、transfer_order/transfer_line(叫貨調撥)→ 共 20 個分頁
+ *  - 新增 location(地點主檔)、transfer_order/transfer_line(叫貨調撥)
  *
  * 既有 Sheet 升級步驟(URL 不變):
  *  1. 開啟 ERP-DB Sheet → 擴充功能 → Apps Script
- *  2. 全選刪除舊程式碼,貼上本檔全部內容,儲存
+ *  2. 全選刪除舊程式碼,貼上本檔全部內容,填好下方 AUTH 兩個值,儲存
  *  3. 上方函式下拉選:
- *     ・setup — 重建所有分頁為 v2 表頭+示範資料(舊資料會被重設!)
- *     ・migrate — 只升級表頭與欄位,保留現有資料(推薦):新增缺少的分頁、補 location_id=LOC-A、
- *       supplier.contact 拆成 聯絡人/電話、purchase_line 補 received_qty(已過帳視為已收)
+ *     ・setup — 重建所有分頁為表頭+示範資料(舊資料會被重設!)
+ *     ・migrate — 只升級表頭與欄位,保留現有資料(推薦):新增缺少的分頁(含 user_account)、
+ *       補 location_id、supplier.contact 拆欄、purchase_line 補 received_qty
  *  4. 部署 → 管理部署 → 鉛筆編輯 → 版本選「新版本」→ 部署(/exec 網址不變)
- *  5. ERP 原型 v2「資料連線」頁貼同一個 /exec 網址 → 切雲端 → 拉取
+ *  5. 用 AUTH.BOOTSTRAP_ADMIN 的 Google 帳號登入前端 → 自動建立第一個 super_admin 帳號
  */
+
+// ─── 登入驗證設定(貼上你的值再部署)───
+var AUTH = {
+  CLIENT_ID: '',        // OAuth Client ID(和前端同一個,xxxx.apps.googleusercontent.com);留空 = 不驗證
+  BOOTSTRAP_ADMIN: ''   // 第一位管理員的 Google Email;首次登入自動建立 super_admin 帳號
+};
 
 var TABLES = {
   location:         ['location_id','name','type'],
@@ -40,7 +53,8 @@ var TABLES = {
   transfer_order:   ['to_id','from_loc','to_loc','status','request_date','ship_date','receive_date','need_date','urgent'],
   transfer_line:    ['tl_id','to_id','ingredient_id','qty'],
   ingredient_request: ['req_id','location_id','name','spec','weekly_qty','urgent','status','ingredient_id','request_date','done_date'],
-  stock_ledger:     ['ledger_id','item_type','item_id','direction','qty','source_type','source_id','unit_cost','txn_date','location_id']
+  stock_ledger:     ['ledger_id','item_type','item_id','direction','qty','source_type','source_id','unit_cost','txn_date','location_id'],
+  user_account:     ['user_id','name','email','role','location_ids','active','created_at','last_login'] // 使用者名單:role=super_admin/…;location_ids=ALL 或 LOC-A|LOC-B(角色權限於後續版本啟用)
 };
 
 var SEED = {
@@ -157,12 +171,77 @@ var SEED = {
   ]
 };
 
-// ─── 讀取:GET ?action=list&sheet=ingredient ───
+// ─── 登入驗證 ───
+function authEnabled_() { return !!AUTH.CLIENT_ID; }
+// token → 工作階段(CacheService,6 小時);無效回 null
+function session_(token) {
+  if (!token) return null;
+  var raw = CacheService.getScriptCache().get('tok:' + token);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (err) { return null; }
+}
+function accountsSheet_() {
+  var sh = ss_().getSheetByName('user_account');
+  if (!sh) { sh = ss_().insertSheet('user_account'); sh.appendRow(TABLES.user_account); sh.setFrozenRows(1); }
+  return sh;
+}
+function findAccount_(email) {
+  var data = accountsSheet_().getDataRange().getValues();
+  if (data.length < 2) return null;
+  var head = data[0].map(String);
+  var iE = head.indexOf('email');
+  for (var r = 1; r < data.length; r++) {
+    if (String(data[r][iE]).trim().toLowerCase() === email) {
+      var o = {}; head.forEach(function (h, i) { o[h] = data[r][i]; });
+      o._row = r + 1;
+      return o;
+    }
+  }
+  return null;
+}
+// 前端送來 Google ID token → 向 Google 驗證 → 名單比對 → 核發工作階段 token
+function login_(credential) {
+  if (!authEnabled_()) return { ok: false, error: '後端未啟用登入(AUTH.CLIENT_ID 未設定)' };
+  if (!credential) return { ok: false, error: 'missing_credential' };
+  var resp = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential), { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) return { ok: false, error: 'invalid_token' };
+  var info = JSON.parse(resp.getContentText());
+  if (info.aud !== AUTH.CLIENT_ID) return { ok: false, error: 'wrong_audience' };
+  if (String(info.email_verified) !== 'true') return { ok: false, error: 'email_not_verified' };
+  var email = String(info.email || '').trim().toLowerCase();
+  var acc = findAccount_(email);
+  // 首位管理員自動開通(chicken-and-egg):AUTH.BOOTSTRAP_ADMIN 首次登入 → super_admin
+  if (!acc && AUTH.BOOTSTRAP_ADMIN && email === AUTH.BOOTSTRAP_ADMIN.trim().toLowerCase()) {
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+    accountsSheet_().appendRow(['U-001', info.name || '管理員', email, 'super_admin', 'ALL', 'TRUE', now, now]);
+    acc = findAccount_(email);
+  }
+  if (!acc || String(acc.active).toUpperCase() !== 'TRUE') return { ok: false, error: 'not_on_list', email: email };
+  var token = Utilities.getUuid();
+  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email, role: String(acc.role || ''), name: String(acc.name || ''), user_id: String(acc.user_id || '') }), 21600);
+  try { accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1).setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')); } catch (err) { }
+  return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: String(acc.role || ''), location_ids: String(acc.location_ids || ''), expires_in: 21600 };
+}
+
+// ─── 讀取:GET ?action=list&sheet=ingredient&token=… ───
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'tables';
-  if (action === 'setup') { setup(); return json_({ ok: true, msg: 'setup 完成,已建立 ' + Object.keys(TABLES).length + ' 個分頁' }); }
-  if (action === 'migrate') { var rep = migrate(); return json_({ ok: true, msg: rep.length ? rep.join(';') : '全部已是最新結構' }); }
+  var sess = null;
+  if (authEnabled_()) {
+    sess = session_(e && e.parameter && e.parameter.token);
+    if (!sess) return json_({ ok: false, error: 'unauthorized' });
+  }
+  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role } : { ok: true, role: '', msg: '後端未啟用登入' });
+  if (action === 'setup') {
+    if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+    setup(); return json_({ ok: true, msg: 'setup 完成,已建立 ' + Object.keys(TABLES).length + ' 個分頁' });
+  }
+  if (action === 'migrate') {
+    if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+    var rep = migrate(); return json_({ ok: true, msg: rep.length ? rep.join(';') : '全部已是最新結構' });
+  }
   if (action === 'list') {
+    if (e.parameter.sheet === 'user_account' && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     var sh = ss_().getSheetByName(e.parameter.sheet);
     if (!sh) return json_({ ok: false, error: '找不到分頁:' + e.parameter.sheet + '(請先執行 setup)' });
     var tz = Session.getScriptTimeZone();
@@ -174,12 +253,22 @@ function doGet(e) {
   return json_({ ok: true, tables: Object.keys(TABLES) });
 }
 
-// ─── 寫入:POST body = {"action":"append","sheet":"stock_ledger","row":{...}} ───
+// ─── 寫入:POST body = {"action":"append","sheet":"stock_ledger","row":{...},"token":"…"} ───
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000); // 寫入排隊,避免並發衝突
   try {
     var body = JSON.parse(e.postData.contents);
+
+    // 登入不需 token(它就是來換 token 的)
+    if (body.action === 'login') return json_(login_(body.credential));
+
+    if (authEnabled_()) {
+      var sess = session_(body.token);
+      if (!sess) return json_({ ok: false, error: 'unauthorized' });
+      // 使用者名單只有 super_admin 能改(防止一般帳號把自己升權)
+      if (body.sheet === 'user_account' && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+    }
 
     // 主資料整表覆寫:{"action":"replace","sheet":"ingredient","headers":[...],"rows":[[...]]}
     if (body.action === 'replace') {

@@ -203,6 +203,7 @@ L-0008,product,PRD-01,in,24,production_in,P-0328,13.9,2026-07-01,LOC-A`
 const KEY = 'bakery_proto_csv_v2';
 const CFG_KEY = 'bakery_remote_cfg_v2';
 const MODE_KEY = 'bakery_api_mode_v2';
+const AUTH_KEY = 'bakery_auth_v1'; // {token, name, email, role} — GAS 後端核發的工作階段
 const GBASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 // v2 結構需搭配 v2 版 apps-script.js(TABLES 含 location_id 與調撥表);
 // 既有 Sheet 升級:貼新腳本 → 執行 setup → 部署新版本(/exec 網址不變)。
@@ -317,10 +318,25 @@ export class DB {
   setCloud() { this.mode = 'cloud'; try { localStorage.setItem(MODE_KEY, 'cloud'); } catch (e) { } }
   setLocal() { this.mode = 'local'; try { localStorage.setItem(MODE_KEY, 'local'); } catch (e) { } }
 
+  // ── 登入工作階段(Google Sign-In → GAS 後端核發 token;後端逐請求驗證)──
+  getAuth() { try { return JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); } catch (e) { return null; } }
+  setAuth(a) { try { localStorage.setItem(AUTH_KEY, JSON.stringify(a)); } catch (e) { } }
+  clearAuth() { try { localStorage.removeItem(AUTH_KEY); } catch (e) { } }
+  authToken() { const a = this.getAuth(); return (a && a.token) || ''; }
+  // Google ID token → 後端驗證+比對 user_account 名單 → 核發工作階段 token
+  async login(credential) {
+    const r = await fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'login', credential }) });
+    return await r.json();
+  }
+  whoami() { return this.api('action=whoami'); }
+
   // ── 方案 B:Apps Script ──
   async api(params) {
-    const r = await fetch(this.cfg.url + (this.cfg.url.indexOf('?') >= 0 ? '&' : '?') + params);
-    return await r.json();
+    const t = this.authToken();
+    const r = await fetch(this.cfg.url + (this.cfg.url.indexOf('?') >= 0 ? '&' : '?') + params + (t ? '&token=' + encodeURIComponent(t) : ''));
+    const j = await r.json();
+    if (j && j.ok === false && j.error === 'unauthorized' && this.onAuthFail) this.onAuthFail();
+    return j;
   }
 
   // ── 方案 A:Google Sheets API 直連(讀=API Key、寫=OAuth)──
@@ -436,9 +452,14 @@ export class DB {
       return;
     }
     if (!this.cfg.url) { this.pending--; return; }
+    const tok = this.authToken();
+    if (tok) payload = Object.assign({}, payload, { token: tok });
     fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
       .then(r => r.json())
-      .then(j => done(!!j.ok, j.ok ? '' : 'Sheet 寫入失敗:' + (j.error || '未知錯誤')))
+      .then(j => {
+        if (j && j.error === 'unauthorized' && this.onAuthFail) this.onAuthFail();
+        done(!!j.ok, j.ok ? '' : 'Sheet 寫入失敗:' + (j.error || '未知錯誤'));
+      })
       .catch(err => done(false, 'Sheet 連線失敗,本次異動僅存本地:' + err));
   }
   load(withSeed) {

@@ -168,10 +168,12 @@ function compileNode(node) {
     return { kind: 'if', get: compileAttr(node.getAttribute('value') || ''), children: compileChildren(node) };
   }
   const tag = RAW_UNWRAP[rawTag] || rawTag;
-  const el = { kind: 'el', tag, attrs: [], events: [], props: [], ref: null, hover: null, children: compileChildren(node) };
+  // morph-skip:此元素的子樹交由外部程式管理(例 Google 登入按鈕 iframe),morph 不碰
+  const skip = node.hasAttribute('morph-skip');
+  const el = { kind: 'el', tag, skip, attrs: [], events: [], props: [], ref: null, hover: null, children: skip ? [] : compileChildren(node) };
   const staticType = node.getAttribute('type') || '';
   for (const { name, value } of [...node.attributes]) {
-    if (name.startsWith('hint-') || name.startsWith('data-dc-')) continue;
+    if (name.startsWith('hint-') || name.startsWith('data-dc-') || name === 'morph-skip') continue;
     if (name === 'ref') { el.ref = compileAttr(value); continue; }
     if (name === 'style-hover') { el.hover = hoverClass(value); continue; }
     if (name.startsWith('on') && name.length > 2) {
@@ -206,7 +208,7 @@ function buildVNodes(builders, vals, out) {
         buildVNodes(b.children, sub, out);
       }
     } else {
-      const vn = { k: 'e', tag: b.tag, attrs: {}, events: null, props: null, ref: null, hover: b.hover, children: null };
+      const vn = { k: 'e', tag: b.tag, skip: b.skip, attrs: {}, events: null, props: null, ref: null, hover: b.hover, children: null };
       for (const a of b.attrs) {
         const v = a.get(vals);
         if (v === undefined || v === null || v === false) continue;
@@ -221,7 +223,7 @@ function buildVNodes(builders, vals, out) {
         for (const p of b.props) vn.props[p.name] = p.get(vals);
       }
       if (b.ref) vn.ref = b.ref(vals);
-      vn.children = buildVNodes(b.children, vals);
+      vn.children = b.skip ? [] : buildVNodes(b.children, vals);
       out.push(vn);
     }
   }
@@ -310,7 +312,7 @@ function patchEl(el, vn) {
     }
   } else if (el.__dcH) el.__dcH = null;
   if (typeof vn.ref === 'function') vn.ref(el);
-  morphChildren(el, vn.children);
+  if (!vn.skip) morphChildren(el, vn.children);
 }
 
 // ── 元件基底:與原型的 DCLogic(React class component)介面相容 ──
