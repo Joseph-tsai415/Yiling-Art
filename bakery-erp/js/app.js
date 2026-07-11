@@ -631,9 +631,66 @@ class Component extends DCLogic {
     };
   }
   ddClose() { this._dd = null; this.setState({ dd: null }); }
+  // 多選下拉:build() 每次回傳最新 [{id,name,checked,toggle}];點選只切換不關閉,點背景才關
+  ddBtnMulti(summary, build) {
+    return {
+      txt: summary,
+      open: e => {
+        e.stopPropagation();
+        const r = e.currentTarget.getBoundingClientRect();
+        this._dd = { multi: true, build };
+        this.setState({ dd: { x: r.left, y: r.bottom, w: r.width, search: '' } });
+      }
+    };
+  }
+  // 帳號「門市範圍」的即時選項:ALL(不限)+ 各門市;讀 live state,面板開著也隨切換更新
+  locItems(i) {
+    const u = (this.state.accUsers || [])[i]; if (!u) return [];
+    const cur = String(u.location_ids || '').trim();
+    const isAll = !cur || cur.toUpperCase() === 'ALL';
+    const list = isAll ? [] : cur.split(/[|;,]/).map(x => x.trim()).filter(Boolean);
+    const setLoc = v => { const arr = (this.state.accUsers || []).slice(); arr[i] = Object.assign({}, arr[i], { location_ids: v }); this.setState({ accUsers: arr }); this.saveAccounts(); };
+    const items = [{ id: 'ALL', name: '全部門市(不限)', checked: isAll, toggle: () => setLoc('ALL') }];
+    this.t('location').forEach(l => {
+      items.push({
+        id: l.location_id, name: l.name, checked: !isAll && list.indexOf(l.location_id) >= 0,
+        toggle: () => {
+          const set = {}; (isAll ? [] : list).forEach(x => { set[x] = 1; });
+          if (set[l.location_id]) delete set[l.location_id]; else set[l.location_id] = 1;
+          const ids = this.t('location').map(x => x.location_id).filter(id2 => set[id2]);
+          setLoc(ids.length ? ids.join('|') : 'ALL');
+        }
+      });
+    });
+    return items;
+  }
   ddVals() {
     const D = this.state.dd, cfg = this._dd;
     if (!D || !cfg) return { ddBackdrop: 'display:none', ddPanelStyle: 'display:none', ddSearchStyle: 'display:none', ddSearch: '', onDdSearch: () => { }, ddCloseFn: () => { }, ddList: [], ddListEmpty: 'display:none', onDdScroll: () => { }, ddMoreTxt: '', ddMoreStyle: 'display:none' };
+    if (cfg.multi) {
+      const items = cfg.build();
+      const q = (D.search || '').trim().toLowerCase();
+      const all = items.filter(o => !q || this.lmatch(q, [String(o.name)]));
+      const w = Math.max(D.w, 220);
+      return {
+        ddBackdrop: 'position:fixed;inset:0;z-index:59',
+        ddPanelStyle: 'position:fixed;left:' + Math.max(8, Math.min(D.x, (window.innerWidth || 1200) - w - 12)) + 'px;top:' + Math.min(D.y + 4, (window.innerHeight || 800) - 330) + 'px;width:' + w + 'px;z-index:60;background:#fff;border:1px solid #e3e6eb;border-radius:8px;box-shadow:0 8px 24px rgba(16,24,40,.14);padding:8px;display:flex;flex-direction:column;gap:6px;box-sizing:border-box',
+        ddSearchStyle: items.length > 8 ? 'width:100%;box-sizing:border-box' : 'display:none',
+        ddSearch: D.search || '',
+        onDdSearch: e => this.setState({ dd: Object.assign({}, D, { search: e.target.value }) }),
+        ddCloseFn: () => this.ddClose(),
+        onDdScroll: () => { },
+        ddMoreTxt: '', ddMoreStyle: 'display:none',
+        ddList: all.map(o => ({
+          name: o.name, meta: '',
+          checkStyle: 'font-size:18px;flex:none;' + (o.checked ? 'color:#0e7490' : 'color:#c6ccd4'),
+          checkIcon: o.checked ? 'check_box' : 'check_box_outline_blank',
+          rowStyle: 'padding:6px 10px;cursor:pointer;font-size:12.5px;border-radius:6px;display:flex;align-items:center;gap:8px' + (o.checked ? ';background:#eef6f8' : ''),
+          pick: o.toggle
+        })),
+        ddListEmpty: all.length ? 'display:none' : 'padding:10px;font-size:12px;color:#66707f'
+      };
+    }
     const q = (D.search || '').trim().toLowerCase();
     const all = cfg.options.filter(o => !q || this.lmatch(q, [String(o.name), String(o.meta || ''), String(o.id || '')]));
     // 懶載入:先渲染 150 筆,捲到底自動加載;無上限
@@ -657,6 +714,7 @@ class Component extends DCLogic {
       ddMoreStyle: list.length < all.length ? 'padding:7px 10px;font-size:11px;color:#9aa1ab;text-align:center' : 'display:none',
       ddList: list.map(o => ({
         name: o.name, meta: o.meta ? ' · ' + o.meta : '',
+        checkStyle: 'display:none', checkIcon: '',
         rowStyle: 'padding:6px 10px;cursor:pointer;font-size:12.5px;border-radius:6px' + (String(o.id) === String(cfg.value) ? ';background:#e0f0f4' : ''),
         pick: () => { const f = cfg.onPick; this.ddClose(); f(o.id); }
       })),
@@ -2400,6 +2458,8 @@ class Component extends DCLogic {
       try {
         const missing = await db.pullAll();
         this.prunePlan();
+        // user_account / role_permission 不在 SCHEMA(pullAll 不含)→ 同步時一併刷新(限能看帳號的 super_admin)
+        if (this.hasPerm('screen.accounts')) this.loadAccounts(true);
         this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 按「② 升級結構(保留資料)」補分頁;若後端太舊請重貼最新 apps-script.js 部署新版本再升級' : (okMsg || '✓ 已從 Google Sheet 載入最新資料'));
       } catch (e2) { this.notify('✕ 同步失敗:' + e2); }
       this.setState({ connBusy: false });
@@ -3144,16 +3204,10 @@ class Component extends DCLogic {
               nameVal: u.name, onName: e => setAcc(i, 'name', e.target.value),
               emailVal: u.email, onEmail: e => setAcc(i, 'email', e.target.value.trim().toLowerCase()),
               roleBtn: this.ddBtn(this.ROLE_OPTS, u.role, v => setAcc(i, 'role', v)),
-              locChips: [{ name: 'ALL', style: chip(isAll), toggle: () => setAcc(i, 'location_ids', 'ALL') }].concat(this.t('location').map(l => ({
-                name: l.name,
-                style: chip(!isAll && list.indexOf(l.location_id) >= 0),
-                toggle: () => {
-                  const set = {}; (isAll ? [] : list).forEach(x => { set[x] = 1; });
-                  if (set[l.location_id]) delete set[l.location_id]; else set[l.location_id] = 1;
-                  const ids = this.t('location').map(x => x.location_id).filter(id2 => set[id2]);
-                  setAcc(i, 'location_ids', ids.length ? ids.join('|') : 'ALL');
-                }
-              }))),
+              locBtn: this.ddBtnMulti(
+                isAll ? '全部門市(不限)' : (list.map(id => (this.t('location').find(l => l.location_id === id) || {}).name || id).join('、') || '未選門市'),
+                () => this.locItems(i)
+              ),
               actTxt: String(u.active).toUpperCase() === 'TRUE' ? '啟用' : '停用',
               actStyle: this.tag(String(u.active).toUpperCase() === 'TRUE' ? C.grn : C.mut) + ';cursor:pointer',
               onToggle: () => setAcc(i, 'active', String(u.active).toUpperCase() === 'TRUE' ? 'FALSE' : 'TRUE'),
