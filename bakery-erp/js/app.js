@@ -9,6 +9,7 @@ import { DCLogic, mountApp } from './runtime.js';
 
 class Component extends DCLogic {
   state = {
+    splashOn: true, splashHide: false, // 開機 splash 疊層(蓋住載入/驗證),就緒後淡出露出底下畫面
     // 全新裝置(還沒選過地點)落在「開始設定」嚮導;用過的裝置回營運總覽
     screen: (() => { try { return localStorage.getItem('bakery_loc_v2') ? 'overview' : 'setup'; } catch (e) { return 'overview'; } })(),
     ready: false,
@@ -41,6 +42,7 @@ class Component extends DCLogic {
 
   componentDidMount() {
     window.__dc = this; // debug hook(自動化測試/主控台除錯用)
+    this._bootT0 = Date.now(); // 開機時間戳 — 載入/驗證畫面自此至少顯示 1.5 秒
     this._clk = setInterval(() => this.forceUpdate(), 1000); // 秒級倒數計時 + 頂欄時鐘
     // 圖表拖拽平移(甘特/人員時間軸)
     this._pmv = e => { if (this._panSt) this._panSt.el.scrollLeft = this._panSt.sl - (e.clientX - this._panSt.x); };
@@ -69,21 +71,28 @@ class Component extends DCLogic {
   // 名單驗證在 Apps Script 後端(user_account 分頁),前端閘門只是 UX — 沒 token 後端一律拒絕。
   authRequired() { return !!(this.db && this.db.mode === 'cloud' && this.db.cfg.kind === 'gas' && this.db.cfg.url && this.DEF.clientId); }
   initAuth() {
-    if (!this.authRequired()) { this.setState({ authState: 'off' }); this.startCloud(); return; }
+    // splash 疊層蓋住載入/驗證;就緒後(自開機起至少 1.5 秒)先把目標畫面渲染在底下,再讓 splash 淡出露出它
+    const reveal = setDest => setTimeout(() => {
+      setDest();
+      this.setState({ splashHide: true });            // 觸發 CSS opacity 過場淡出
+      setTimeout(() => this.setState({ splashOn: false }), 900); // 淡出結束後移除疊層
+    }, Math.max(0, 1500 - (Date.now() - (this._bootT0 || Date.now()))));
+    if (!this.authRequired()) { reveal(() => { this.setState({ authState: 'off' }); this.startCloud(); }); return; }
     const a = this.db.getAuth();
     if (a && a.token) {
-      this.setState({ authState: 'checking' });
       this.db.whoami()
         .then(j => {
           if (j && j.ok) {
             // whoami 每次回最新角色/地點/權限 — 名單或矩陣調整,重新整理即生效
-            this.setState({ authState: 'ok', authName: a.name || j.name || '', authEmail: a.email || j.email || '', authRole: j.role || a.role || '', authLocs: j.location_ids !== undefined ? j.location_ids : (a.locs || ''), authPerms: j.perms !== undefined ? j.perms : (a.perms || null) });
-            this.startCloud();
+            reveal(() => {
+              this.setState({ authState: 'ok', authName: a.name || j.name || '', authEmail: a.email || j.email || '', authRole: j.role || a.role || '', authLocs: j.location_ids !== undefined ? j.location_ids : (a.locs || ''), authPerms: j.perms !== undefined ? j.perms : (a.perms || null) });
+              this.startCloud();
+            });
           }
-          else { this.db.clearAuth(); this.setState({ authState: 'login' }); }
+          else reveal(() => { this.db.clearAuth(); this.setState({ authState: 'login' }); });
         })
-        .catch(() => { this.setState({ authState: 'login' }); this.notify('✕ 連不上登入伺服器 — 請檢查網路後重試'); });
-    } else this.setState({ authState: 'login' });
+        .catch(() => reveal(() => { this.setState({ authState: 'login' }); this.notify('✕ 連不上登入伺服器 — 請檢查網路後重試'); }));
+    } else reveal(() => this.setState({ authState: 'login' }));
   }
   // ── 權限(Phase 2):角色×畫面矩陣(role_permission 分頁)+ 地點範圍 ──
   // 後端才是強制點;這裡只決定 UI 顯示。未登入模式(本地示範)全部開放。
@@ -1281,8 +1290,8 @@ class Component extends DCLogic {
       goConnect: () => this.setState({ screen: 'connect' }),
       doReset: () => { if (db) { db.reset(); this.setState({ cart: {}, poLines: [], toDraft: [], closing: {}, closed: false, draft: null, finVals: {} }); this.notify('已重置為示範資料'); } },
       // ── 登入閘門顯示狀態:app 內容只在 通過名單(ok)或 免登入(off,本地示範)時渲染 ──
-      authBootOn: !db,
-      authCheckingOn: !!db && S.authState === 'checking',
+      splashOn: S.splashOn,
+      splashStyle: S.splashHide ? 'opacity:0;pointer-events:none' : 'opacity:1',
       authLoginOn: !!db && S.authState === 'login',
       authBlockedOn: !!db && S.authState === 'blocked',
       appOn: !!db && (S.authState === 'ok' || S.authState === 'off'),

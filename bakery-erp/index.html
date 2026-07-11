@@ -10,6 +10,7 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 body{margin:0;font-family:'Noto Sans TC',sans-serif;background:#f7f8fa;color:#1b2330}
+@keyframes scrFade{from{opacity:0}to{opacity:1}}
 input[type=number]{-moz-appearance:textfield;appearance:textfield}
 input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .htop{display:flex;align-items:center;gap:14px;height:50px;padding:0 20px;background:#fff;border-bottom:1px solid #e3e6eb;flex:none}
@@ -51,29 +52,34 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div id="app"></div>
 <script type="text/x-template" id="app-tpl">
 
-<!-- ═══ 載入/驗證中 ═══ -->
-<sc-if value="{{authBootOn}}">
-  <div style="display:flex;height:100vh;align-items:center;justify-content:center;gap:10px;color:#66707f;font-size:14px;background:#fff"><span style="width:22px;height:22px;background:#0e7490;border-radius:6px"></span>載入中…</div>
-</sc-if>
-<sc-if value="{{authCheckingOn}}">
-  <div style="display:flex;height:100vh;align-items:center;justify-content:center;gap:10px;color:#66707f;font-size:14px;background:#fff"><span style="width:22px;height:22px;background:#0e7490;border-radius:6px"></span>驗證登入中…</div>
+<!-- ═══ 開機 splash 疊層:蓋住載入/驗證,就緒後淡出露出底下畫面 ═══ -->
+<sc-if value="{{splashOn}}">
+  <div style="position:fixed;inset:0;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#f6f6eb;transition:opacity .9s ease;animation:scrFade .5s ease;{{splashStyle}}">
+    <img src="assets/wordmark-blue.png" alt="Mamalili home&bakery" style="width:240px;max-width:56%;height:auto">
+    <div style="display:flex;align-items:center;gap:10px;color:#66707f;font-size:14px"><span class="gspin"></span>載入中…</div>
+  </div>
 </sc-if>
 
 <!-- ═══ 登入(Google Sign-In;帳號由管理員開通)═══ -->
 <sc-if value="{{authLoginOn}}">
-  <div style="display:flex;height:100vh;background:#fff">
-    <div style="width:38%;min-width:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;border-right:1px solid #eef0f3;box-shadow:6px 0 24px rgba(16,24,40,.05)">
-      <span style="width:76px;height:76px;background:#0e7490;border-radius:20px;box-shadow:0 8px 24px rgba(14,116,144,.25)"></span>
-      <div style="font-size:32px;font-weight:700;letter-spacing:-.01em"><span style="color:#0e7490">Bakery</span> ERP</div>
-      <div style="color:#66707f;font-size:14px">中央倉+多門市 烘焙管理系統</div>
+  <div style="display:flex;height:100vh;background:#f6f6eb">
+    <div style="width:38%;min-width:300px;display:flex;align-items:center;justify-content:center;background:url('assets/background-blue-texture.jpg') center/cover no-repeat">
+      <img src="assets/mascot-color.png" alt="Mamalili" style="width:60%;max-width:320px;height:auto;filter:drop-shadow(0 12px 30px rgba(16,24,40,.28))">
     </div>
     <div style="flex:1;display:flex;align-items:center;padding:0 8%">
-      <div style="width:340px;display:flex;flex-direction:column;gap:16px">
-        <div style="font-size:26px;font-weight:700">登入你的帳戶</div>
-        <div style="color:#66707f;font-size:13px">請使用已開通的 Google 帳戶登入</div>
-        <div ref="{{gsiRef}}" morph-skip style="min-height:44px;{{gsiWrapStyle}}"></div>
+      <div style="width:340px;display:flex;flex-direction:column">
+        <!-- identity block -->
+        <div style="padding-bottom:24px;border-bottom:1px solid #e7e3d4">
+          <div style="font-size:28px;font-weight:700;letter-spacing:-.01em;color:#1b2330"><span style="color:#5078a0">Bakery</span> ERP</div>
+          <div style="color:#66707f;font-size:13.5px;margin-top:6px">中央倉+多門市 烘焙管理系統</div>
+        </div>
+        <!-- sign-in block -->
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:28px">
+          <div ref="{{gsiRef}}" morph-skip style="min-height:44px;{{gsiWrapStyle}}"></div>
+          <div style="color:#66707f;font-size:12.5px;line-height:1.5">請使用已開通的 Google 帳戶登入</div>
+        </div>
         <div style="{{authBusyStyle}}"><span class="gspin"></span><span>正在驗證你的帳號…</span></div>
-        <div style="font-size:12px;color:#9aa1ab;line-height:1.7;border-top:1px solid #eef0f3;padding-top:12px">帳號由系統管理員開通;尚未開通或無法登入,請聯繫管理員。</div>
+        <div style="font-size:12px;color:#9aa1ab;line-height:1.7;margin-top:22px">帳號由系統管理員開通;尚未開通或無法登入,請聯繫管理員。</div>
       </div>
     </div>
   </div>
@@ -81,11 +87,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 
 <!-- ═══ 已登入但不在名單(封鎖)═══ -->
 <sc-if value="{{authBlockedOn}}">
-  <div style="display:flex;height:100vh;background:#fff">
-    <div style="width:38%;min-width:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;border-right:1px solid #eef0f3;box-shadow:6px 0 24px rgba(16,24,40,.05)">
-      <span style="width:76px;height:76px;background:#0e7490;border-radius:20px;box-shadow:0 8px 24px rgba(14,116,144,.25)"></span>
-      <div style="font-size:32px;font-weight:700;letter-spacing:-.01em"><span style="color:#0e7490">Bakery</span> ERP</div>
-      <div style="color:#66707f;font-size:14px">中央倉+多門市 烘焙管理系統</div>
+  <div style="display:flex;height:100vh;background:#f6f6eb">
+    <div style="width:38%;min-width:300px;display:flex;align-items:center;justify-content:center;background:url('assets/background-blue-texture.jpg') center/cover no-repeat">
+      <img src="assets/mascot-color.png" alt="Mamalili" style="width:60%;max-width:320px;height:auto;filter:drop-shadow(0 12px 30px rgba(16,24,40,.28))">
     </div>
     <div style="flex:1;display:flex;align-items:center;padding:0 8%">
       <div style="width:380px;display:flex;flex-direction:column;gap:14px">
@@ -101,7 +105,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <sc-if value="{{appOn}}">
 <div style="display:flex;flex-direction:column;height:100vh;font-size:13px;line-height:1.45">
   <div class="htop">
-    <div style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px"><span style="width:22px;height:22px;background:#0e7490;border-radius:6px"></span>Bakery ERP</div>
+    <div style="display:flex;align-items:center"><img src="assets/wordmark-blue.png" alt="Mamalili home&bakery" style="height:30px;width:auto;display:block"></div>
     <span class="seg" style="margin-left:4px"><sc-for list="{{locTabs}}" as="lv" hint-placeholder-count="3"><span style="{{lv.style}}" onClick="{{lv.go}}">{{lv.name}}</span></sc-for></span>
     <div style="color:#66707f;font-size:12.5px">{{screenTitle}}</div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
