@@ -33,6 +33,25 @@
 2. 單據**狀態機** — transfer_order(叫貨→已出貨→已收貨/取消)、purchase_line
    (已下單/廠商已確認/配送中/補送中/暫緩/退貨 → 部分到貨/已到貨)。
 
+## 登入與名單控管(Phase 1)
+
+雲端模式(方案 B)強制 **Google 登入 + email 名單**;名單驗證在 Apps Script 後端,
+前端閘門只是 UX — 沒有有效 token,後端一律拒絕(登入前零資料流量):
+
+- 登入頁「使用 Google 帳戶登入」→ 後端驗證 Google ID token(比對 `AUTH.CLIENT_ID`)→
+  email 在 `user_account` 分頁且 `active=TRUE` → 核發 6 小時工作階段 token
+- 不在名單 → 「此帳號尚未開通」畫面,看不到任何內容
+- `user_account` 分頁只有 `super_admin` 能讀寫;`setup`/`migrate` 也僅限 `super_admin`
+- 本地示範模式(無連線設定)不需登入 — 示範資料照舊試玩
+
+**後端一次性設定**:`apps-script.js` 開頭填 `AUTH.CLIENT_ID`(同前端 OAuth Client ID)與
+`AUTH.BOOTSTRAP_ADMIN`(第一位管理員 Gmail)→ 執行 `migrate`(建 `user_account` 分頁)→
+部署新版本。管理員首次登入自動建立 `super_admin` 帳號;之後在 `user_account` 分頁加列開通
+其他人(name / email / role / location_ids / active=TRUE)。
+`AUTH.CLIENT_ID` 留空 = 不驗證(行為同 v2,僅供本機測試)。
+
+角色權限(super_admin / store_admin 依 `location_ids` 限縮視角與畫面)為下一階段。
+
 ## 資料與連線
 
 - **預設空表**:全新裝置一律從空資料開始(只保證中央倉地點存在),落在「開始設定」嚮導 —
