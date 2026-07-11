@@ -203,7 +203,7 @@ L-0008,product,PRD-01,in,24,production_in,P-0328,13.9,2026-07-01,LOC-A`
 const KEY = 'bakery_proto_csv_v2';
 const CFG_KEY = 'bakery_remote_cfg_v2';
 const MODE_KEY = 'bakery_api_mode_v2';
-const AUTH_KEY = 'bakery_auth_v1'; // {token, name, email, role} — GAS 後端核發的工作階段
+const AUTH_KEY = 'bakery_auth_v1'; // {token, name, email, role} — GAS 後端核發的工作階段;存 sessionStorage:同分頁重新整理免重登(仍會 whoami 重驗),關閉分頁即需重新登入
 const GBASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 // v2 結構需搭配 v2 版 apps-script.js(TABLES 含 location_id 與調撥表);
 // 既有 Sheet 升級:貼新腳本 → 執行 setup → 部署新版本(/exec 網址不變)。
@@ -319,9 +319,9 @@ export class DB {
   setLocal() { this.mode = 'local'; try { localStorage.setItem(MODE_KEY, 'local'); } catch (e) { } }
 
   // ── 登入工作階段(Google Sign-In → GAS 後端核發 token;後端逐請求驗證)──
-  getAuth() { try { return JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); } catch (e) { return null; } }
-  setAuth(a) { try { localStorage.setItem(AUTH_KEY, JSON.stringify(a)); } catch (e) { } }
-  clearAuth() { try { localStorage.removeItem(AUTH_KEY); } catch (e) { } }
+  getAuth() { try { return JSON.parse(sessionStorage.getItem(AUTH_KEY) || 'null'); } catch (e) { return null; } }
+  setAuth(a) { try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(a)); } catch (e) { } }
+  clearAuth() { try { sessionStorage.removeItem(AUTH_KEY); localStorage.removeItem(AUTH_KEY); } catch (e) { } } // 也清舊版存在 localStorage 的 token
   authToken() { const a = this.getAuth(); return (a && a.token) || ''; }
   // Google ID token → 後端驗證+比對 user_account 名單 → 核發工作階段 token
   async login(credential) {
