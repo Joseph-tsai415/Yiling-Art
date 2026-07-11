@@ -54,7 +54,37 @@ var TABLES = {
   transfer_line:    ['tl_id','to_id','ingredient_id','qty'],
   ingredient_request: ['req_id','location_id','name','spec','weekly_qty','urgent','status','ingredient_id','request_date','done_date'],
   stock_ledger:     ['ledger_id','item_type','item_id','direction','qty','source_type','source_id','unit_cost','txn_date','location_id'],
-  user_account:     ['user_id','name','email','role','location_ids','active','created_at','last_login'] // 使用者名單:role=super_admin/…;location_ids=ALL 或 LOC-A|LOC-B(角色權限於後續版本啟用)
+  user_account:     ['user_id','name','email','role','location_ids','active','created_at','last_login'], // 名單:role=super_admin/central_ops/store_admin/store_kitchen/store_front;location_ids=ALL 或 LOC-A|LOC-B
+  role_permission:  ['role_id','perm_key','allow'] // 角色×權限矩陣(可直接在 Sheet 改,即時生效):perm_key=screen.<畫面>/feature.cost;super_admin 恆為全部不需列
+};
+
+// role_permission 預設值(setup 種入;migrate 只在分頁不存在或空白時種入 — 不覆蓋你的調整)
+// 依 doc/PERMISSION_ROLE_MAP.md:central_ops 可見成本;門市角色(含店長)全部隱藏成本
+var DEFAULT_PERMS = {
+  central_ops:   ['screen.setup', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.locations', 'screen.products', 'screen.suppliers', 'feature.cost'],
+  store_admin:   ['screen.overview', 'screen.schedule', 'screen.production', 'screen.sales', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.products', 'screen.staff', 'screen.reports', 'screen.closing'],
+  store_kitchen: ['screen.production', 'screen.products'],
+  store_front:   ['screen.sales']
+};
+function defaultPermRows_() {
+  var out = [];
+  Object.keys(DEFAULT_PERMS).forEach(function (role) {
+    DEFAULT_PERMS[role].forEach(function (k) { out.push([role, k, 'TRUE']); });
+  });
+  return out;
+}
+
+// 整表覆寫 ACL:表 → 允許角色(未列 = 所有已登入角色,但受 scoped replace 保護)
+var REPLACE_ACL = {
+  user_account: ['super_admin'],
+  role_permission: ['super_admin'],
+  product: ['super_admin', 'central_ops'],
+  bom: ['super_admin', 'central_ops'],
+  routing: ['super_admin', 'central_ops'],
+  supplier: ['super_admin', 'central_ops'],
+  equipment: ['super_admin', 'central_ops'],
+  location: ['super_admin', 'central_ops'],
+  transfer_line: ['super_admin', 'central_ops'] // 部分出貨改寫明細=中央操作;門市只 append
 };
 
 var SEED = {
@@ -170,15 +200,98 @@ var SEED = {
     ['SO-1001','PRD-02',2,55,'2026-07-02','pos-1846','LOC-A']
   ]
 };
+SEED.role_permission = defaultPermRows_();
 
 // ─── 登入驗證 ───
 function authEnabled_() { return !!AUTH.CLIENT_ID; }
-// token → 工作階段(CacheService,6 小時);無效回 null
+// token → 工作階段(CacheService,6 小時);無效回 null。快取只存 email,
+// 角色/地點/停用狀態每個請求都重新讀 user_account → 改名單即時生效,不用等 token 過期。
 function session_(token) {
   if (!token) return null;
   var raw = CacheService.getScriptCache().get('tok:' + token);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch (err) { return null; }
+}
+function resolveSess_(token) {
+  var s = session_(token);
+  if (!s) return null;
+  var acc = findAccount_(String(s.email || ''));
+  if (!acc || String(acc.active).toUpperCase() !== 'TRUE') return null;
+  return { email: s.email, name: String(acc.name || ''), role: String(acc.role || ''), user_id: String(acc.user_id || ''), locs: String(acc.location_ids || '').trim() };
+}
+// 角色的權限清單(role_permission 分頁,allow=TRUE);super_admin 恆為全部
+function permsOf_(role) {
+  if (role === 'super_admin') return ['*'];
+  var sh = ss_().getSheetByName('role_permission');
+  if (!sh || sh.getLastRow() < 2) return (DEFAULT_PERMS[role] || []).slice();
+  var data = sh.getDataRange().getValues();
+  var head = data[0].map(String);
+  var iR = head.indexOf('role_id'), iK = head.indexOf('perm_key'), iA = head.indexOf('allow');
+  var out = [];
+  for (var r = 1; r < data.length; r++) {
+    if (String(data[r][iR]).trim() === role && String(data[r][iA]).toUpperCase() === 'TRUE') out.push(String(data[r][iK]).trim());
+  }
+  return out;
+}
+// 地點範圍:null = 不限(ALL/super);否則 {LOC-A:1,...}
+function scopeOf_(sess) {
+  if (!sess || sess.role === 'super_admin') return null;
+  var l = sess.locs;
+  if (!l || l.toUpperCase() === 'ALL') return null;
+  var m = {};
+  l.split(/[|;,]/).forEach(function (x) { x = x.trim(); if (x) m[x] = 1; });
+  return m;
+}
+// 讀取過濾:範圍外的列不回傳(rows[0] 為表頭)
+function filterRows_(name, rows, scope) {
+  if (!scope || !rows || rows.length < 2) return rows;
+  var head = rows[0].map(String);
+  var keep = function (fn) { return [rows[0]].concat(rows.slice(1).filter(fn)); };
+  if (name === 'product') { // 共用(空/ALL)或歸屬範圍內門市
+    var iL = head.indexOf('location_id');
+    if (iL < 0) return rows;
+    return keep(function (r) {
+      var v = String(r[iL] || '').trim();
+      if (!v || v.toUpperCase() === 'ALL') return true;
+      return v.split(/[|;,]/).some(function (x) { return scope[x.trim()]; });
+    });
+  }
+  if (name === 'transfer_order') {
+    var iT = head.indexOf('to_loc'), iF = head.indexOf('from_loc');
+    return keep(function (r) { return scope[String(r[iT]).trim()] || scope[String(r[iF]).trim()]; });
+  }
+  if (name === 'transfer_line') { // 跟隨可見的 transfer_order
+    var ok = {};
+    var toSh = ss_().getSheetByName('transfer_order');
+    if (toSh && toSh.getLastRow() > 1) {
+      var td = toSh.getDataRange().getValues();
+      var th = td[0].map(String);
+      var iId = th.indexOf('to_id'), iT2 = th.indexOf('to_loc'), iF2 = th.indexOf('from_loc');
+      for (var r = 1; r < td.length; r++) if (scope[String(td[r][iT2]).trim()] || scope[String(td[r][iF2]).trim()]) ok[String(td[r][iId])] = 1;
+    }
+    var iTo = head.indexOf('to_id');
+    return keep(function (r2) { return ok[String(r2[iTo])]; });
+  }
+  var iLoc = head.indexOf('location_id');
+  if (iLoc < 0) return rows; // 無地點欄的主資料 → 共用不過濾
+  return keep(function (r) { return !!scope[String(r[iLoc] || '').trim() || 'LOC-A']; }); // 空值視為 LOC-A(舊資料慣例)
+}
+// 列是否在範圍內(append/replace 驗證用)
+function rowInScope_(name, headers, rowArr, scope) {
+  if (!scope) return true;
+  if (name === 'transfer_order') {
+    var iT = headers.indexOf('to_loc'), iF = headers.indexOf('from_loc');
+    return !!(scope[String(rowArr[iT] || '').trim()] || scope[String(rowArr[iF] || '').trim()]);
+  }
+  var iL = headers.indexOf('location_id');
+  if (iL < 0) return true;
+  return !!scope[String(rowArr[iL] || '').trim() || 'LOC-A'];
+}
+function canReplace_(sess, sheet) {
+  if (!sess) return true; // 未啟用驗證
+  if (sess.role === 'super_admin') return true;
+  var acl = REPLACE_ACL[sheet];
+  return !acl || acl.indexOf(sess.role) >= 0;
 }
 function accountsSheet_() {
   var sh = ss_().getSheetByName('user_account');
@@ -218,9 +331,11 @@ function login_(credential) {
   }
   if (!acc || String(acc.active).toUpperCase() !== 'TRUE') return { ok: false, error: 'not_on_list', email: email };
   var token = Utilities.getUuid();
-  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email, role: String(acc.role || ''), name: String(acc.name || ''), user_id: String(acc.user_id || '') }), 21600);
+  // 快取只存 email — 角色/地點/停用每個請求重新解析(resolveSess_),名單變更即時生效
+  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email }), 21600);
   try { accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1).setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')); } catch (err) { }
-  return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: String(acc.role || ''), location_ids: String(acc.location_ids || ''), expires_in: 21600 };
+  var role = String(acc.role || '');
+  return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: role, location_ids: String(acc.location_ids || ''), perms: permsOf_(role), expires_in: 21600 };
 }
 
 // ─── 讀取:GET ?action=list&sheet=ingredient&token=… ───
@@ -228,10 +343,10 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'tables';
   var sess = null;
   if (authEnabled_()) {
-    sess = session_(e && e.parameter && e.parameter.token);
+    sess = resolveSess_(e && e.parameter && e.parameter.token);
     if (!sess) return json_({ ok: false, error: 'unauthorized' });
   }
-  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role } : { ok: true, role: '', msg: '後端未啟用登入' });
+  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role) } : { ok: true, role: '', msg: '後端未啟用登入' });
   if (action === 'setup') {
     if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     setup(); return json_({ ok: true, msg: 'setup 完成,已建立 ' + Object.keys(TABLES).length + ' 個分頁' });
@@ -241,13 +356,14 @@ function doGet(e) {
     var rep = migrate(); return json_({ ok: true, msg: rep.length ? rep.join(';') : '全部已是最新結構' });
   }
   if (action === 'list') {
-    if (e.parameter.sheet === 'user_account' && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+    if ((e.parameter.sheet === 'user_account' || e.parameter.sheet === 'role_permission') && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     var sh = ss_().getSheetByName(e.parameter.sheet);
     if (!sh) return json_({ ok: false, error: '找不到分頁:' + e.parameter.sheet + '(請先執行 setup)' });
     var tz = Session.getScriptTimeZone();
     var rows = sh.getDataRange().getValues().map(function (r) {
       return r.map(function (v) { return (v instanceof Date) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v; });
     });
+    rows = filterRows_(e.parameter.sheet, rows, scopeOf_(sess)); // 地點範圍外的列不回傳
     return json_({ ok: true, rows: rows });
   }
   return json_({ ok: true, tables: Object.keys(TABLES) });
@@ -263,19 +379,39 @@ function doPost(e) {
     // 登入不需 token(它就是來換 token 的)
     if (body.action === 'login') return json_(login_(body.credential));
 
+    var sess = null, scope = null;
     if (authEnabled_()) {
-      var sess = session_(body.token);
+      sess = resolveSess_(body.token);
       if (!sess) return json_({ ok: false, error: 'unauthorized' });
-      // 使用者名單只有 super_admin 能改(防止一般帳號把自己升權)
-      if (body.sheet === 'user_account' && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+      scope = scopeOf_(sess);
     }
 
     // 主資料整表覆寫:{"action":"replace","sheet":"ingredient","headers":[...],"rows":[[...]]}
+    // 有地點範圍的工作階段走 scoped replace:只覆寫範圍內的列、保留範圍外既有列 —
+    // 讀取已過濾 + 整表覆寫,若不這樣做會把其他店的資料清掉。
     if (body.action === 'replace') {
+      if (!canReplace_(sess, body.sheet)) return json_({ ok: false, error: 'forbidden' });
       var shR = ss_().getSheetByName(body.sheet) || ss_().insertSheet(body.sheet);
+      var headersR = body.headers;
+      var incoming = body.rows || [];
+      if (scope) {
+        for (var iR = 0; iR < incoming.length; iR++) {
+          if (!rowInScope_(body.sheet, headersR, incoming[iR], scope)) return json_({ ok: false, error: 'forbidden_location' });
+        }
+        // 保留範圍外既有列(以現有表頭對映到新表頭,防欄位順序不同)
+        if (shR.getLastRow() > 1) {
+          var old = shR.getDataRange().getValues();
+          var oldHead = old[0].map(String);
+          var map = headersR.map(function (h) { return oldHead.indexOf(h); });
+          for (var r0 = 1; r0 < old.length; r0++) {
+            var mapped = map.map(function (idx) { return idx >= 0 ? old[r0][idx] : ''; });
+            if (!rowInScope_(body.sheet, headersR, mapped, scope)) incoming.push(mapped);
+          }
+        }
+      }
       shR.clearContents();
-      var data = [body.headers].concat(body.rows || []);
-      shR.getRange(1, 1, data.length, body.headers.length).setValues(data);
+      var data = [headersR].concat(incoming);
+      shR.getRange(1, 1, data.length, headersR.length).setValues(data);
       shR.setFrozenRows(1);
       return json_({ ok: true, replaced: data.length - 1 });
     }
@@ -283,6 +419,13 @@ function doPost(e) {
     var sh = ss_().getSheetByName(body.sheet);
     if (!sh) return json_({ ok: false, error: '找不到分頁:' + body.sheet + '(請先執行 setup)' });
     var headers = TABLES[body.sheet] || sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+
+    // append 的新列必須在地點範圍內(transfer_order 檢查 to_loc/from_loc)
+    if (scope && body.row) {
+      var rowArr0 = headers.map(function (h) { return body.row[h] !== undefined ? body.row[h] : ''; });
+      if (!rowInScope_(body.sheet, headers, rowArr0, scope)) return json_({ ok: false, error: 'forbidden_location' });
+    }
+    if (body.sheet === 'user_account' && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
 
     // 冪等:同一 idempotency_key 只入帳一次(防 POS 重複推播)
     if (body.row && body.row.idempotency_key) {
@@ -355,6 +498,12 @@ function migrate() {
     sh.setFrozenRows(1);
     report.push(name + ':升級 ' + rows.length + ' 列');
   });
+  // role_permission 存在但空白(只有表頭)→ 種入預設矩陣;已有資料則不動(保留你的調整)
+  var rp = ss.getSheetByName('role_permission');
+  if (rp && rp.getLastRow() < 2) {
+    defaultPermRows_().forEach(function (r) { rp.appendRow(r); });
+    report.push('role_permission:種入預設權限矩陣');
+  }
   Logger.log(report.join('\n') || '全部已是最新結構');
   return report;
 }

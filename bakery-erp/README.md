@@ -33,7 +33,7 @@
 2. 單據**狀態機** — transfer_order(叫貨→已出貨→已收貨/取消)、purchase_line
    (已下單/廠商已確認/配送中/補送中/暫緩/退貨 → 部分到貨/已到貨)。
 
-## 登入與名單控管(Phase 1)
+## 登入、名單與角色權限(Phase 1+2)
 
 雲端模式(方案 B)強制 **Google 登入 + email 名單**;名單驗證在 Apps Script 後端,
 前端閘門只是 UX — 沒有有效 token,後端一律拒絕(登入前零資料流量):
@@ -50,7 +50,12 @@
 其他人(name / email / role / location_ids / active=TRUE)。
 `AUTH.CLIENT_ID` 留空 = 不驗證(行為同 v2,僅供本機測試)。
 
-角色權限(super_admin / store_admin 依 `location_ids` 限縮視角與畫面)為下一階段。
+**角色權限(Phase 2)**:5 角色(super_admin / central_ops / store_admin 店長 /
+store_kitchen 內場 / store_front 外場)× 畫面矩陣存在 `role_permission` 分頁,
+super_admin 可在 App 內「帳號與角色」畫面或直接在 Sheet 調整,即時生效。
+地點範圍(`location_ids`)由後端強制:範圍外的資料讀不到、寫不進(scoped list/append/replace);
+門市所有角色(含店長)隱藏成本(`feature.cost` 僅 super/central)。
+完整矩陣與資料層規則見 [doc/PERMISSION_ROLE_MAP.md](doc/PERMISSION_ROLE_MAP.md)。
 
 ## 資料與連線
 

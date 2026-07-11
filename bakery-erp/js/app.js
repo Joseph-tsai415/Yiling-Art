@@ -75,11 +75,30 @@ class Component extends DCLogic {
       this.setState({ authState: 'checking' });
       this.db.whoami()
         .then(j => {
-          if (j && j.ok) { this.setState({ authState: 'ok', authName: a.name || j.name || '', authEmail: a.email || j.email || '', authRole: j.role || a.role || '' }); this.startCloud(); }
+          if (j && j.ok) {
+            // whoami 每次回最新角色/地點/權限 — 名單或矩陣調整,重新整理即生效
+            this.setState({ authState: 'ok', authName: a.name || j.name || '', authEmail: a.email || j.email || '', authRole: j.role || a.role || '', authLocs: j.location_ids !== undefined ? j.location_ids : (a.locs || ''), authPerms: j.perms !== undefined ? j.perms : (a.perms || null) });
+            this.startCloud();
+          }
           else { this.db.clearAuth(); this.setState({ authState: 'login' }); }
         })
         .catch(() => { this.setState({ authState: 'login' }); this.notify('✕ 連不上登入伺服器 — 請檢查網路後重試'); });
     } else this.setState({ authState: 'login' });
+  }
+  // ── 權限(Phase 2):角色×畫面矩陣(role_permission 分頁)+ 地點範圍 ──
+  // 後端才是強制點;這裡只決定 UI 顯示。未登入模式(本地示範)全部開放。
+  hasPerm(k) {
+    if (this.state.authState !== 'ok') return true;
+    const p = this.state.authPerms;
+    if (!p) return this.state.authRole === 'super_admin' ? true : k !== 'screen.accounts'; // 舊版後端沒回 perms → 相容:除帳號管理外開放
+    return p.indexOf('*') >= 0 || p.indexOf(k) >= 0;
+  }
+  canCost() { return this.hasPerm('feature.cost'); } // 成本可見:門市角色(含店長)一律隱藏
+  allowedLoc(id) {
+    if (this.state.authState !== 'ok') return true;
+    const l = String(this.state.authLocs || '').trim();
+    if (!l || l.toUpperCase() === 'ALL') return true;
+    return l.split(/[|;,]/).map(x => x.trim()).indexOf(id) >= 0;
   }
   startCloud() {
     if (!this.db || this.db.mode !== 'cloud') return;
@@ -113,8 +132,12 @@ class Component extends DCLogic {
     this.db.login(resp.credential)
       .then(j => {
         if (j && j.ok) {
-          this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role });
-          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '' });
+          this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role, locs: j.location_ids || '', perms: j.perms || null });
+          // 剛登入 → 依角色落在第一個允許的畫面(重新整理則維持原畫面,由 renderVals 守門)
+          const perms = j.perms || null;
+          const has = k => !perms ? true : (perms.indexOf('*') >= 0 || perms.indexOf('screen.' + k) >= 0);
+          const land = ['overview', 'production', 'sales', 'purchase', 'inventory', 'products', 'setup'].find(has) || 'overview';
+          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '', authLocs: j.location_ids || '', authPerms: j.perms || null, screen: land });
           this.notify('✓ 歡迎,' + (j.name || j.email));
           this.startCloud();
         } else if (j && j.error === 'not_on_list') {
@@ -131,8 +154,46 @@ class Component extends DCLogic {
     const g = window.google && window.google.accounts && window.google.accounts.id;
     if (g && g.disableAutoSelect) g.disableAutoSelect(); // 下次登入顯示帳號選擇器
     if (this._gsiEl) this._gsiEl.__gsiMounted = false;
-    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authBusy: false });
+    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authLocs: '', authPerms: null, authBusy: false, accUsers: null, accPerms: null });
     if (msg) this.notify(msg);
+  }
+  // ── 帳號與角色(super_admin):user_account / role_permission 直接讀寫 Sheet ──
+  ACC_HEAD = ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'];
+  PERM_HEAD = ['role_id', 'perm_key', 'allow'];
+  ROLE_OPTS = [
+    { id: 'super_admin', name: 'super_admin(系統管理員)' },
+    { id: 'central_ops', name: 'central_ops(中央倉)' },
+    { id: 'store_admin', name: 'store_admin(店長)' },
+    { id: 'store_kitchen', name: 'store_kitchen(內場)' },
+    { id: 'store_front', name: 'store_front(外場)' }
+  ];
+  loadAccounts(force) {
+    if (this.state.accBusy) return;
+    if (!force && this.state.accUsers) return;
+    this.setState({ accBusy: true });
+    const objs = j => {
+      if (!j || !j.ok || !j.rows || !j.rows.length) return [];
+      const h = j.rows[0].map(String);
+      return j.rows.slice(1).map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] === undefined || r[i] === null ? '' : String(r[i])); return o; });
+    };
+    Promise.all([this.db.api('action=list&sheet=user_account'), this.db.api('action=list&sheet=role_permission')])
+      .then(([a, b]) => this.setState({ accUsers: objs(a), accPerms: objs(b), accBusy: false, accErr: (a && a.ok) ? '' : (a && a.error || '讀取失敗') }))
+      .catch(err => this.setState({ accBusy: false, accErr: String(err) }));
+  }
+  // 防抖寫回(和 po_draft 同節奏):整表覆寫,後端限 super_admin
+  saveAccounts() {
+    clearTimeout(this._accT);
+    this._accT = setTimeout(() => {
+      const rows = (this.state.accUsers || []).map(u => this.ACC_HEAD.map(h => u[h] === undefined ? '' : u[h]));
+      this.db.sendRemote({ action: 'replace', sheet: 'user_account', headers: this.ACC_HEAD, rows });
+    }, 800);
+  }
+  savePerms() {
+    clearTimeout(this._permT);
+    this._permT = setTimeout(() => {
+      const rows = (this.state.accPerms || []).map(p => this.PERM_HEAD.map(h => p[h] === undefined ? '' : p[h]));
+      this.db.sendRemote({ action: 'replace', sheet: 'role_permission', headers: this.PERM_HEAD, rows });
+    }, 800);
   }
 
   // 永遠使用「真實今天」(本地時區);跨日自動更新
@@ -330,7 +391,7 @@ class Component extends DCLogic {
   // 所有交易表都帶 location_id 欄,同一原料在各地點有獨立結存;交易寫入一律蓋當前視角的戳記。
   get THIS_LOC() { return (this.state && this.state.loc) || 'LOC-A'; }
   CENTRAL = 'LOC-C';
-  CENOK = { setup: 1, inventory: 1, purchase: 1, ingredients: 1, locations: 1, suppliers: 1, connect: 1, products: 1 }; // 中央倉視角可用頁(不烘焙、不零售、不管產品)
+  CENOK = { setup: 1, inventory: 1, purchase: 1, ingredients: 1, locations: 1, suppliers: 1, connect: 1, products: 1, accounts: 1 }; // 中央倉視角可用頁(不烘焙、不零售)
   lt(name) { const L = this.THIS_LOC; return this.t(name).filter(r => (r.location_id || 'LOC-A') === L); } // 依當前視角過濾交易列
   setLoc(id, silent) {
     if (id === this.THIS_LOC) return;
@@ -1156,10 +1217,23 @@ class Component extends DCLogic {
       ['overview', '營運總覽', 0], ['schedule', '每日排程', 0], ['production', '生產管理', 0],
       ['sales', '前台銷售', 0], ['inventory', atCentral ? '庫存(中央倉)' : '庫存', 0], ['purchase', atCentral ? '出貨與採購' : '叫貨與採購', 0],
       ['ingredients', atCentral ? '原料目錄' : '本店備料', 1], ['locations', '門市地點', 1], ['products', '產品與配方', 1], ['suppliers', '供應商・設備', 1], ['staff', '人員', 1],
-      ['reports', '報表', 2], ['closing', '日結', 2], ['connect', '資料連線', 2]
+      ['reports', '報表', 2], ['closing', '日結', 2], ['connect', '資料連線', 2], ['accounts', '帳號與角色', 2]
     ];
     if (db && this.t('location').length && !this.t('location').some(l => l.location_id === this.THIS_LOC)) setTimeout(() => this.setLoc(this.CENTRAL, true), 0); // 目前視角的地點不存在(如雲端拉回舊資料)→ 靜默退回中央倉(登入畫面不跳吐司)
-    if (db && atCentral && !this.CENOK[S.screen]) setTimeout(() => this.setState({ screen: 'purchase', puView: 'central' }), 0);
+    if (db && atCentral && this.allowedLoc(this.CENTRAL) && !this.CENOK[S.screen]) setTimeout(() => this.setState({ screen: 'purchase', puView: 'central' }), 0); // 站在不被允許的地點時不搶跳畫面 — 先讓下方的地點守門把視角換走
+    // ── 角色範圍強制(Phase 2):視角限縮到帳號的 location_ids;畫面限縮到 role_permission ──
+    if (db && S.authState === 'ok') {
+      if (this.t('location').length && !this.allowedLoc(this.THIS_LOC)) {
+        const firstLoc = this.t('location').find(l => this.allowedLoc(l.location_id));
+        if (firstLoc) setTimeout(() => this.setLoc(firstLoc.location_id, true), 0);
+      }
+      if (this.allowedLoc(this.THIS_LOC) && !this.hasPerm('screen.' + S.screen)) { // 等地點守門先把視角換到允許的店,再挑畫面
+        const okScr = k => this.hasPerm('screen.' + k) && (!atCentral || this.CENOK[k]);
+        const next = ['overview', 'production', 'sales', 'purchase', 'inventory'].find(okScr) || (SCREENS.map(s => s[0]).find(okScr));
+        if (next && next !== S.screen) setTimeout(() => this.setState({ screen: next }), 0);
+      }
+      if (S.screen === 'accounts' && this.hasPerm('screen.accounts') && !S.accUsers && !S.accBusy) setTimeout(() => this.loadAccounts(), 0);
+    }
     if (db && atCentral && S.invTab === 'product') setTimeout(() => this.setState({ invTab: 'ingredient', selItem: (this.t('ingredient')[0] || {}).ingredient_id || '' }), 0);
     const draftCount = db ? this.lt('production_order').filter(o => o.status === '草稿').length : 0;
     const lowCount = db && !atCentral ? this.shortages().length : 0;
@@ -1167,8 +1241,8 @@ class Component extends DCLogic {
     const pendReqCount = db ? this.t('ingredient_request').filter(r => r.status === '待處理').length : 0;
     // 導覽 icon(Google Material Symbols)+ 收合狀態
     const navFold = S.navFold !== undefined ? !!S.navFold : (() => { try { return !!localStorage.getItem('bakery_navfold_v2'); } catch (e2) { return false; } })();
-    const NAVICON = { setup: 'rocket_launch', overview: 'dashboard', schedule: 'calendar_month', production: 'factory', sales: 'point_of_sale', inventory: 'inventory_2', purchase: 'shopping_cart', ingredients: 'egg_alt', locations: 'storefront', products: 'bakery_dining', suppliers: 'handshake', staff: 'group', reports: 'monitoring', closing: 'receipt_long', connect: 'cloud_sync' };
-    const mkNav = grp => SCREENS.filter(s => s[2] === grp && (!atCentral || this.CENOK[s[0]]) && (atCentral || s[0] !== 'locations')).map(s => {
+    const NAVICON = { setup: 'rocket_launch', overview: 'dashboard', schedule: 'calendar_month', production: 'factory', sales: 'point_of_sale', inventory: 'inventory_2', purchase: 'shopping_cart', ingredients: 'egg_alt', locations: 'storefront', products: 'bakery_dining', suppliers: 'handshake', staff: 'group', reports: 'monitoring', closing: 'receipt_long', connect: 'cloud_sync', accounts: 'manage_accounts' };
+    const mkNav = grp => SCREENS.filter(s => s[2] === grp && (!atCentral || this.CENOK[s[0]]) && (atCentral || s[0] !== 'locations') && this.hasPerm('screen.' + s[0])).map(s => {
       let badge = '', bs = 'display:none';
       if (s[0] === 'production' && draftCount) { badge = String(draftCount); bs = this.tag(C.amb); }
       if (s[0] === 'inventory' && lowCount) { badge = String(lowCount); bs = this.tag(C.red); }
@@ -1223,7 +1297,10 @@ class Component extends DCLogic {
       userChipTitle: S.authState === 'ok' ? [S.authEmail, S.authRole].filter(Boolean).join(' · ') : '',
       logoutStyle: S.authState === 'ok' ? '' : 'display:none',
       doLogoutBtn: () => this.doLogout('已登出'),
-      resetBtnStyle: db && db.mode === 'local' ? '' : 'display:none'
+      resetBtnStyle: db && db.mode === 'local' ? '' : 'display:none',
+      // 成本可見性(feature.cost):門市角色(含店長)隱藏所有成本欄位/卡片
+      canCost: this.canCost(),
+      costColStyle: this.canCost() ? '' : 'display:none'
     }, flags);
     if (!db) return Object.assign(base, { lowRows: [], prodRows: [], saleBars: [], recentRows: [], planRows: [], prodOptions: [], mrpRows: [], feedRows: [], ganttLanes: [], conflictMsg: '', conflictStyle: 'display:none', lowNote: '載入資料中…', apStyle: 'display:none', apBackStyle: 'display:none', apDayChips: [], apTimeChips: [], apTimeVal: '', apOnTime: () => { }, apClose: () => { } });
 
@@ -1463,7 +1540,7 @@ class Component extends DCLogic {
     const S = this.state, C = this.C, db = this.db;
     if (!db) return {};
     const atCentral = this.THIS_LOC === this.CENTRAL;
-    const locTabs = this.t('location').map(l => ({
+    const locTabs = this.t('location').filter(l => this.allowedLoc(l.location_id)).map(l => ({
       name: l.name,
       style: 'padding:5px 12px;cursor:pointer' + (l.location_id === this.THIS_LOC ? ';background:#0e7490;color:#fff;font-weight:500;border-radius:7px' : ''),
       go: () => this.setLoc(l.location_id)
@@ -2247,7 +2324,7 @@ class Component extends DCLogic {
     const wMax = Math.max(1, ...Object.values(wGrp));
     const reasonCol = { '賣剩': C.red, '生產失敗': C.amb, '過期': C.mut, '試作': '#5b5f97' };
     const wasteBars = Object.keys(wGrp).map(rs => ({
-      reason: rs, amt: 'NT$' + this.fmt(wGrp[rs]),
+      reason: rs, amt: this.canCost() ? 'NT$' + this.fmt(wGrp[rs]) : '', // 無成本權限:留相對長條、藏金額
       barStyle: 'display:block;height:100%;width:' + Math.round(wGrp[rs] / wMax * 100) + '%;background:' + (reasonCol[rs] || C.mut)
     }));
     const prodInWeek = this.t('stock_ledger').filter(l => l.source_type === 'production_in' && this.day(l.txn_date) >= WSTART && l.item_type === 'product');
@@ -2265,7 +2342,7 @@ class Component extends DCLogic {
       const cur = S.closing[p.product_id] || 'keep';
       return {
         name: p.name, qty: st, segs: mkSeg(p.product_id, cur),
-        costTxt: cur === 'waste' ? '−' + this.fmt(st * this.unitCost(p.product_id)) : cur === 'staff' ? '半價回收 ' + this.fmt(st * this.n(p.sale_price) / 2) : '明日續售'
+        costTxt: cur === 'waste' ? (this.canCost() ? '−' + this.fmt(st * this.unitCost(p.product_id)) : '報廢') : cur === 'staff' ? '半價回收 ' + this.fmt(st * this.n(p.sale_price) / 2) : '明日續售'
       };
     }).filter(Boolean);
     const tSales = this.lt('sales_line').filter(s => this.day(s.sale_date) === this.TODAY);
@@ -2941,10 +3018,10 @@ class Component extends DCLogic {
       routPanelStyle: '', // 自製半成品也有工序(菌種續養/熬煮/冷藏等),供逆推排程與製作天數
       routNote: isIngSel ? '自製半成品工序:攪拌/熬煮/發酵/冷藏等;工時 >8 小時自動 +1 天(排入生產時反映在完成日)' : '',
       routNoteStyle: isIngSel ? 'padding:8px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3' : 'display:none',
-      mgHideStyle: isIngSel ? 'display:none' : '',
+      mgHideStyle: (isIngSel || !this.canCost()) ? 'display:none' : '', // 批成本/毛利/毛利率:半成品或無成本權限都藏
       unitCostLbl: isIngSel ? '每 g 成本' : '單位成本',
       unitCostTip: isIngSel ? '每 g 成本 = 批成本 ÷ 產出 g 數(標準產出 ' + yieldN + ')' : '單位成本 = 批成本 ÷ 標準產出(' + yieldN + ')',
-      costNote: isIngSel ? '自製半成品:配方=每批用量,「批次產出」填一批做出的 g/ml 數;生產完成入庫時自動以 批成本÷批次產出 回寫「最新單價」,上層產品成本即時反映' : '改用量/售價即時重算;單價取最新進貨價',
+      costNote: !this.canCost() ? '' : isIngSel ? '自製半成品:配方=每批用量,「批次產出」填一批做出的 g/ml 數;生產完成入庫時自動以 批成本÷批次產出 回寫「最新單價」,上層產品成本即時反映' : '改用量/售價即時重算;單價取最新進貨價',
       pPrice: selP.sale_price, onPPrice: setP('sale_price'), pYield: selP.default_yield, onPYield: setP('default_yield'),
       pLeadTxt: (() => {
         const t = this.totalMinOf(S.selProd); if (!t) return '未設定工序';
@@ -3017,7 +3094,7 @@ class Component extends DCLogic {
       dTaxedTxt: (() => { const qp = this.n(d.quote_price); if (qp <= 0) return '—'; const rate = this.n(d.tax_rate) || 1.05; return 'NT$ ' + this.fmt(Math.round(qp * rate)) + ' /' + (d.purchase_unit || '單位'); })(),
       rRangeTxt,
       rRev: 'NT$' + this.fmt(rRevN), rCost: 'NT$' + this.fmt(rCostN),
-      rMargin: 'NT$' + this.fmt(rRevN - rCostN), rMarginPct: rRevN ? ((rRevN - rCostN) / rRevN * 100).toFixed(1) + '% 毛利率' : '—',
+      rMargin: 'NT$' + this.fmt(rRevN - rCostN), rMarginPct: !this.canCost() ? '' : rRevN ? ((rRevN - rCostN) / rRevN * 100).toFixed(1) + '% 毛利率' : '—',
       rWasteRate: prodCostW ? (wasteCostW / prodCostW * 100).toFixed(1) + '%' : '—',
       marginRows, wasteBars,
       closeRows, closeEmpty: closeRows.length ? 'display:none' : 'padding:14px 16px;color:#66707f;font-size:12.5px',
@@ -3025,7 +3102,75 @@ class Component extends DCLogic {
       cWaste: '−' + this.fmt(cWasteN), cNet: this.fmt(cSalesN - cCogsN - cWasteN),
       doClose: () => this.doClose(),
       closedTag: S.closed ? '已完成日結' : '未結',
-      closedStyle: this.tag(S.closed ? C.grn : C.amb)
+      closedStyle: this.tag(S.closed ? C.grn : C.amb),
+      // ── 帳號與角色(super_admin;資料在 user_account / role_permission 分頁,可直接改 Sheet)──
+      ...(() => {
+        const chip = on => (on ? 'background:#0e7490;border-color:#0e7490;color:#fff' : 'color:#66707f;border-color:#e3e6eb') + ';cursor:pointer;user-select:none';
+        const setAcc = (i, k, v) => {
+          const arr = (S.accUsers || []).slice();
+          arr[i] = Object.assign({}, arr[i], { [k]: v });
+          this.setState({ accUsers: arr });
+          this.saveAccounts();
+        };
+        const PERM_ROLES = [['central_ops', '中央倉'], ['store_admin', '店長'], ['store_kitchen', '內場'], ['store_front', '外場']];
+        const PERM_ITEMS = [['screen.setup', '開始設定'], ['screen.overview', '營運總覽'], ['screen.schedule', '每日排程'], ['screen.production', '生產管理'], ['screen.sales', '前台銷售'], ['screen.inventory', '庫存'], ['screen.purchase', '叫貨與採購'], ['screen.ingredients', '原料/本店備料'], ['screen.locations', '門市地點'], ['screen.products', '產品與配方'], ['screen.suppliers', '供應商・設備'], ['screen.staff', '人員'], ['screen.reports', '報表'], ['screen.closing', '日結'], ['screen.connect', '資料連線'], ['feature.cost', '成本可見(單價/毛利)']];
+        return {
+          accBusyTxt: S.accBusy ? '載入中…' : (S.accErr ? '✕ ' + S.accErr : ''),
+          accReload: () => this.loadAccounts(true),
+          accAdd: () => {
+            const arr = (S.accUsers || []).slice();
+            let mx = 0; arr.forEach(u => { const m = String(u.user_id).match(/(\d+)$/); if (m) mx = Math.max(mx, +m[1]); });
+            const firstStore = (this.t('location').find(l => l.type !== 'central') || {}).location_id || 'LOC-A';
+            arr.push({ user_id: 'U-' + String(mx + 1).padStart(3, '0'), name: '新帳號', email: '', role: 'store_front', location_ids: firstStore, active: 'TRUE', created_at: this.TODAY, last_login: '' });
+            this.setState({ accUsers: arr });
+            this.saveAccounts();
+            this.notify('✓ 已新增帳號 — 填上對方的 Google Email 即可登入');
+          },
+          accRows: (S.accUsers || []).map((u, i) => {
+            const locsCur = String(u.location_ids || '').trim();
+            const isAll = !locsCur || locsCur.toUpperCase() === 'ALL';
+            const list = isAll ? [] : locsCur.split(/[|;,]/).map(x => x.trim()).filter(Boolean);
+            return {
+              id: u.user_id,
+              nameVal: u.name, onName: e => setAcc(i, 'name', e.target.value),
+              emailVal: u.email, onEmail: e => setAcc(i, 'email', e.target.value.trim().toLowerCase()),
+              roleBtn: this.ddBtn(this.ROLE_OPTS, u.role, v => setAcc(i, 'role', v)),
+              locChips: [{ name: 'ALL', style: chip(isAll), toggle: () => setAcc(i, 'location_ids', 'ALL') }].concat(this.t('location').map(l => ({
+                name: l.name,
+                style: chip(!isAll && list.indexOf(l.location_id) >= 0),
+                toggle: () => {
+                  const set = {}; (isAll ? [] : list).forEach(x => { set[x] = 1; });
+                  if (set[l.location_id]) delete set[l.location_id]; else set[l.location_id] = 1;
+                  const ids = this.t('location').map(x => x.location_id).filter(id2 => set[id2]);
+                  setAcc(i, 'location_ids', ids.length ? ids.join('|') : 'ALL');
+                }
+              }))),
+              actTxt: String(u.active).toUpperCase() === 'TRUE' ? '啟用' : '停用',
+              actStyle: this.tag(String(u.active).toUpperCase() === 'TRUE' ? C.grn : C.mut) + ';cursor:pointer',
+              onToggle: () => setAcc(i, 'active', String(u.active).toUpperCase() === 'TRUE' ? 'FALSE' : 'TRUE'),
+              lastLogin: u.last_login || '—'
+            };
+          }),
+          accEmpty: ((S.accUsers && S.accUsers.length) || S.accBusy) ? 'display:none' : 'padding:14px 16px;font-size:12px;color:#66707f',
+          permRoleHead: PERM_ROLES.map(r => r[1]),
+          permMatrix: PERM_ITEMS.map(it => ({
+            label: it[1],
+            cells: PERM_ROLES.map(pr => {
+              const on = (S.accPerms || []).some(p => p.role_id === pr[0] && p.perm_key === it[0] && String(p.allow).toUpperCase() === 'TRUE');
+              return {
+                txt: on ? '✓' : '—',
+                style: (on ? this.tag(C.grn) : 'color:#c6ccd4;border-color:#eef0f3') + ';cursor:pointer;min-width:26px;text-align:center;user-select:none',
+                toggle: () => {
+                  let arr = (S.accPerms || []).filter(p => !(p.role_id === pr[0] && p.perm_key === it[0]));
+                  if (!on) arr = arr.concat([{ role_id: pr[0], perm_key: it[0], allow: 'TRUE' }]);
+                  this.setState({ accPerms: arr });
+                  this.savePerms();
+                }
+              };
+            })
+          }))
+        };
+      })()
     };
   }
 }

@@ -138,7 +138,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="kpi3"><div class="l">今日銷售</div><div class="v">{{kSales}}</div><div class="d">{{kSalesD}}</div></div>
             <div class="kpi3"><div class="l">今日入庫 / 計畫</div><div class="v">{{kBaked}} <span style="font-size:14px;font-weight:400;color:#66707f">/ {{kPlanned}} 個</span></div><div class="d">完成過帳自動累計</div></div>
             <div class="kpi3"><div class="l">在製 WIP</div><div class="v">{{kWip}}</div><div class="d">{{kWipD}}</div></div>
-            <div class="kpi3"><div class="l">本日損耗率</div><div class="v" style="color:#c11f28">{{kWasteRate}}</div><div class="d">報廢 ÷(銷貨+報廢)成本</div></div>
+            <div class="kpi3" style="{{costColStyle}}"><div class="l">本日損耗率</div><div class="v" style="color:#c11f28">{{kWasteRate}}</div><div class="d">報廢 ÷(銷貨+報廢)成本</div></div>
           </div>
           <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px">
             <div class="pan">
@@ -1095,13 +1095,13 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 </span>
               </div>
               <table class="t3">
-                <tr><th>原料</th><th>供應商</th><th>分類</th><th class="num">每批用量(g/ml)</th><th class="num">單價</th><th class="num">成本</th><th></th></tr>
+                <tr><th>原料</th><th>供應商</th><th>分類</th><th class="num">每批用量(g/ml)</th><th class="num" style="{{costColStyle}}">單價</th><th class="num" style="{{costColStyle}}">成本</th><th></th></tr>
                 <sc-for list="{{bomRows}}" as="r" hint-placeholder-count="3">
                   <tr><td style="font-weight:500">{{r.name}}</td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.supTxt}}</td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.catTxt}}</td>
                     <td class="num"><input class="inp" style="width:76px;text-align:right" type="number" value="{{r.qtyVal}}" onChange="{{r.onQty}}"></td>
-                    <td class="num">{{r.price}}</td><td class="num">{{r.cost}}</td>
+                    <td class="num" style="{{costColStyle}}">{{r.price}}</td><td class="num" style="{{costColStyle}}">{{r.cost}}</td>
                     <td style="color:#66707f;cursor:pointer" onClick="{{r.onRemove}}">✕</td></tr>
                 </sc-for>
               </table>
@@ -1119,7 +1119,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
               </div>
               <div style="display:flex;gap:24px;align-items:center;padding:11px 16px;border-top:1px solid #e3e6eb;background:#f4f6f8;font-size:12.5px">
                 <span style="{{mgHideStyle}}">批成本 <b>{{batchCost}}</b></span>
-                <span title="{{unitCostTip}}" style="cursor:help">{{unitCostLbl}} <b>{{unitCostTxt}}</b></span>
+                <span title="{{unitCostTip}}" style="cursor:help;{{costColStyle}}">{{unitCostLbl}} <b>{{unitCostTxt}}</b></span>
                 <span style="{{mgHideStyle}}">毛利 <b style="color:#177a4c">{{marginTxt}}</b></span>
                 <span style="{{mgHideStyle}}" title="雙向定價:改毛利率 → 售價自動反推(單位成本 ÷ (1−毛利率));改售價 → 毛利率自動重算">毛利率 <input class="inp" style="{{mgRateInpStyle}}" type="number" step="0.5" value="{{marginPctVal}}" onChange="{{onMarginPct}}"> %</span>
                 <span style="margin-left:auto;color:#66707f;font-size:11.5px">{{costNote}}</span>
@@ -1252,17 +1252,17 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <div style="display:flex;flex-direction:column;gap:14px" data-screen-label="報表">
           <div style="display:flex;gap:14px">
             <div class="kpi3"><div class="l">近 7 日營收({{rRangeTxt}})</div><div class="v">{{rRev}}</div><div class="d">{{rMarginPct}}</div></div>
-            <div class="kpi3"><div class="l">原料成本</div><div class="v">{{rCost}}</div><div class="d">依配方 × 最新單價</div></div>
-            <div class="kpi3"><div class="l">毛利</div><div class="v">{{rMargin}}</div><div class="d">營收 − 原料成本</div></div>
-            <div class="kpi3"><div class="l">損耗率</div><div class="v" style="color:#c11f28">{{rWasteRate}}</div><div class="d">報廢成本 / 生產成本</div></div>
+            <div class="kpi3" style="{{costColStyle}}"><div class="l">原料成本</div><div class="v">{{rCost}}</div><div class="d">依配方 × 最新單價</div></div>
+            <div class="kpi3" style="{{costColStyle}}"><div class="l">毛利</div><div class="v">{{rMargin}}</div><div class="d">營收 − 原料成本</div></div>
+            <div class="kpi3" style="{{costColStyle}}"><div class="l">損耗率</div><div class="v" style="color:#c11f28">{{rWasteRate}}</div><div class="d">報廢成本 / 生產成本</div></div>
           </div>
           <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:14px;align-items:start">
             <div class="pan">
               <div class="pah">產品毛利排行(週)</div>
               <table class="t3">
-                <tr><th>產品</th><th class="num">銷量</th><th class="num">營收</th><th class="num">成本</th><th class="num">毛利</th><th class="num">毛利率</th></tr>
+                <tr><th>產品</th><th class="num">銷量</th><th class="num">營收</th><th class="num" style="{{costColStyle}}">成本</th><th class="num" style="{{costColStyle}}">毛利</th><th class="num" style="{{costColStyle}}">毛利率</th></tr>
                 <sc-for list="{{marginRows}}" as="r" hint-placeholder-count="5">
-                  <tr><td style="font-weight:500">{{r.name}}</td><td class="num">{{r.qty}}</td><td class="num">{{r.rev}}</td><td class="num">{{r.cost}}</td><td class="num" style="font-weight:600">{{r.mg}}</td><td class="num" style="{{r.pctStyle}}">{{r.pct}}</td></tr>
+                  <tr><td style="font-weight:500">{{r.name}}</td><td class="num">{{r.qty}}</td><td class="num">{{r.rev}}</td><td class="num" style="{{costColStyle}}">{{r.cost}}</td><td class="num" style="font-weight:600;{{costColStyle}}">{{r.mg}}</td><td class="num" style="{{r.pctStyle}};{{costColStyle}}">{{r.pct}}</td></tr>
                 </sc-for>
               </table>
             </div>
@@ -1299,10 +1299,12 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pah" style="font-size:13px">② 今日結算摘要</div>
             <table class="t3">
               <tr><td>銷售收入</td><td class="num" style="font-weight:600">{{cSales}}</td></tr>
+              <sc-if value="{{canCost}}">
               <tr><td>銷貨成本</td><td class="num">{{cCogs}}</td></tr>
               <tr><td>毛利</td><td class="num" style="font-weight:600;color:#177a4c">{{cMargin}}</td></tr>
               <tr><td style="color:#c11f28">報廢損耗(今日累計)</td><td class="num" style="color:#c11f28">{{cWaste}}</td></tr>
               <tr><td style="font-weight:600">日淨毛利</td><td class="num" style="font-weight:700">{{cNet}}</td></tr>
+              </sc-if>
             </table>
             <div style="padding:12px">
               <span class="btn3" style="display:block;text-align:center;padding:11px 0;font-size:14px" onClick="{{doClose}}">確認日結並過帳</span>
@@ -1420,6 +1422,41 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <sc-for list="{{tableRows}}" as="r" hint-placeholder-count="8"><tr><td>{{r.name}}</td><td class="num">{{r.cnt}}</td></tr></sc-for>
               </table>
             </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ═══ 帳號與角色(super_admin) ═══ -->
+      <sc-if value="{{isAccounts}}">
+        <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:14px;align-items:start" data-screen-label="帳號與角色">
+          <div class="pan">
+            <div class="pah">使用者帳號(user_account)<span style="font-weight:400;color:#66707f;font-size:12px">{{accBusyTxt}}</span><span style="margin-left:auto;display:flex;gap:8px"><span class="btn3o" onClick="{{accReload}}">重新載入</span><span class="btn3" onClick="{{accAdd}}">+ 新增帳號</span></span></div>
+            <table class="t3">
+              <tr><th>編號</th><th>姓名</th><th>Email(Google 帳號)</th><th>角色</th><th>門市範圍</th><th>狀態</th><th>最後登入</th></tr>
+              <sc-for list="{{accRows}}" as="r" hint-placeholder-count="3">
+                <tr>
+                  <td style="color:#66707f">{{r.id}}</td>
+                  <td><input class="inp" style="width:86px" value="{{r.nameVal}}" onChange="{{r.onName}}"></td>
+                  <td><input class="inp" style="width:190px" value="{{r.emailVal}}" onChange="{{r.onEmail}}"></td>
+                  <td><span class="inp" style="min-width:132px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{r.roleBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.roleBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span></td>
+                  <td><div style="display:flex;gap:4px;flex-wrap:wrap"><sc-for list="{{r.locChips}}" as="c"><span class="tag3" style="{{c.style}}" onClick="{{c.toggle}}">{{c.name}}</span></sc-for></div></td>
+                  <td><span class="tag3" style="{{r.actStyle}}" onClick="{{r.onToggle}}">{{r.actTxt}}</span></td>
+                  <td style="color:#66707f;font-size:11px;white-space:nowrap">{{r.lastLogin}}</td>
+                </tr>
+              </sc-for>
+            </table>
+            <div style="{{accEmpty}}">尚無帳號 — 按「+ 新增帳號」;第一位管理員由後端 AUTH.BOOTSTRAP_ADMIN 首次登入自動建立</div>
+            <div style="padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">改完自動存檔。Email 須是對方登入用的 Google 帳號;「停用」即刻擋下該帳號所有讀寫。門市範圍點 ALL = 不限;角色/範圍變更,資料層當下生效、畫面於對方下次重新整理生效。</div>
+          </div>
+          <div class="pan">
+            <div class="pah">角色權限矩陣(role_permission)<span style="margin-left:auto;font-weight:400;font-size:11.5px;color:#66707f">super_admin 恆為全部,不在此列</span></div>
+            <table class="t3">
+              <tr><th>權限</th><sc-for list="{{permRoleHead}}" as="h"><th style="text-align:center">{{h}}</th></sc-for></tr>
+              <sc-for list="{{permMatrix}}" as="row">
+                <tr><td style="font-weight:500">{{row.label}}</td><sc-for list="{{row.cells}}" as="c"><td style="text-align:center"><span class="tag3" style="{{c.style}}" onClick="{{c.toggle}}">{{c.txt}}</span></td></sc-for></tr>
+              </sc-for>
+            </table>
+            <div style="padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">點格子切換 ✓/—,自動存檔;也可以直接在 Google Sheet 的 role_permission 分頁編輯,效果相同。</div>
           </div>
         </div>
       </sc-if>
