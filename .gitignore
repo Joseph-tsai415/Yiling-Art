@@ -20,6 +20,10 @@ dist/
 
 # Local-only Google API credentials (injected from GitHub secrets at deploy)
 product-card-printer/google-config.local.js
+bakery-erp/google-config.local.js
+
+# Design handoff bundles (imported into app folders, the archive itself stays untracked)
+*-handoff*.zip
 
 # product-card-printer/assets/: ONLY fonts/ is tracked & deployed (self-hosted
 # webfonts the app loads at runtime). Everything else here is local-only — S3-source

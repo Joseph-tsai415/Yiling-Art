@@ -33,7 +33,7 @@ Branches that touch a single app should include the app scope so PRs are easy to
 | App maintenance | `chore/<app>-short-description` | `chore/pantone-update-dataset` |
 | Repo-wide change | `<type>/short-description` (no app scope) | `chore/multi-app-structure`, `chore/update-deploy-workflow` |
 
-Current app scopes: `pantone` (brand-palette-pantone), `cards` (product-card-printer). When you add a new app, pick a short scope (lowercase, no spaces) and add it to this list.
+Current app scopes: `pantone` (brand-palette-pantone), `cards` (product-card-printer), `bakery` (bakery-erp). When you add a new app, pick a short scope (lowercase, no spaces) and add it to this list.
 
 ## Pull Requests
 

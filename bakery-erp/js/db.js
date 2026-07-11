@@ -1,0 +1,523 @@
+// Bakery ERP — 資料層(中央倉+多門市;移植自交接包 db2.js,邏輯逐字保留)
+// 22 張表 SCHEMA + 示範種子資料 + localStorage 快取;可選 Google Sheets 同步
+//(方案 A:Sheets API 直連;方案 B:Apps Script 極薄後端,見 ../apps-script.js)
+// 與 v1 差異:
+//  1) 所有交易表新增 location_id 欄(LOC-A 本店/LOC-B 大安店/LOC-C 中央倉)— 每筆異動可辨識發生地點
+//  2) 新增 location(地點主檔)、transfer_order/transfer_line(叫貨調撥,3 狀態:叫貨→已出貨→已收貨)
+//  3) 舊資料(真實快照/本地快取)載入時自動補 location_id=LOC-A(歷史異動皆屬本店)
+//  4) 獨立 localStorage 鍵與連線設定;預設「本地模式」,避免把 v2 新結構誤寫進 v1 的 Sheet
+import { SEED_OVERRIDE } from './seed-data.js'; // 真實資料庫快照(門市A 歷史資料)
+
+export const SCHEMA = {
+  location:         ['location_id','name','type'], // type: central | store
+  location_stock:   ['location_id','ingredient_id','safety_stock'], // 地點備料配置:有列=該地點備這個料(含各自安全庫存)
+  ingredient:       ['ingredient_id','name','category','base_unit','purchase_unit','conversion_rate','safety_stock','latest_unit_cost','quote_price','quote_price_pre','tax_rate','shelf_life_days','default_supplier_id','batch_yield'], // quote_price=廠商報價(未稅/每採購單位);tax_rate=1.0或1.05;batch_yield=自製半成品一批標準產出(g/ml,配方為每批用量)
+  product:          ['product_id','name','type','sale_price','lead_days','default_yield','is_active','location_id'], // location_id=產品歸屬門市(中央顯示全部/可篩一店;門市只見自己的);舊資料/空值視為 LOC-A
+  supplier:         ['supplier_id','name','contact_person','phone','email','address','payment_terms'],
+  bom:              ['bom_id','product_id','ingredient_id','qty_per_yield'],
+  routing:          ['routing_id','product_id','step_no','step_name','duration_min','equipment_id','cross_day'],
+  equipment:        ['equipment_id','name','type','count','capacity_per_batch','batch_minutes'],
+  category:         ['category_id','name','display_order'], // display_order=分類 pills 顯示順序(拖拽調整後回寫)
+  staff:            ['staff_id','name','role','active'],
+  line:             ['line_id','name'],
+  station:          ['station_id','line_id','seq','name','match','staff_id'],
+  assignment:       ['assign_id','prod_id','step_no','staff_id','ts'],
+  purchase_line:    ['po_id','po_name','ingredient_id','qty','purchase_unit','unit_price','subtotal','supplier_id','order_date','arrival_date','status','location_id','received_qty','tax_rate'], // 狀態:已下單/部分到貨/已到貨;po_name=單據名稱(方便記憶);received_qty=累計實收(採購單位)
+  production_order: ['prod_id','product_id','plan_qty','start_date','finish_date','status','location_id'],
+  plan_draft:       ['line_id','product_id','qty','finish_date','finish_time','staff_id','location_id'], // 生產計畫草稿(每日排程①)：離開/重整可載回；每地點各自一份
+  po_draft:         ['line_id','ingredient_id','units','unit_price','tax_rate','doc_name','eta','name_ov','eta_ov','location_id'], // 進貨單草稿(中央採購③)：可累積幾天再送單
+  sales_line:       ['so_id','product_id','qty','sale_price','sale_date','idempotency_key','location_id'],
+  waste:            ['waste_id','target_type','target_id','qty','reason','date','location_id'],
+  stocktake:        ['stocktake_id','target_type','target_id','counted_qty','date','location_id'],
+  transfer_order:   ['to_id','from_loc','to_loc','status','request_date','ship_date','receive_date','need_date','urgent'], // 狀態:叫貨/已出貨/已收貨/取消;need_date+urgent=需求到貨日與急件(SCM 優先序)
+  transfer_line:    ['tl_id','to_id','ingredient_id','qty'],
+  ingredient_request: ['req_id','location_id','name','spec','weekly_qty','urgent','status','ingredient_id','request_date','done_date'], // 門市申請新原料 → 中央歸戶(待處理/已加入/併入/婉拒)
+  stock_ledger:     ['ledger_id','item_type','item_id','direction','qty','source_type','source_id','unit_cost','txn_date','location_id']
+};
+
+// 中央倉期初庫存 + TO-1001 已出貨的調撥出庫流水(門市快照之外的 LOC-C 資料)
+const CENTRAL_LEDGER = `L-9001,ingredient,ING-001,in,80000,stocktake,期初,0.036,2026-07-01,LOC-C
+L-9002,ingredient,ING-004,in,6000,stocktake,期初,0.03,2026-07-01,LOC-C
+L-9003,ingredient,ING-008,in,4000,stocktake,期初,0.32,2026-07-01,LOC-C
+L-9004,ingredient,ING-009,in,12000,stocktake,期初,0.38,2026-07-01,LOC-C
+L-9005,ingredient,ING-010,in,10000,stocktake,期初,0.07,2026-07-01,LOC-C
+L-9006,ingredient,ING-012,in,8000,stocktake,期初,0.11,2026-07-01,LOC-C
+L-9007,ingredient,ING-001,out,25000,transfer_out,TO-1001,0.036,2026-07-03,LOC-C
+L-9008,ingredient,ING-010,out,6000,transfer_out,TO-1001,0.07,2026-07-03,LOC-C`;
+
+const SEED = {
+location: `location_id,name,type
+LOC-C,中央倉,central
+LOC-A,信義店,store
+LOC-B,大安店,store`,
+location_stock: `location_id,ingredient_id,safety_stock
+LOC-C,ING-001,30000
+LOC-C,ING-003,8000
+LOC-C,ING-006,8000
+LOC-C,ING-009,2000
+LOC-C,ING-021,6000
+LOC-A,ING-001,10000
+LOC-A,ING-003,3000
+LOC-A,ING-006,5000
+LOC-A,ING-009,500
+LOC-A,ING-014,2000
+LOC-A,ING-021,4000
+LOC-B,ING-001,8000
+LOC-B,ING-003,2000
+LOC-B,ING-009,400
+LOC-B,ING-014,1500`,
+transfer_order: `to_id,from_loc,to_loc,status,request_date,ship_date,receive_date,need_date,urgent
+TO-1001,LOC-C,LOC-A,已出貨,2026-07-02,2026-07-03,,2026-07-04,
+TO-1002,LOC-C,LOC-B,叫貨,2026-07-04,,,2026-07-05,TRUE`,
+ingredient_request: `req_id,location_id,name,spec,weekly_qty,urgent,status,ingredient_id,request_date,done_date
+REQ-001,LOC-B,T55 麵粉,法棍用、25kg 袋,40000,TRUE,待處理,,2026-07-04,
+REQ-002,LOC-A,抹茶粉,想做抹茶捲,1000,,婉拒,,2026-06-30,2026-07-01`,
+transfer_line: `tl_id,to_id,ingredient_id,qty
+TL-001,TO-1001,ING-001,25000
+TL-002,TO-1001,ING-010,6000
+TL-003,TO-1002,ING-001,25000
+TL-004,TO-1002,ING-008,5000
+TL-005,TO-1002,ING-004,5000`,
+ingredient: `ingredient_id,name,category,base_unit,purchase_unit,conversion_rate,safety_stock,latest_unit_cost,quote_price,tax_rate,shelf_life_days,default_supplier_id
+ING-001,高筋麵粉 T65,麵粉,g,袋,25000,10000,0.035,833,1.05,180,SUP-01
+ING-003,細砂糖,糖,g,包,10000,3000,0.028,267,1.05,365,SUP-01
+ING-006,無鹽發酵奶油,油脂,g,箱,10000,5000,0.31,2952,1.05,60,SUP-02
+ING-009,法國海鹽,鹽,g,包,1000,500,0.09,86,1.05,730,SUP-01
+ING-014,魯邦種(老麵),發酵種,g,自製,1,2000,0.015,0,1.0,3,
+ING-021,全脂鮮奶,乳品,ml,瓶,1000,4000,0.068,65,1.05,10,SUP-02`,
+product: `product_id,name,type,sale_price,lead_days,default_yield,is_active,location_id
+PRD-01,魯邦鄉村,bread,45,2,8,TRUE,LOC-A
+PRD-02,可頌,bread,55,2,12,TRUE,LOC-A
+PRD-03,法國長棍,bread,60,0,10,TRUE,ALL
+PRD-04,肉桂捲,dessert,65,0,10,TRUE,LOC-A
+PRD-05,佛卡夏,bread,50,0,8,TRUE,LOC-B`,
+supplier: `supplier_id,name,contact_person,phone,email,address,payment_terms
+SUP-01,統益麵粉行,陳先生,02-2755-3311,order@tongyi.com.tw,台北市萬華區環河南路二段 88 號,月結 30 天
+SUP-02,禾豐乳品,林小姐,0912-345-678,,新北市三重區重新路五段 12 號,週結`,
+bom: `bom_id,product_id,ingredient_id,qty_per_yield
+B-01,PRD-01,ING-001,2800
+B-02,PRD-01,ING-014,560
+B-03,PRD-01,ING-009,56
+B-04,PRD-02,ING-001,1800
+B-05,PRD-02,ING-006,1600
+B-06,PRD-02,ING-003,300
+B-07,PRD-02,ING-021,600
+B-08,PRD-03,ING-001,2200
+B-09,PRD-03,ING-009,44
+B-10,PRD-04,ING-001,1500
+B-11,PRD-04,ING-003,450
+B-12,PRD-04,ING-006,500
+B-13,PRD-05,ING-001,1600
+B-14,PRD-05,ING-009,32`,
+routing: `routing_id,product_id,step_no,step_name,duration_min,equipment_id,cross_day
+R-01,PRD-01,1,攪拌,30,EQ-01,FALSE
+R-02,PRD-01,2,一次發酵,90,EQ-02,FALSE
+R-03,PRD-01,3,分割整形,40,,FALSE
+R-04,PRD-01,4,冷藏發酵,900,EQ-02,TRUE
+R-05,PRD-01,5,烘烤,45,EQ-03,FALSE
+R-06,PRD-02,1,攪拌,30,EQ-01,FALSE
+R-07,PRD-02,2,折疊冷藏,720,,TRUE
+R-08,PRD-02,3,整形,40,,FALSE
+R-09,PRD-02,4,二次發酵,120,EQ-02,FALSE
+R-10,PRD-02,5,烘烤,25,EQ-03,FALSE
+R-11,PRD-03,1,攪拌,30,EQ-01,FALSE
+R-12,PRD-03,2,一次發酵,90,EQ-02,FALSE
+R-13,PRD-03,3,整形,30,,FALSE
+R-14,PRD-03,4,二次發酵,60,EQ-02,FALSE
+R-15,PRD-03,5,烘烤,25,EQ-03,FALSE
+R-16,PRD-04,1,攪拌,20,EQ-01,FALSE
+R-17,PRD-04,2,一次發酵,60,EQ-02,FALSE
+R-18,PRD-04,3,整形捲製,30,,FALSE
+R-19,PRD-04,4,二次發酵,40,EQ-02,FALSE
+R-20,PRD-04,5,烘烤,20,EQ-03,FALSE
+R-21,PRD-05,1,攪拌,20,EQ-01,FALSE
+R-22,PRD-05,2,一次發酵,90,EQ-02,FALSE
+R-23,PRD-05,3,整形,20,,FALSE
+R-24,PRD-05,4,烘烤,20,EQ-03,FALSE`,
+equipment: `equipment_id,name,type,count,capacity_per_batch,batch_minutes
+EQ-01,螺旋攪拌機,mixer,1,15 kg 麵團,30
+EQ-02,發酵箱,proofer,2,16 盤,
+EQ-03,層爐烤箱,oven,2,4 盤,45`,
+category: `category_id,name,display_order
+CAT-01,麵粉,1
+CAT-02,糖,2
+CAT-03,油脂,3
+CAT-04,乳品,4
+CAT-05,蛋,5
+CAT-06,鹽,6
+CAT-07,發酵種,7
+CAT-08,堅果果乾,8
+CAT-09,包材,9
+CAT-10,其他,10`,
+line: `line_id,name
+LINE-01,麵包流水線
+LINE-02,餐食流水線`,
+station: `station_id,line_id,seq,name,match,staff_id
+ST-01,LINE-01,1,攪拌,攪拌|拌合|餵養,
+ST-02,LINE-01,2,開酥,開酥|鬆弛,
+ST-03,LINE-01,3,發酵,發酵|熟成|冷藏定型,
+ST-04,LINE-01,4,整形,整形|分割|捲製,
+ST-05,LINE-01,5,烘烤,烘烤|烤,
+ST-06,LINE-02,1,備料,備料|洗切|處理,
+ST-07,LINE-02,2,烹調,煮|炒|烹|燉|煒,
+ST-08,LINE-02,3,組裝,組裝|擺盤|包裝,
+ST-09,LINE-02,4,出餐,出餐|保溫,`,
+staff: `staff_id,name,role,active
+EMP-01,林店長,店長/排程,TRUE
+EMP-02,陳阿明,攪拌備料,TRUE
+EMP-03,王小華,整形發酵,TRUE
+EMP-04,張師傅,烤爐,TRUE`,
+assignment: `assign_id,prod_id,step_no,staff_id,ts`,
+purchase_line: `po_id,po_name,ingredient_id,qty,purchase_unit,unit_price,subtotal,supplier_id,order_date,arrival_date,status,location_id,received_qty
+PO-0127,週初麵粉鮮奶,ING-001,1,袋,875,875,SUP-01,2026-06-30,2026-07-01,已到貨,LOC-A,1
+PO-0127,週初麵粉鮮奶,ING-021,6,瓶,68,408,SUP-02,2026-06-30,2026-07-01,已到貨,LOC-A,6
+PO-0201,糖補貨,ING-003,2,包,275,550,SUP-01,2026-07-04,2026-07-05,已下單,LOC-C,0`,
+production_order: `prod_id,product_id,plan_qty,start_date,finish_date,status,location_id
+P-0328,PRD-01,24,2026-06-29,2026-07-01,完成,LOC-A
+P-0329,PRD-03,42,2026-07-01,2026-07-01,完成,LOC-A
+P-0330,PRD-02,60,2026-06-30,2026-07-02,完成,LOC-A
+P-0331,PRD-01,24,2026-07-01,2026-07-03,投料,LOC-A
+P-0332,PRD-03,40,2026-07-02,2026-07-02,投料,LOC-A
+P-0333,PRD-01,32,2026-07-02,2026-07-04,投料,LOC-A
+P-0334,PRD-04,30,2026-07-02,2026-07-02,草稿,LOC-A`,
+sales_line: `so_id,product_id,qty,sale_price,sale_date,idempotency_key,location_id
+SO-0995,PRD-02,40,55,2026-07-01,seed-7,LOC-A
+SO-0996,PRD-03,25,60,2026-07-01,seed-8,LOC-A
+SO-1001,PRD-02,46,55,2026-07-02,seed-10,LOC-A
+SO-1002,PRD-01,21,45,2026-07-02,seed-11,LOC-A`,
+waste: `waste_id,target_type,target_id,qty,reason,date,location_id
+W-001,product,PRD-02,4,賣剩,2026-06-29,LOC-A
+W-002,product,PRD-03,2,生產失敗,2026-07-01,LOC-A
+W-003,product,PRD-02,2,賣剩,2026-07-02,LOC-A`,
+stocktake: `stocktake_id,target_type,target_id,counted_qty,date,location_id`,
+stock_ledger: `ledger_id,item_type,item_id,direction,qty,source_type,source_id,unit_cost,txn_date,location_id
+L-0001,ingredient,ING-006,in,12500,stocktake,期初,0.31,2026-06-28,LOC-A
+L-0002,ingredient,ING-009,in,1000,stocktake,期初,0.09,2026-06-28,LOC-A
+L-0003,ingredient,ING-003,in,8000,stocktake,期初,0.028,2026-06-28,LOC-A
+L-0004,ingredient,ING-014,in,4000,stocktake,期初,0.015,2026-06-29,LOC-A
+L-0006,ingredient,ING-001,in,25000,purchase,PO-0127,0.035,2026-07-01,LOC-A
+L-0007,ingredient,ING-021,in,6000,purchase,PO-0127,0.068,2026-07-01,LOC-A
+L-0008,product,PRD-01,in,24,production_in,P-0328,13.9,2026-07-01,LOC-A`
+};
+
+const KEY = 'bakery_proto_csv_v2';
+const CFG_KEY = 'bakery_remote_cfg_v2';
+const MODE_KEY = 'bakery_api_mode_v2';
+const GBASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+// v2 結構需搭配 v2 版 apps-script.js(TABLES 含 location_id 與調撥表);
+// 既有 Sheet 升級:貼新腳本 → 執行 setup → 部署新版本(/exec 網址不變)。
+// 預設 /exec 網址由部署注入(window.BAKERY_CFG)或 google-config.local.js 提供;佔位符視為未設定。
+const DEFAULT_GAS_URL = (() => {
+  const u = (typeof window !== 'undefined' && window.BAKERY_CFG && window.BAKERY_CFG.gasUrl) || '';
+  return /^__[A-Z_]+__$/.test(u) ? '' : u;
+})();
+
+export function parseCSV(text) {
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(cur); cur = ''; }
+    else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (ch !== '\r') cur += ch;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.some(c => c !== ''));
+}
+
+function esc(v) {
+  const s = v === undefined || v === null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+export function toObjects(rows) {
+  if (!rows.length) return [];
+  const h = rows[0];
+  return rows.slice(1).map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] === undefined ? '' : r[i]); return o; });
+}
+
+// 舊結構 CSV → 依 SCHEMA 補欄(缺 location_id 一律視為本店 LOC-A;其他缺欄補空字串)
+function migrateCSV(name, csv) {
+  const want = SCHEMA[name];
+  if (!csv) return want.join(',');
+  const rows = parseCSV(csv);
+  if (!rows.length) return want.join(',');
+  const header = rows[0];
+  if (header.join(',') === want.join(',')) return csv;
+  const idx = {}; header.forEach((h, i) => { idx[h] = i; });
+  const out = [want.join(',')];
+  for (let i = 1; i < rows.length; i++) {
+    out.push(want.map(h => {
+      if (idx[h] !== undefined) return esc(rows[i][idx[h]]);
+      if (h === 'location_id') return 'LOC-A';
+      // ingredient 舊欄 category 若改名 category_id → 直接沿用(值為 CAT-xx,前端自動解析)
+      if (h === 'category' && idx['category_id'] !== undefined) return esc(rows[i][idx['category_id']]);
+      // 舊 supplier.contact(「02-xxx 陳先生」混合欄)→ 拆進新欄:電話歸 phone,其餘歸聯絡人
+      if ((h === 'contact_person' || h === 'phone') && idx['contact'] !== undefined) {
+        const c = String(rows[i][idx['contact']] || '');
+        const m = c.match(/[\d][\d\-() ]{5,}/);
+        if (h === 'phone') return esc(m ? m[0].trim() : '');
+        return esc(m ? c.replace(m[0], '').trim() : c.trim());
+      }
+      return '';
+    }).join(','));
+  }
+  return out.join('\n');
+}
+
+// 組合示範資料:基礎 SEED ← 真實快照覆蓋 → 逐表補 location_id → 附加中央倉流水
+function buildSeed() {
+  const all = Object.assign({}, SEED, typeof SEED_OVERRIDE === 'object' && SEED_OVERRIDE ? SEED_OVERRIDE : {});
+  for (const k of Object.keys(SCHEMA)) all[k] = migrateCSV(k, all[k]);
+  // 舊快照沒有報價欄 → 從最新單價推算(視為含稅價),稅率預設 1.05(自製 1.0、報價 0)
+  const ingR = toObjects(parseCSV(all.ingredient));
+  if (ingR.length && ingR.some(r => r.quote_price === '' || r.quote_price === undefined)) {
+    const hdr = SCHEMA.ingredient;
+    const out = [hdr.join(',')];
+    for (const r of ingR) {
+      if (r.quote_price === '' || r.quote_price === undefined) {
+        const selfMade = r.purchase_unit === '自製' || !r.default_supplier_id;
+        const conv = parseFloat(r.conversion_rate) || 1, luc = parseFloat(r.latest_unit_cost) || 0;
+        r.tax_rate = r.tax_rate || (selfMade ? '1.0' : '1.05');
+        r.quote_price = selfMade ? '0' : String(Math.round(luc * conv / (parseFloat(r.tax_rate) || 1)));
+      }
+      out.push(hdr.map(h => esc(r[h] === undefined ? '' : r[h])).join(','));
+    }
+    all.ingredient = out.join('\n');
+  }
+  all.stock_ledger = all.stock_ledger.replace(/\n+$/, '') + '\n' + CENTRAL_LEDGER;
+  return all;
+}
+
+export class DB {
+  constructor() {
+    this.mode = 'local';
+    this.cfg = { kind: 'gas', url: DEFAULT_GAS_URL, sid: '', apiKey: '', clientId: '' };
+    try {
+      const c = JSON.parse(localStorage.getItem(CFG_KEY) || 'null');
+      if (c) this.cfg = Object.assign(this.cfg, c);
+      const storedMode = localStorage.getItem(MODE_KEY);
+      // 這個裝置做過選擇 → 尊重;沒選過 → 有 GAS 網址(部署注入/本機設定)就自動連線 方案 B,
+      // 沒有任何連線設定才落到本地示範模式。「切回本地示範」會存 'local',之後不再自動連。
+      this.mode = storedMode
+        ? (storedMode === 'cloud' ? 'cloud' : 'local')
+        : (this.cfg.kind === 'gas' && this.cfg.url ? 'cloud' : 'local');
+    } catch (e) { }
+    this.token = null; this.tokenExp = 0; this._tc = null; this._tcb = null; this._teb = null;
+    this.pending = 0;
+    this.onRemote = null; // (ok, msg) => void
+    this.load();
+  }
+
+  // ── 連線設定 ──
+  saveCfg(patch) { this.cfg = Object.assign({}, this.cfg, patch); try { localStorage.setItem(CFG_KEY, JSON.stringify(this.cfg)); } catch (e) { } }
+  setCloud() { this.mode = 'cloud'; try { localStorage.setItem(MODE_KEY, 'cloud'); } catch (e) { } }
+  setLocal() { this.mode = 'local'; try { localStorage.setItem(MODE_KEY, 'local'); } catch (e) { } }
+
+  // ── 方案 B:Apps Script ──
+  async api(params) {
+    const r = await fetch(this.cfg.url + (this.cfg.url.indexOf('?') >= 0 ? '&' : '?') + params);
+    return await r.json();
+  }
+
+  // ── 方案 A:Google Sheets API 直連(讀=API Key、寫=OAuth)──
+  async ensureToken(prompt) {
+    if (this.token && Date.now() < this.tokenExp - 60000) return this.token;
+    if (!(window.google && window.google.accounts && window.google.accounts.oauth2)) throw 'Google 登入元件未載入(檢查網路後重整頁面)';
+    if (!this.cfg.clientId) throw '缺 Client ID';
+    return await new Promise((res, rej) => {
+      try {
+        if (!this._tc) this._tc = window.google.accounts.oauth2.initTokenClient({
+          client_id: this.cfg.clientId,
+          scope: 'https://www.googleapis.com/auth/spreadsheets',
+          callback: r => { if (this._tcb) this._tcb(r); },
+          error_callback: e => { if (this._teb) this._teb(e); }
+        });
+        this._tcb = r => {
+          if (r && r.access_token) { this.token = r.access_token; this.tokenExp = Date.now() + (Number(r.expires_in) || 3600) * 1000; res(this.token); }
+          else rej((r && (r.error_description || r.error)) || '授權被拒');
+        };
+        this._teb = e => rej((e && (e.message || e.type)) || '授權視窗開啟失敗');
+        this._tc.requestAccessToken({ prompt: prompt || '' });
+      } catch (err) { rej(String(err)); }
+    });
+  }
+  gh() { return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.token }; }
+  async gapiList(name) {
+    const h = this.token ? { Authorization: 'Bearer ' + this.token } : {};
+    const j = await (await fetch(GBASE + '/' + this.cfg.sid + '/values/' + encodeURIComponent(name) + '?key=' + encodeURIComponent(this.cfg.apiKey), { headers: h })).json();
+    if (j.error) return null;
+    return j.values || null;
+  }
+  async gapiEnsureTabs() {
+    await this.ensureToken();
+    const meta = await (await fetch(GBASE + '/' + this.cfg.sid + '?fields=sheets.properties.title', { headers: { Authorization: 'Bearer ' + this.token } })).json();
+    if (meta.error) throw meta.error.message;
+    const have = (meta.sheets || []).map(s => s.properties.title);
+    const toAdd = Object.keys(SCHEMA).filter(n => have.indexOf(n) < 0);
+    if (toAdd.length) {
+      const j = await (await fetch(GBASE + '/' + this.cfg.sid + ':batchUpdate', { method: 'POST', headers: this.gh(), body: JSON.stringify({ requests: toAdd.map(t => ({ addSheet: { properties: { title: t } } })) }) })).json();
+      if (j.error) throw j.error.message;
+    }
+    return toAdd;
+  }
+  async gapiWriteTable(name) {
+    await this.ensureToken();
+    const rows = [SCHEMA[name]].concat(this.t[name].map(r => SCHEMA[name].map(h => r[h] === undefined ? '' : r[h])));
+    let j = await (await fetch(GBASE + '/' + this.cfg.sid + '/values/' + encodeURIComponent(name) + '!A1:ZZ:clear', { method: 'POST', headers: this.gh(), body: '{}' })).json();
+    if (j.error) throw name + ' 清空失敗:' + j.error.message;
+    j = await (await fetch(GBASE + '/' + this.cfg.sid + '/values/' + encodeURIComponent(name) + '!A1?valueInputOption=RAW', { method: 'PUT', headers: this.gh(), body: JSON.stringify({ values: rows }) })).json();
+    if (j.error) throw name + ' 寫入失敗:' + j.error.message;
+  }
+  async gapiPushAll() {
+    await this.gapiEnsureTabs();
+    for (const n of Object.keys(SCHEMA)) await this.gapiWriteTable(n);
+  }
+  async pullAll() {
+    const names = Object.keys(SCHEMA);
+    const norm = c => {
+      const s = String(c);
+      let m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(s);
+      if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
+        if (/Z$/.test(s) || /\.\d{3}/.test(s)) {
+          const d = new Date(s);
+          if (!isNaN(d)) {
+            const p = n => String(n).padStart(2, '0');
+            const ds = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+            const t = p(d.getHours()) + ':' + p(d.getMinutes());
+            return t === '00:00' ? ds : ds + ' ' + t;
+          }
+        }
+        return s.slice(0, 10) + ' ' + s.slice(11, 16);
+      }
+      return c;
+    };
+    let getters;
+    if (this.cfg.kind === 'gapi') {
+      getters = names.map(n => this.gapiList(n).catch(() => null));
+    } else {
+      getters = names.map(n => this.api('action=list&sheet=' + n).then(j => (j && j.ok) ? j.rows : null).catch(() => null));
+    }
+    const results = await Promise.all(getters);
+    const missing = [];
+    names.forEach((n, i) => {
+      const rows = results[i];
+      // location 僅表頭視為缺(舊/未初始化的 Sheet)— 保留本地,否則多地點模型整個失效
+      const min = n === 'location' ? 1 : 0;
+      if (rows && rows.length > min) {
+        this.raw[n] = migrateCSV(n, rows.map(r => r.map(c => esc(norm(c === null || c === undefined ? '' : String(c)))).join(',')).join('\n'));
+      } else missing.push(n);
+    });
+    this.parseAll(); this.ensureCentral(); this.persist();
+    return missing;
+  }
+  sendRemote(payload) {
+    if (this.mode !== 'cloud') return;
+    const q = v => typeof v === 'string' && (/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}/.test(v) || /^\d{1,2}:\d{2}$/.test(v)) ? "'" + v : v; // 日期時間與純時間(15:30)都加引號存文字,防 Sheet 轉成 1899 基準日期
+    if (payload.row) { const r = {}; Object.keys(payload.row).forEach(k => r[k] = q(payload.row[k])); payload = Object.assign({}, payload, { row: r }); }
+    if (payload.rows) payload = Object.assign({}, payload, { rows: payload.rows.map(row => Array.isArray(row) ? row.map(q) : row) });
+    this.pending++;
+    const done = (ok, msg) => { this.pending--; if (this.onRemote) this.onRemote(ok, msg || ''); };
+    if (this.cfg.kind === 'gapi') {
+      (async () => {
+        await this.ensureToken();
+        if (payload.action === 'append') {
+          const row = SCHEMA[payload.sheet].map(h => payload.row[h] === undefined ? '' : payload.row[h]);
+          const j = await (await fetch(GBASE + '/' + this.cfg.sid + '/values/' + encodeURIComponent(payload.sheet) + '!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS', { method: 'POST', headers: this.gh(), body: JSON.stringify({ values: [row] }) })).json();
+          if (j.error) throw j.error.message;
+        } else if (payload.action === 'replace') {
+          await this.gapiWriteTable(payload.sheet);
+        }
+      })().then(() => done(true)).catch(err => done(false, 'Sheet 寫入失敗(' + payload.sheet + '):' + err));
+      return;
+    }
+    if (!this.cfg.url) { this.pending--; return; }
+    fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
+      .then(r => r.json())
+      .then(j => done(!!j.ok, j.ok ? '' : 'Sheet 寫入失敗:' + (j.error || '未知錯誤')))
+      .catch(err => done(false, 'Sheet 連線失敗,本次異動僅存本地:' + err));
+  }
+  load(withSeed) {
+    let raw = null;
+    try { raw = JSON.parse(localStorage.getItem(KEY)); } catch (e) { }
+    const SEED_ALL = buildSeed();
+    // 全新裝置預設「空表」(只保證中央倉存在):連上 Google Sheet 前不需要示範資料;
+    // 雲端模式登入後 pullAll 以 Sheet 內容覆蓋。示範資料改為 opt-in —
+    // 「重置示範資料 / 還原示範資料」按鈕(reset/restoreSeed)才載入。
+    if (!raw || typeof raw !== 'object') raw = withSeed ? Object.assign({}, SEED_ALL) : {};
+    for (const k of Object.keys(SCHEMA)) {
+      if (!raw[k]) raw[k] = (withSeed && SEED_ALL[k]) || SCHEMA[k].join(',');
+      else raw[k] = migrateCSV(k, raw[k]); // 本地舊快取自動升級欄位
+    }
+    // 舊快取(已有原料主檔)沒有地點配置資料 → 補示範配置(否則所有地點視為全部備料)
+    if (parseCSV(raw.ingredient).length > 1 && parseCSV(raw.location_stock).length < 2) raw.location_stock = SEED_ALL.location_stock;
+    this.raw = raw; this.persist(); this.parseAll(); this.ensureCentral();
+  }
+  // 任何載入路徑後都保證中央倉存在 — location 空或缺 central 列時補 LOC-C
+  ensureCentral() {
+    if (this.t.location && this.t.location.some(l => l.type === 'central')) return;
+    if (!this.raw.location || !parseCSV(this.raw.location).length) this.raw.location = SCHEMA.location.join(',');
+    this.raw.location = this.raw.location.replace(/\n+$/, '') + '\nLOC-C,中央倉,central';
+    this.t.location = toObjects(parseCSV(this.raw.location));
+    this.persist();
+  }
+  parseAll() {
+    this.t = {};
+    for (const k of Object.keys(SCHEMA)) this.t[k] = toObjects(parseCSV(this.raw[k]));
+  }
+  persist() { try { localStorage.setItem(KEY, JSON.stringify(this.raw)); } catch (e) { } }
+  csv(name) { return this.raw[name]; }
+  // append-only:交易表新增一列
+  append(name, obj) {
+    const line = SCHEMA[name].map(h => esc(obj[h])).join(',');
+    this.raw[name] = this.raw[name].replace(/\n+$/, '') + '\n' + line;
+    const o = {}; SCHEMA[name].forEach(h => o[h] = obj[h] === undefined ? '' : String(obj[h]));
+    this.t[name].push(o);
+    this.persist();
+    this.sendRemote({ action: 'append', sheet: name, row: o });
+  }
+  // 主資料表整表覆寫(僅限 master data 與狀態更新表)
+  replace(name, objs) {
+    const lines = [SCHEMA[name].join(',')].concat(objs.map(o => SCHEMA[name].map(h => esc(o[h])).join(',')));
+    this.raw[name] = lines.join('\n');
+    this.t[name] = objs.map(o => { const x = {}; SCHEMA[name].forEach(h => x[h] = o[h] === undefined ? '' : String(o[h])); return x; });
+    this.persist();
+    this.sendRemote({ action: 'replace', sheet: name, headers: SCHEMA[name], rows: this.t[name].map(r => SCHEMA[name].map(h => r[h] === undefined ? '' : r[h])) });
+  }
+  nextId(name, field, prefix, pad) {
+    let mx = 0;
+    for (const r of this.t[name]) { const m = String(r[field]).match(/(\d+)$/); if (m) mx = Math.max(mx, parseInt(m[1], 10)); }
+    return prefix + String(mx + 1).padStart(pad || 4, '0');
+  }
+  reset() { try { localStorage.removeItem(KEY); } catch (e) { } this.load(true); } // 重置=載回示範資料(按鈕語意)
+  // 清空資料(keepMaster=true 保留主資料表);雲端模式下同步覆寫 Sheet 為僅表頭
+  wipe(keepMaster) {
+    const MASTER = ['location', 'location_stock', 'ingredient', 'product', 'supplier', 'bom', 'routing', 'equipment', 'category', 'staff', 'line', 'station'];
+    const wiped = [];
+    for (const k of Object.keys(SCHEMA)) {
+      if (keepMaster && MASTER.indexOf(k) >= 0) continue;
+      this.raw[k] = SCHEMA[k].join(',');
+      this.t[k] = [];
+      wiped.push(k);
+    }
+    this.persist();
+    if (!keepMaster) { // 全部清空後至少保留中央倉,空表建置從「建門市」開始
+      this.raw.location = SCHEMA.location.join(',') + '\nLOC-C,中央倉,central';
+      this.t.location = [{ location_id: 'LOC-C', name: '中央倉', type: 'central' }];
+      this.persist();
+    }
+    wiped.forEach(k => this.sendRemote({ action: 'replace', sheet: k, headers: SCHEMA[k], rows: this.t[k].map(r => SCHEMA[k].map(h => r[h] === undefined ? '' : r[h])) }));
+    return wiped;
+  }
+  restoreSeed() {
+    const SEED_ALL = buildSeed();
+    for (const k of Object.keys(SCHEMA)) this.raw[k] = SEED_ALL[k] || SCHEMA[k].join(',');
+    this.persist(); this.parseAll();
+    Object.keys(SCHEMA).forEach(k => this.sendRemote({ action: 'replace', sheet: k, headers: SCHEMA[k], rows: this.t[k].map(r => SCHEMA[k].map(h => r[h] === undefined ? '' : r[h])) }));
+    return Object.keys(SCHEMA).length;
+  }
+}
