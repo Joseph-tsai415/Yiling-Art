@@ -1220,6 +1220,7 @@ class Component extends DCLogic {
       userChipName: S.authState === 'ok' ? (S.authName || S.authEmail) : '店長',
       userChipTitle: S.authState === 'ok' ? [S.authEmail, S.authRole].filter(Boolean).join(' · ') : '',
       logoutStyle: S.authState === 'ok' ? '' : 'display:none',
+      doLogoutBtn: () => this.doLogout('已登出'),
       resetBtnStyle: db && db.mode === 'local' ? '' : 'display:none'
     }, flags);
     if (!db) return Object.assign(base, { lowRows: [], prodRows: [], saleBars: [], recentRows: [], planRows: [], prodOptions: [], mrpRows: [], feedRows: [], ganttLanes: [], conflictMsg: '', conflictStyle: 'display:none', lowNote: '載入資料中…', apStyle: 'display:none', apBackStyle: 'display:none', apDayChips: [], apTimeChips: [], apTimeVal: '', apOnTime: () => { }, apClose: () => { } });
