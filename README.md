@@ -12,6 +12,7 @@ A small collection of zero-install, browser-based tools for designers and print 
 |-----|-------------|------|--------|
 | **Brand Color Palette + Pantone** | Generate harmonious palettes, find the closest Pantone matches with CIEDE2000, check WCAG contrast, and export a multi-page PDF report. | [Open](https://joseph-tsai415.github.io/Yiling-Art/brand-palette-pantone/) | [`brand-palette-pantone/`](brand-palette-pantone/) |
 | **Product Card Printer** | Upload a CSV of products (title, ingredients, allergens, price…) and lay them out as 103 × 73 mm cards on an A3 or A4 PDF ready for printing. | [Open](https://joseph-tsai415.github.io/Yiling-Art/product-card-printer/) | [`product-card-printer/`](product-card-printer/) |
+| **Bakery ERP** | Central-warehouse + multi-store bakery ERP: store transfer orders, central purchasing with batched receiving & returns, ingredient catalog with request inbox, append-only stock ledger, production scheduling, POS and day-close. Runs on localStorage with optional Google Sheets sync. | [Open](https://joseph-tsai415.github.io/Yiling-Art/bakery-erp/) | [`bakery-erp/`](bakery-erp/) |
 
 See each app's own `README.md` (where present) for detailed feature docs.
 
@@ -30,6 +31,11 @@ Yiling-Art/
 │   └── README.md
 ├── product-card-printer/       ← CSV → printable product cards
 │   └── index.html
+├── bakery-erp/                 ← central-warehouse + multi-store bakery ERP
+│   ├── index.html
+│   ├── js/                     ← app logic, data layer, seed data, mini template runtime
+│   ├── apps-script.js          ← optional Google Apps Script backend (Sheets DB)
+│   └── README.md
 └── .github/workflows/          ← GitHub Pages deploy
 ```
 

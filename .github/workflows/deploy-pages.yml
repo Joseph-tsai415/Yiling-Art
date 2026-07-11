@@ -42,6 +42,19 @@ jobs:
           sed -i "s|__GOOGLE_CLIENT_ID__|${GOOGLE_CLIENT_ID}|g" "$f"
           sed -i "s|__GOOGLE_API_KEY__|${GOOGLE_API_KEY}|g" "$f"
           echo "Injected Google credentials into $f"
+      - name: Inject bakery ERP connection defaults (from repo secrets)
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          BAKERY_SHEET_ID: ${{ secrets.BAKERY_SHEET_ID }}
+          BAKERY_GAS_URL: ${{ secrets.BAKERY_GAS_URL }}
+        run: |
+          f=bakery-erp/index.html
+          sed -i "s|__GOOGLE_CLIENT_ID__|${GOOGLE_CLIENT_ID}|g" "$f"
+          sed -i "s|__GOOGLE_API_KEY__|${GOOGLE_API_KEY}|g" "$f"
+          sed -i "s|__BAKERY_SHEET_ID__|${BAKERY_SHEET_ID}|g" "$f"
+          sed -i "s|__BAKERY_GAS_URL__|${BAKERY_GAS_URL}|g" "$f"
+          echo "Injected bakery ERP connection defaults into $f"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
