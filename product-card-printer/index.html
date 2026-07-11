@@ -148,6 +148,21 @@
             color: var(--text-primary);
             border: 1px solid var(--border-medium);
         }
+        /* Pause/Resume auto-refresh: a fill drains right→left toward the next poll
+           (driven by --poll-pct from JS); paused flips to amber so it's obvious
+           the sheet is NOT syncing. */
+        #sheetPauseBtn {
+            position: relative;
+            background: linear-gradient(to right, rgba(96,165,250,0.28) var(--poll-pct, 0%), transparent var(--poll-pct, 0%));
+            transition: none;
+            min-width: 215px;
+            font-variant-numeric: tabular-nums;
+        }
+        #sheetPauseBtn.paused {
+            background: rgba(245,158,11,0.15);
+            border-color: #f59e0b;
+            color: #fbbf24;
+        }
 
         .status {
             font-size: 0.85rem;
@@ -165,6 +180,16 @@
             font-size: 0.85rem;
         }
         .field-map label { color: var(--text-muted); align-self: center; }
+        /* Match the designer panel's select styling (dark, rounded) — these were
+           rendering as unstyled native controls (white, square). */
+        .field-map select {
+            background: var(--input-bg);
+            border: 1px solid var(--border-medium);
+            border-radius: 6px;
+            padding: 7px 9px;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
 
         .preview-meta {
             display: flex;
@@ -325,6 +350,49 @@
             border-color: rgba(0, 0, 0, 0.2);
         }
 
+        /* Unified sync pill — the ONE always-visible surface for data in/out:
+           read (poll) + write (queue) state with a strict priority. Sits left of
+           the theme toggle; colour = state at a glance. */
+        .sync-pill {
+            position: fixed;
+            top: 22px;
+            right: 72px;
+            z-index: 99;
+            display: flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 7px 14px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            background: rgba(18, 18, 29, 0.85);
+            border: 1px solid var(--border-medium);
+            color: var(--text-primary);
+            backdrop-filter: blur(4px);
+            cursor: pointer;
+            user-select: none;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            transition: filter 0.15s ease;
+        }
+        .sync-pill:hover { filter: brightness(1.35); }
+        .sync-pill.live   { color: #4ade80; border-color: rgba(74, 222, 128, 0.45); }
+        .sync-pill.saving { color: #93c5fd; border-color: rgba(96, 165, 250, 0.55); }
+        .sync-pill.saved  { color: #4ade80; border-color: rgba(74, 222, 128, 0.55); }
+        .sync-pill.paused { color: #fbbf24; border-color: rgba(245, 158, 11, 0.55); }
+        .sync-pill.local  { color: #fbbf24; border-color: rgba(245, 158, 11, 0.55); }
+        .sync-pill.error  { color: #f87171; border-color: rgba(248, 113, 113, 0.55); }
+        .sync-pill.off    { color: var(--text-muted); border-color: var(--border-medium); }
+
+        /* Card picker dropdown: options keep their native popup rendering — ONLY
+           the optgroup banner labels get an explicit dark font (they were
+           rendering white on the white popup). */
+        #cardPicker optgroup {
+            color: #111;
+            font-weight: 700;
+            font-style: normal;
+        }
+
         .version-strip {
             position: fixed;
             bottom: 8px;
@@ -342,6 +410,7 @@
     <button class="theme-toggle" type="button" aria-label="Toggle theme" onclick="toggleTheme()">
         <span id="themeIcon">☀</span>
     </button>
+    <div id="syncPill" class="sync-pill" hidden></div>
 
     <div class="container">
         <header>
@@ -426,13 +495,50 @@
             </div>
         </section>
 
+        <section class="panel" id="mgmtPanel" hidden>
+            <h2>3. Card management — add / remove cards &amp; sections</h2>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+                Adds or removes rows in the Google Sheet itself — sign in required. New cards are inserted at the end of their section (legend) with the id following the section’s pattern, 品項 mirrors mamalili品名, and the layout starts from the shared template.
+            </p>
+            <!-- Add card -->
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+                <div class="field" style="min-width:190px;">
+                    <label for="mgmtSection">Section (legend)</label>
+                    <select id="mgmtSection"></select>
+                </div>
+                <div class="field" id="mgmtNewSectionWrap" hidden style="min-width:170px;">
+                    <label for="mgmtNewSection">New section name</label>
+                    <input type="text" id="mgmtNewSection" placeholder="e.g.（十）新系列">
+                </div>
+                <div class="field" style="flex:1; min-width:190px;">
+                    <label for="mgmtTitle">mamalili品名 — 品項 follows this</label>
+                    <input type="text" id="mgmtTitle" placeholder="新品名…">
+                </div>
+                <div class="field" style="width:88px;">
+                    <label for="mgmtId">id</label>
+                    <input type="text" id="mgmtId" placeholder="auto">
+                </div>
+                <button id="mgmtCreateBtn" type="button">＋ Create card</button>
+            </div>
+            <!-- Delete card / section -->
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+                <div class="field" style="flex:1; min-width:240px;">
+                    <label for="mgmtDeleteCard">Card to delete</label>
+                    <select id="mgmtDeleteCard"></select>
+                </div>
+                <button id="deleteCardBtn" class="secondary" type="button" title="Deletes this card's row from the sheet — permanent">🗑 Delete card</button>
+                <button id="mgmtDeleteSectionBtn" class="secondary" type="button" title="Deletes the selected section's legend row (picker above) — only when it has no cards">🗑 Delete empty section</button>
+            </div>
+            <div class="status" id="mgmtStatus"></div>
+        </section>
+
         <section class="panel" id="designerPanel" hidden>
-            <h2>3. Card designer</h2>
+            <h2>4. Card designer</h2>
             <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
                 Pick a card, then drag elements or type exact x / y / size. Use <em>Edit scope</em> to change just this card, or the shared <strong>template (t0)</strong> — template edits save only to the t0 row and never overwrite a card’s own saved layout (cards without one follow the template). Signed in: every layout edit saves to the sheet’s <code>metaData</code> column (shared with everyone). Not signed in: edits stay in this browser only and the 15s refresh won’t clobber them.
             </p>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 14px;">
-                <input type="text" id="cardSearch" placeholder="Search card by name…"
+                <input type="text" id="cardSearch" placeholder="Search cards — id, name, or any content…"
                        style="flex:1; min-width:220px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;">
                 <select id="cardPicker" style="flex:2; min-width:240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.9rem;"></select>
             </div>
@@ -485,21 +591,23 @@
                     Editing a field updates this card and, when signed in, writes that cell back to the Google Sheet.
                 </p>
                 <div class="content-grid">
-                    <label>Title 中文<input type="text" data-field="title"></label>
-                    <label>Title English<input type="text" data-field="englishTitle"></label>
+                    <!-- All fields are multi-line: line breaks typed here become real
+                         line breaks on the card (and save to the sheet as such). -->
+                    <label>Title 中文<textarea data-field="title" rows="2"></textarea></label>
+                    <label>Title English<textarea data-field="englishTitle" rows="2"></textarea></label>
                     <label>Ingredients 中文<textarea data-field="cnIngredients" rows="2"></textarea></label>
                     <label>Ingredients English<textarea data-field="enIngredients" rows="2"></textarea></label>
-                    <label>素別 (Veg type)<input type="text" data-field="diet"></label>
-                    <label>過敏原 (Allergens)<input type="text" data-field="allergens"></label>
-                    <label>Price (whole)<input type="text" data-field="priceWhole"></label>
-                    <label>Price (half/slice)<input type="text" data-field="priceHalf"></label>
+                    <label>素別 (Veg type)<textarea data-field="diet" rows="2"></textarea></label>
+                    <label>過敏原 (Allergens)<textarea data-field="allergens" rows="2"></textarea></label>
+                    <label>Price (whole)<textarea data-field="priceWhole" rows="2"></textarea></label>
+                    <label>Price (half/slice)<textarea data-field="priceHalf" rows="2"></textarea></label>
                 </div>
             </div>
         </section>
 
         <section class="panel" id="selectorPanel" hidden>
             <div class="preview-meta">
-                <h2 style="margin: 0;">4. Select cards to print</h2>
+                <h2 style="margin: 0;">5. Select cards to print</h2>
                 <div class="summary" id="selectSummary"></div>
             </div>
             <div class="row" style="margin-top: 0; margin-bottom: 12px;">
@@ -511,7 +619,7 @@
 
         <section class="panel">
             <div class="preview-meta">
-                <h2 style="margin: 0;">5. Sheet preview (PDF)</h2>
+                <h2 style="margin: 0;">6. Sheet preview (PDF)</h2>
                 <div class="summary" id="layoutSummary">Cards: 0 · Pages: 0</div>
             </div>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
@@ -543,7 +651,10 @@
                     <div class="spinner-label">Rendering…</div>
                 </div>
             </div>
-            <div class="row" style="margin-top: 12px;">
+            <div class="row" style="margin-top: 12px; justify-content: flex-end; align-items: center;">
+                <label for="pdfFileName" style="font-size: 0.8rem; color: var(--text-muted);">File name</label>
+                <input type="text" id="pdfFileName" spellcheck="false"
+                       style="min-width: 240px; background: var(--input-bg); border: 1px solid var(--border-medium); border-radius: 8px; padding: 9px 12px; color: var(--text-primary); font-size: 0.85rem; font-variant-numeric: tabular-nums;">
                 <button id="generatePdfBtn" type="button" disabled>Generate PDF</button>
             </div>
             <div class="status" id="status">Loading products…</div>
@@ -623,6 +734,8 @@
             ids: [],
             metaCol: -1,   // index of the sheet's `metaData` column (-1 = none → layouts stay local)
             idCol: -1,     // index of the sheet's `id` column (template row id = "t0")
+            itemCol: -1,   // index of the 品項 column (card-detection identity only)
+            sections: [],  // per kept card: its section banner text (e.g. "(ㄧ）酸種麵包"), '' = none
             map: { title: -1, englishTitle: -1, cnIngredients: -1, enIngredients: -1, diet: -1, allergens: -1, priceWhole: -1, priceHalf: -1 },
         };
 
@@ -982,6 +1095,24 @@
             ingestRows(header, dataRows, sheetRowNums);
         }
 
+        // Card detection: a row is a card only when it holds at least one REAL
+        // identity field — 品項, mamalili品名 (title) or mamalili品名(英文).
+        // An id ALONE does not qualify (ids also mark system rows like t0, which
+        // is additionally excluded earlier by its reserved id).
+        function hasIdentityCols() {
+            return state.itemCol >= 0 || state.map.title >= 0 || state.map.englishTitle >= 0;
+        }
+        function isCardRow(r) {
+            const has = (c) => c >= 0 && String(r[c] || '').trim();
+            return !!(has(state.itemCol) || has(state.map.title) || has(state.map.englishTitle));
+        }
+        // Section banner: an INDIVIDUAL label row — the id cell holds the label and
+        // every other cell is empty. (The system metaData column is tolerated:
+        // legacy writes left stray configs on some banner rows.)
+        function isBannerRow(r) {
+            if (state.idCol < 0 || !String(r[state.idCol] || '').trim()) return false;
+            return r.every((c, i) => i === state.idCol || i === state.metaCol || !String(c || '').trim());
+        }
         // Shared post-parse pipeline for any source (CSV, gviz, or the Sheets API).
         // headerRow + dataRows are arrays of cell-string arrays. sheetRowNums (optional)
         // gives each data row's 1-based sheet row, used for write-back.
@@ -992,6 +1123,9 @@
             FIELDS.forEach(f => { state.map[f.id] = findHeaderIndex(state.headers, f); });
             state.metaCol = findMetaCol(state.headers);
             state.idCol = findIdCol(state.headers);
+            // 品項 (item) column — an identity column for card detection only; it is
+            // not a card field.
+            state.itemCol = state.headers.findIndex(h => String(h || '').includes('品項'));
 
             // Parse the metaData column: per-row card configs + the template row —
             // found either as a data row (empty title + template JSON) or folded into
@@ -999,13 +1133,16 @@
             const metas = state.rows.map(r => state.metaCol >= 0 ? parseMetaCell(r[state.metaCol]) : null);
             let polledTemplate = state.metaCol >= 0 ? templateFromHeaderCell(state.headers[state.metaCol]) : null;
 
-            // Only rows with a product title become cards — drops any category/section
-            // rows that slipped through (so they don't render as blank/junk cards).
+            // A row becomes a card when ANY identity column has a value — id, 品項,
+            // mamalili品名 (title) or mamalili品名(英文) — dropping category/section
+            // rows that have none (so they don't render as blank/junk cards).
             // The template marker row (no title, metaData JSON) is captured here too.
-            const ti = state.map.title;
             sheetCardMeta = metas;
-            if (ti >= 0) {
+            state.sections = [];
+            if (hasIdentityCols()) {
                 const keep = [];
+                const sections = [];
+                let currentSection = '';
                 state.rows.forEach((r, idx) => {
                     // The template row is identified by its id ("t0") or its metaData
                     // CONTENT (label cells may hold text like "default template") —
@@ -1017,11 +1154,17 @@
                         const cfg = metas[idx] && metas[idx].config;
                         if (cfg) { polledTemplate = cfg; templateRowNeedsRewrite = true; }
                     }
-                    else if (String(r[ti] || '').trim()) keep.push(idx);
+                    else if (isCardRow(r)) { keep.push(idx); sections.push(currentSection); }
+                    else if (isBannerRow(r)) {
+                        // Individual label row — e.g. "(ㄧ）酸種麵包" — starts a section
+                        // grouping the cards below it.
+                        currentSection = String(r[state.idCol] || '').trim();
+                    }
                 });
                 if (keep.length) {
                     state.rows = keep.map(i => state.rows[i]);
                     sheetCardMeta = keep.map(i => metas[i]);
+                    state.sections = sections;
                     if (state.sheetRowNums) state.sheetRowNums = keep.map(i => state.sheetRowNums[i]);
                 }
             }
@@ -1233,6 +1376,20 @@
             refreshTimer = setTimeout(refreshPreview, 400);
         }
 
+        // Download file name — defaults to product-cards-DD-MM-YYYY.pdf (today),
+        // editable in the box next to the Generate button. ".pdf" is enforced.
+        function defaultPdfName() {
+            const d = new Date();
+            const p = (n) => String(n).padStart(2, '0');
+            return 'product-cards-' + p(d.getDate()) + '-' + p(d.getMonth() + 1) + '-' + d.getFullYear() + '.pdf';
+        }
+        function pdfFileName() {
+            let name = (document.getElementById('pdfFileName').value || '').trim() || defaultPdfName();
+            if (!/\.pdf$/i.test(name)) name += '.pdf';
+            return name;
+        }
+        document.getElementById('pdfFileName').value = defaultPdfName();
+
         async function downloadPDF() {
             const btn = document.getElementById('generatePdfBtn');
             btn.disabled = true;
@@ -1250,15 +1407,16 @@
                     }
                 }
                 if (lastBuffer) {
+                    const name = pdfFileName();
                     const url = URL.createObjectURL(new Blob([lastBuffer], { type: 'application/pdf' }));
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'product-cards.pdf';
+                    a.download = name;
                     document.body.appendChild(a);
                     a.click();
                     a.remove();
                     setTimeout(() => URL.revokeObjectURL(url), 2000);
-                    setStatus(`Saved product-cards.pdf (${totalPrintCount()} cards).`);
+                    setStatus(`Saved ${name} (${totalPrintCount()} cards).`);
                 }
             } catch (err) {
                 reportPdfError(err);
@@ -1804,6 +1962,7 @@
             }
             saveCardStore();
             scheduleRefresh();
+            noteLocalEdit();   // anonymous: pulse the "Local preview" pill hint for 3s
         }
         function onPropInput() {
             const c = activeCfg()[selectedElem];
@@ -1840,30 +1999,90 @@
             }
         }
 
+        function cardRowId(rowIdx) {
+            return state.idCol >= 0 ? String((state.rows[rowIdx] || [])[state.idCol] || '').trim() : '';
+        }
+        // Card label: sheet id + Chinese title + English title (row number when
+        // the sheet has no id column).
         function cardLabel(rowIdx) {
             const name = [elemText(rowIdx, 'title'), elemText(rowIdx, 'englishTitle')]
                 .filter(Boolean).join(' / ') || ('Card ' + (rowIdx + 1));
-            return (rowIdx + 1) + '. ' + name.replace(/\n/g, ' ');
+            const id = cardRowId(rowIdx);
+            return (id ? id + ' · ' : (rowIdx + 1) + '. ') + name.replace(/\n/g, ' ');
         }
+        // Searchable text per card: id + EVERY mapped content field — the search box
+        // matches any card content (ingredients, allergens, prices…), not just names.
+        function cardSearchText(rowIdx) {
+            const parts = [cardRowId(rowIdx)];
+            const row = state.rows[rowIdx] || [];
+            if (state.itemCol >= 0) parts.push(String(row[state.itemCol] || ''));   // 品項
+            Object.keys(state.map).forEach(f => {
+                const c = state.map[f];
+                if (c >= 0) parts.push(String(row[c] || ''));
+            });
+            return parts.join(' ').toLowerCase();
+        }
+        // Relevance rank (lower = better): id match > name match > content match.
+        function cardSearchScore(rowIdx, q) {
+            const id = cardRowId(rowIdx).toLowerCase();
+            if (id === q) return 0;
+            if (id && id.indexOf(q) === 0) return 1;
+            const name = (elemText(rowIdx, 'title') + ' ' + elemText(rowIdx, 'englishTitle')).toLowerCase();
+            if (name.indexOf(q) === 0) return 2;
+            if (name.includes(q)) return 3;
+            if (cardSearchText(rowIdx).includes(q)) return 4;
+            return -1;   // no match
+        }
+        let lastCardQuery = '';
         function rebuildCardPicker() {
             const picker = document.getElementById('cardPicker');
-            const q = (document.getElementById('cardSearch').value || '').toLowerCase();
+            const q = (document.getElementById('cardSearch').value || '').trim().toLowerCase();
+            const queryChanged = q !== lastCardQuery;
+            lastCardQuery = q;
             picker.innerHTML = '';
-            state.rows.forEach((_, i) => {
-                const label = cardLabel(i);
-                if (q && !label.toLowerCase().includes(q)) return;
+            // Matches only, ordered most-relevant first (stable by row order within
+            // the same rank); no query → all cards in sheet order.
+            const entries = state.rows.map((_, i) => ({ i: i, score: q ? cardSearchScore(i, q) : 0 }))
+                .filter(e => e.score >= 0);
+            if (q) entries.sort((a, b) => a.score - b.score || a.i - b.i);
+            // Browsing (no query): group options under their section banners.
+            // Searching: flat list — relevance order trumps grouping.
+            const grouped = !q && (state.sections || []).some(s => s);
+            let curLabel = null, parent = picker, n = 0;
+            entries.forEach(e => {
+                if (grouped) {
+                    const sec = state.sections[e.i] || '';
+                    if (sec !== curLabel) {
+                        curLabel = sec;
+                        if (sec) { parent = document.createElement('optgroup'); parent.label = sec; picker.appendChild(parent); }
+                        else parent = picker;
+                    }
+                }
                 const opt = document.createElement('option');
-                opt.value = i; opt.textContent = label;
-                picker.appendChild(opt);
+                // "n." is just the position in this (filtered/ranked) list — a plain
+                // counter, not a sheet value.
+                opt.value = e.i; opt.textContent = (++n) + '. ' + cardLabel(e.i);
+                parent.appendChild(opt);
             });
             const opts = Array.prototype.slice.call(picker.options);
-            if (opts.some(o => +o.value === activeCardIndex)) picker.value = activeCardIndex;
-            else if (opts.length) { activeCardIndex = +opts[0].value; picker.value = activeCardIndex; }
+            if (!opts.length) return;
+            const prev = activeCardIndex;
+            if (q && queryChanged) {
+                // Typing: jump the designer to the most relevant match. (Poll-driven
+                // rebuilds with an unchanged query keep a manual pick instead.)
+                activeCardIndex = +opts[0].value;
+            } else if (!opts.some(o => +o.value === activeCardIndex)) {
+                activeCardIndex = +opts[0].value;
+            }
+            picker.value = activeCardIndex;
+            if (activeCardIndex !== prev) { renderEditor(); renderContentInputs(); }
         }
         function initDesigner() {
             if (activeCardIndex >= state.rows.length) activeCardIndex = 0;
             rebuildCardPicker();
             document.getElementById('designerPanel').hidden = false;
+            document.getElementById('mgmtPanel').hidden = false;
+            refreshMgmtUI();
             renderEditor();
             renderContentInputs();
             renderSelector();
@@ -1890,6 +2109,7 @@
             state.rows[activeCardIndex][col] = inp.value;
             renderEditor();        // reflect on the on-screen card
             scheduleRefresh();     // update the PDF
+            noteLocalEdit();       // anonymous: pulse the "Local preview" pill hint for 3s
             clearTimeout(writeTimers[field]);
             writeTimers[field] = setTimeout(() => writeCell(field, inp.value), 700);  // debounced write-back
         }
@@ -1904,9 +2124,28 @@
                 sel + ' of ' + state.rows.length + ' selected · ' + total + ' card' + (total === 1 ? '' : 's') + ' to print';
         }
         function renderSelector() {
+            // Data may have changed (poll/add/delete) — keep the management panel's
+            // section + delete-card pickers in step. Idempotent; preserves selection.
+            if (!document.getElementById('mgmtPanel').hidden) refreshMgmtUI();
             const list = document.getElementById('cardSelectList');
             list.innerHTML = '';
+            let lastSection = null;
             state.rows.forEach((_, i) => {
+                // Section banner header (full grid width) whenever the section changes.
+                const sec = (state.sections || [])[i] || '';
+                if (sec && sec !== lastSection) {
+                    const h = document.createElement('div');
+                    h.textContent = sec;
+                    h.style.gridColumn = '1 / -1';
+                    h.style.marginTop = '8px';
+                    h.style.fontWeight = '600';
+                    h.style.fontSize = '0.82rem';
+                    h.style.color = 'var(--text-secondary)';
+                    h.style.borderBottom = '1px solid var(--border-subtle)';
+                    h.style.paddingBottom = '3px';
+                    list.appendChild(h);
+                }
+                lastSection = sec;
                 const id = state.ids[i];
                 const label = document.createElement('label');
                 label.style.display = 'flex';
@@ -1939,8 +2178,9 @@
                     scheduleRefresh();
                 });
                 const span = document.createElement('span');
-                span.textContent = cardLabel(i);
-                span.title = cardLabel(i);   // hover tooltip — full name even when cropped
+                // Same "n." counter format as the designer dropdown (sheet order here).
+                span.textContent = (i + 1) + '. ' + cardLabel(i);
+                span.title = (i + 1) + '. ' + cardLabel(i);   // hover tooltip — full name even when cropped
                 span.style.overflow = 'hidden';
                 span.style.textOverflow = 'ellipsis';
                 span.style.whiteSpace = 'nowrap';
@@ -2090,17 +2330,68 @@
         }
 
         // Build the gviz CSV endpoint from a pasted Sheet URL (or bare ID).
+        // Side effect: remembers the doc id + gid for the keyed-API read below.
+        let sheetDocId = null;
+        let sheetDocGid = null;
+        let apiTabTitle = null;   // resolved lazily from gid; null = not yet, '' = use first sheet
         function sheetCsvUrlFrom(input) {
             const idMatch = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/) || input.match(/^([a-zA-Z0-9-_]{20,})$/);
             if (!idMatch) return null;
             const id = idMatch[1];
             const gidMatch = input.match(/[#&?]gid=(\d+)/);
-            let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
+            sheetDocId = id;
+            sheetDocGid = gidMatch ? gidMatch[1] : null;
+            apiTabTitle = sheetDocGid ? null : '';
+            // headers=2 = the banner row + the REAL header row. This stops gviz
+            // auto-folding further sparse rows (Config banner, t0, the 空卡 row…)
+            // into its header, while keeping the real header cells as column LABELS.
+            // (headers=1 would make the real header a DATA row — gviz then types the
+            // price columns as currency and coerces their text headers to empty.)
+            let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&headers=2`;
             if (gidMatch) url += `&gid=${gidMatch[1]}`;
             return url;
         }
 
+        // Serialize an API values grid to CSV text so the whole existing CSV
+        // pipeline (lastSheetText compare, parseCSV, detectHeaderRow) is reused.
+        // NB: parseCSV deliberately filters fully-empty rows from EVERY source, so
+        // their serialized form here is irrelevant; true sheet row numbers for
+        // write-back always come from buildSheetRowIndex, never from CSV position.
+        function csvFromRows(rows) {
+            return rows.map(r => (r || []).map(c => {
+                const s = String(c == null ? '' : c);
+                return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            }).join(',')).join('\n');
+        }
+
+        // Anonymous read. Preferred source: the keyed Sheets API — it returns the
+        // grid VERBATIM (formatted text, every row). gviz CSV types each column and
+        // coerces non-conforming cells to empty — e.g. a text half-price like
+        // "$100(2入)" in the otherwise-currency 一半/一片價格 column simply
+        // disappears for anonymous readers. Falls back to gviz when no API key is
+        // configured (local dev) or the keyed call fails.
         async function fetchSheetCsv() {
+            const key = String(window.GOOGLE_API_KEY || '');
+            if (sheetDocId && key && key.indexOf('__') !== 0) {
+                try {
+                    if (apiTabTitle === null) {
+                        // gid in the URL → resolve the tab title once (values.get
+                        // addresses tabs by name, not gid).
+                        const meta = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetDocId + '?key=' + key + '&fields=sheets(properties(sheetId,title))');
+                        if (meta.ok) {
+                            const tabs = ((await meta.json()).sheets || []).map(s => s.properties);
+                            const tab = tabs.find(p => String(p.sheetId) === String(sheetDocGid));
+                            apiTabTitle = tab ? tab.title : '';
+                        }
+                    }
+                    const range = apiTabTitle ? encodeURIComponent(quoteTab(apiTabTitle)) : 'A1:ZZ100000';
+                    const resp = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetDocId + '/values/' + range + '?key=' + key + '&majorDimension=ROWS');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.values && data.values.length) return csvFromRows(data.values);
+                    }
+                } catch (_) { /* fall through to gviz */ }
+            }
             const resp = await fetch(sheetCsvUrl);
             if (!resp.ok) throw new Error('Sheet fetch HTTP ' + resp.status);
             return resp.text();
@@ -2111,9 +2402,16 @@
         function applySheetCsv(text) {
             if (text === lastSheetText) return false;
             lastSheetText = text;
+            // Sheet content changed (someone's write — possibly not ours): drop the
+            // no-op-skip cache so a revert to a previously-confirmed value still writes.
+            sync.confirmed.clear();
             const rows = parseCSV(text);
             if (rows.length < 2) { setSheetStatus('Sheet has a header row but no data rows.', true); return false; }
-            const headers = rows[0].map(h => h.trim());
+            // The grid may carry banner rows above the REAL header (keyed-API reads
+            // always do; gviz headers=2 folds them) — locate the header the same way
+            // the initial ingest does instead of assuming row 0.
+            const hdr = detectHeaderRow(rows);
+            const headers = (rows[hdr] || []).map(h => String(h || '').trim());
             const sameHeaders = headers.length === state.headers.length && headers.every((h, i) => h === state.headers[i]);
             if (!sameHeaders) {
                 ingestCSV(text);
@@ -2121,13 +2419,13 @@
                 // Content-only refresh: update text + sheet-side configs. Clean cards
                 // follow the sheet; dirty (locally tweaked) cards keep their layout.
                 // Filter mirrors ingestRows (title required) so metaData stays aligned.
-                const all = rows.slice(1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
+                const all = rows.slice(hdr + 1).map(r => state.headers.map((_, i) => (r[i] || '').trim()));
                 const metas = all.map(r => state.metaCol >= 0 ? parseMetaCell(r[state.metaCol]) : null);
-                const ti = state.map.title;
-                let keptRows = all, keptMetas = metas;
+                let keptRows = all, keptMetas = metas, keptSections = all.map(() => '');
                 let polledTemplate = state.metaCol >= 0 ? templateFromHeaderCell(state.headers[state.metaCol]) : null;
-                if (ti >= 0) {
-                    keptRows = []; keptMetas = [];
+                if (hasIdentityCols()) {
+                    keptRows = []; keptMetas = []; keptSections = [];
+                    let currentSection = '';
                     all.forEach((r, idx) => {
                         if (isTemplateMeta(metas[idx])) polledTemplate = metas[idx].config;
                         else if (state.idCol >= 0 && String(r[state.idCol] || '').trim() === TEMPLATE_ROW_ID) {
@@ -2135,12 +2433,17 @@
                             const cfg = metas[idx] && metas[idx].config;
                             if (cfg) { polledTemplate = cfg; templateRowNeedsRewrite = true; }
                         }
-                        else if (String(r[ti] || '').trim()) { keptRows.push(r); keptMetas.push(metas[idx]); }
+                        else if (isCardRow(r)) { keptRows.push(r); keptMetas.push(metas[idx]); keptSections.push(currentSection); }
+                        else if (isBannerRow(r)) {
+                            // Individual label row = section banner (see initial load).
+                            currentSection = String(r[state.idCol] || '').trim();
+                        }
                     });
                 }
                 const rowCountChanged = keptRows.length !== state.rows.length;
                 state.rows = keptRows;
                 sheetCardMeta = keptMetas;
+                state.sections = keptSections;
                 adoptSheetTemplate(polledTemplate);
                 reconcileCardConfigs();
                 // Rows added/removed → the cached sheet row numbers may have shifted;
@@ -2161,37 +2464,73 @@
             document.getElementById('sheetPauseBtn').hidden = !connected;
         }
 
+        // Pause-button countdown: "Pause auto-refresh (12s)" plus a fill that drains
+        // toward the next poll. A 250ms ticker drives the label + the --poll-pct CSS
+        // var; nextPollAt is re-anchored every poll tick (and on resume/connect).
+        let pauseTicker = null;
+        let nextPollAt = 0;
+        function updatePauseBtn() {
+            const btn = document.getElementById('sheetPauseBtn');
+            btn.classList.toggle('paused', sheetPaused);
+            if (sheetPaused) {
+                btn.textContent = '⏸ Paused — Resume auto-refresh';
+                btn.style.removeProperty('--poll-pct');
+                return;
+            }
+            const msLeft = Math.max(0, nextPollAt - Date.now());
+            btn.textContent = 'Pause auto-refresh (' + Math.ceil(msLeft / 1000) + 's)';
+            btn.style.setProperty('--poll-pct', ((msLeft / SHEET_POLL_MS) * 100).toFixed(1) + '%');
+        }
         function startSheetTimer() {
             if (sheetTimer) clearInterval(sheetTimer);
-            sheetTimer = setInterval(pollSheetOnce, SHEET_POLL_MS);
+            nextPollAt = Date.now() + SHEET_POLL_MS;
+            sheetTimer = setInterval(() => { nextPollAt = Date.now() + SHEET_POLL_MS; pollSheetOnce(); }, SHEET_POLL_MS);
+            if (pauseTicker) clearInterval(pauseTicker);
+            pauseTicker = setInterval(updatePauseBtn, 250);
+            updatePauseBtn();
         }
         async function pollSheetOnce() {
             if (sheetPaused || !sheetCsvUrl) return;
             try {
-                const changed = applySheetCsv(await fetchSheetCsv());
-                setSheetStatus((changed ? 'Updated • ' : 'Live • synced ') + new Date().toLocaleTimeString());
+                applySheetCsv(await fetchSheetCsv());
+                lastPollOkAt = Date.now();
+                readError = null;
             } catch (err) {
-                setSheetStatus('Sync error: ' + (err.message || err), true);
+                // Steady-state read health lives on the sync pill; details → console.
+                readError = err.message || String(err);
+                console.warn('[card-printer] sheet poll failed:', err);
             }
+            updateSyncPill();
         }
 
         function setSheetPaused(paused) {
             sheetPaused = paused;
-            document.getElementById('sheetPauseBtn').textContent = paused ? 'Resume auto-refresh' : 'Pause auto-refresh';
-            if (paused) {
-                setSheetStatus('Auto-refresh paused — edit the layout freely; click Resume to pull updates.');
-            } else {
-                setSheetStatus('Live • synced ' + new Date().toLocaleTimeString());
-                pollSheetOnce();   // pull immediately on resume
+            if (!paused) {
+                // Resume in sync order: ① drain queued WRITES first, ② then READ
+                // (the poll sees our own writes already landed), ③ re-anchor the
+                // 15s cadence + countdown.
+                (async () => {
+                    try { await sync.flush(); } catch (_) {}
+                    await pollSheetOnce();
+                    startSheetTimer();
+                    updatePauseBtn();
+                    updateSyncPill();
+                })();
             }
+            updatePauseBtn();
+            updateSyncPill();         // paused/live state shows on the pill
         }
 
         function stopSheetPolling() {
             if (sheetTimer) { clearInterval(sheetTimer); sheetTimer = null; }
+            if (pauseTicker) { clearInterval(pauseTicker); pauseTicker = null; }
             sheetCsvUrl = null;
             lastSheetText = null;
             sheetPaused = false;
+            readError = null;         // stale poll health — no poll to be unhealthy
+            sync.confirmed.clear();   // data source changing — stale skip cache
             setSheetConnected(false);
+            updateSyncPill();         // reflect the disconnect immediately
         }
 
         async function connectSheet() {
@@ -2203,10 +2542,13 @@
             setSheetStatus('Connecting…');
             try {
                 applySheetCsv(await fetchSheetCsv());
+                lastPollOkAt = Date.now();
+                readError = null;
                 document.getElementById('generatePdfBtn').disabled = false;
                 setSheetConnected(true);
                 setSheetPaused(false);
                 startSheetTimer();
+                setSheetStatus('Connected to the shared sheet — live status in the top-right pill.');
             } catch (err) {
                 sheetCsvUrl = null;
                 setSheetStatus('Connect failed: ' + (err.message || err) + ' — is the sheet shared “anyone with the link can view”?', true);
@@ -2356,23 +2698,23 @@
             state.rawRowCount = 0;
             if (!gToken || !gSpreadsheetId || !gTabTitle) return;
             const titleCol = state.map.title;
-            if (titleCol < 0) return;
+            if (!hasIdentityCols()) return;   // nothing to match rows by
             try {
                 const vals = await gapiGet('https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values/' + encodeURIComponent(quoteTab(gTabTitle)) + '?majorDimension=ROWS');
                 const raw = vals.values || [];
                 state.rawRowCount = raw.length;
                 state.sheetRowNums = state.rows.map(r => {
                     // Prefer the id column (s1, s2, …) — stable across renames and
-                    // duplicate titles. Fall back to title matching for rows without one.
-                    const id = state.idCol >= 0 ? String(r[state.idCol] || '').trim() : '';
-                    if (id) {
-                        const idx = raw.findIndex(rr => String((rr && rr[state.idCol]) || '').trim() === id);
-                        if (idx >= 0) return idx + 1;
-                    }
-                    const title = String(r[titleCol] || '').trim();
-                    if (!title) return null;
-                    const idx = raw.findIndex(rr => String((rr && rr[titleCol]) || '').trim() === title);
-                    return idx >= 0 ? idx + 1 : null;
+                    // duplicate titles. Fall back through the other identity columns
+                    // (title → 品項 → english title) for rows without one.
+                    const matchBy = (col) => {
+                        if (col < 0) return null;
+                        const v = String(r[col] || '').trim();
+                        if (!v) return null;
+                        const idx = raw.findIndex(rr => String((rr && rr[col]) || '').trim() === v);
+                        return idx >= 0 ? idx + 1 : null;
+                    };
+                    return matchBy(state.idCol) || matchBy(titleCol) || matchBy(state.itemCol) || matchBy(state.map.englishTitle);
                 });
                 if (state.metaCol >= 0) {
                     raw.forEach((rr, idx) => {
@@ -2384,6 +2726,16 @@
                         if (meta && isTemplateMeta(parseMetaCell(meta))) state.templateRowNum = idx + 1;
                     });
                 }
+                // Section (legend) rows: label -> 1-based sheet row. Used by the card
+                // management UI to insert new cards inside a section and to delete
+                // empty sections. Same banner test as the gviz path.
+                state.sectionRows = {};
+                raw.forEach((rr, idx) => {
+                    const padded = state.headers.map((_, i) => String((rr && rr[i]) || ''));
+                    if (isBannerRow(padded) && String(padded[state.idCol]).trim() !== TEMPLATE_ROW_ID) {
+                        state.sectionRows[String(padded[state.idCol]).trim()] = idx + 1;
+                    }
+                });
             } catch (e) {
                 console.warn('[card-printer] buildSheetRowIndex failed', e);
             }
@@ -2419,50 +2771,256 @@
         const sync = {
             FLUSH_MS: 1500,
             RETRY_MS: 5000,
-            queue: new Map(),     // a1 -> { value, raw }
+            queue: new Map(),     // a1 -> { value, raw, echo }
+            confirmed: new Map(), // a1 -> last value successfully written (skip no-op rewrites)
             timer: null,
+            flushAt: 0,           // when the armed flush fires (drives the countdown)
+            ticker: null,
+            flashT: null,
             flushing: false,
-            enqueue(a1, value, raw) {
+            enqueue(a1, value, raw, echo) {
                 if (!a1) return;
-                this.queue.set(a1, { value: value, raw: raw });
+                // No-op skip: the sheet already holds exactly this value — cancel any
+                // queued write for the cell instead of re-sending it.
+                if (this.confirmed.get(a1) === value) {
+                    if (this.queue.delete(a1)) this.status();
+                    return;
+                }
+                this.queue.set(a1, { value: value, raw: raw, echo: echo });
                 this.schedule(this.FLUSH_MS);
                 this.status();
             },
             schedule(ms) {
                 if (this.timer) return;
+                this.flushAt = Date.now() + ms;
                 this.timer = setTimeout(() => { this.timer = null; this.flush(); }, ms);
+                this.startTicker();
+            },
+            // 250ms ticker drives the "💾 Saving N changes (Ns)…" countdown while
+            // anything is queued/in flight; stops itself when idle.
+            startTicker() {
+                if (this.ticker) return;
+                this.ticker = setInterval(() => {
+                    if (!this.queue.size && !this.flushing && !this.timer) {
+                        clearInterval(this.ticker); this.ticker = null; return;
+                    }
+                    if (!this.flashT) this.status();
+                }, 250);
             },
             async flush() {
                 if (this.flushing) { this.schedule(this.FLUSH_MS); return; }
+                // Paused = the WHOLE sync manager is frozen, writes included. Edits
+                // keep queuing (and keepalive still rescues them on tab close);
+                // resume drains the queue first, then reads.
+                if (sheetPaused) { this.status(); return; }
                 if (!this.queue.size || !canWriteSheet()) { this.status(); return; }
                 this.flushing = true;
                 const items = Array.from(this.queue.entries());
                 this.queue.clear();
-                this.status('Saving to sheet…');
+                this.status('💾 Saving…');
                 try {
                     const raws = items.filter(it => it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
                     const texts = items.filter(it => !it[1].raw).map(it => ({ range: it[0], value: it[1].value }));
-                    if (raws.length) await sheetsBatchPut(raws, 'RAW');
+                    // System record: stamp the t0 row's 中文成分描述 with the last
+                    // write time (UTC). Piggybacked on the SAME batch — never queued,
+                    // so the stamp can't re-trigger a flush (infinite loop).
+                    const stamp = await systemRecordStamp();
+                    if (stamp.length || raws.length) await sheetsBatchPut(raws.concat(stamp), 'RAW');
                     if (texts.length) await sheetsBatchPut(texts, 'USER_ENTERED');   // content cells: prices/numbers parse
-                    setGoogleStatus('Saved ' + items.length + ' cell(s) • ' + new Date().toLocaleTimeString());
+                    writeError = null;   // pill owns save state; googleStatus stays account-only
+                    // Remember what landed → future identical enqueues are skipped.
+                    items.forEach(it => this.confirmed.set(it[0], it[1].value));
+                    // Local echo: the confirmed write IS the sheet state now — settle
+                    // dirty flags immediately instead of waiting for the 15s poll
+                    // (also the only confirmation path while auto-refresh is paused).
+                    let echoed = false;
+                    items.forEach(it => {
+                        if (!it[1].echo) return;
+                        try { it[1].echo(it[1].value); echoed = true; }
+                        catch (err) { console.warn('[sync] echo failed', err); }
+                    });
+                    if (echoed) saveCardStore();
+                    // Our own write is the likeliest next poll delta — re-anchor the
+                    // read poll so it doesn't burn a fetch just to confirm it.
+                    if (sheetTimer) startSheetTimer();
+                    this.flash('✓ All changes saved');
                 } catch (e) {
                     // Re-queue everything that wasn't superseded meanwhile, retry later.
                     items.forEach(it => { if (!this.queue.has(it[0])) this.queue.set(it[0], it[1]); });
-                    setGoogleStatus('Save failed — retrying: ' + (e.message || e), true);
+                    writeError = e.message || String(e);
+                    console.warn('[card-printer] sheet save failed:', e);
                     this.schedule(this.RETRY_MS);
                 } finally {
                     this.flushing = false;
                     if (this.queue.size) this.schedule(this.FLUSH_MS);
-                    this.status();
+                    if (!this.flashT) this.status();
+                    updateSyncPill();
                 }
             },
+            // Brief "✓ Saved" confirmation on the designer badge, then back to normal.
+            flash(msg) {
+                setCalib('save', msg);
+                clearTimeout(this.flashT);
+                this.flashT = setTimeout(() => { this.flashT = null; this.status(); }, 2000);
+            },
             status(msg) {
-                setCalib('save', msg || (this.queue.size ? 'Saving… (' + this.queue.size + ' pending)' : null));
+                let text = msg;
+                if (!text && this.queue.size) {
+                    const nChanges = this.queue.size + ' change' + (this.queue.size === 1 ? '' : 's');
+                    if (sheetPaused) {
+                        text = '⏸ ' + nChanges + ' waiting — paused';
+                    } else {
+                        const s = Math.max(0, Math.ceil((this.flushAt - Date.now()) / 1000));
+                        text = '💾 Saving ' + nChanges + ' (' + s + 's)…';
+                    }
+                }
+                setCalib('save', text || null);
+            },
+            // Best-effort final save as the page closes: keepalive POSTs survive tab
+            // close (payloads are far below the 64KB keepalive cap). The queue is NOT
+            // cleared — if the user cancels the leave dialog, the normal flush
+            // re-sends the same values (idempotent).
+            flushKeepalive() {
+                if (!this.queue.size || !canWriteSheet()) return;
+                const items = Array.from(this.queue.entries());
+                const post = (data, vio) => fetch('https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + '/values:batchUpdate', {
+                    method: 'POST',
+                    keepalive: true,
+                    headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ valueInputOption: vio, data: data.map(d => ({ range: d[0], values: [[d[1].value]] })) }),
+                }).catch(() => {});
+                const raws = items.filter(it => it[1].raw);
+                const texts = items.filter(it => !it[1].raw);
+                if (raws.length) post(raws, 'RAW');
+                if (texts.length) post(texts, 'USER_ENTERED');
             },
         };
-        // Don't silently drop queued writes on close.
+        // ---- System record (the t0 row doubles as a status row) ----
+        // Cells written alongside every flush. All OVERWRITE (last writer wins —
+        // nothing appends, so the cells never grow):
+        //   中文成分描述   last write: <UTC time>
+        //   英文成分描述   app: <deployed build version>
+        //   特色           schema: <config schema this build writes>
+        //   內餡重量(g)    by: <session tag>
+        // The session tag records the LAST WRITER, not "currently editing": a
+        // closed tab intentionally leaves its tag behind — read it together with
+        // the adjacent last-write time to judge freshness. (Live presence would
+        // need a heartbeat write; deliberately not done to save API quota.)
+        // 照片 holds the one-time migration record (see materializeSheetConfigs).
+        // Returns [] when the t0 row can't be resolved — stamping is best-effort
+        // and never blocks the real write.
+        const SCHEMA_VERSION = 'v1+priceHalf';
+        const SESSION_TAG = Math.random().toString(36).slice(2, 8);   // new per page load
+        function appVersion() {
+            const el = document.querySelector('.version-strip span');
+            const v = el ? el.textContent.trim() : '';
+            return (!v || v.indexOf('__APP_VERSION') === 0) ? 'dev' : v;   // placeholder = local dev
+        }
+        function sysCol(header) {
+            return (state.headers || []).findIndex(h => String(h || '').includes(header));
+        }
+        async function systemRecordStamp() {
+            try {
+                if (!state.templateRowNum) await resolveTemplateRow();
+                if (!state.templateRowNum) return [];
+                const ts = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+                const cells = [
+                    [state.map.cnIngredients, 'last write: ' + ts],
+                    [state.map.enIngredients, 'app: ' + appVersion()],
+                    [sysCol('特色'), 'schema: ' + SCHEMA_VERSION],
+                    [sysCol('內餡重量'), 'by: ' + SESSION_TAG],
+                ];
+                return cells.filter(c => c[0] >= 0).map(c => ({
+                    range: quoteTab(gTabTitle) + '!' + colLetter(c[0]) + state.templateRowNum,
+                    value: c[1],
+                }));
+            } catch (_) { return []; }
+        }
+
+        // Final-save on close: fire a keepalive flush, and still warn — keepalive is
+        // best-effort (its response can't be observed once the page is gone).
         window.addEventListener('beforeunload', (e) => {
-            if (sync.queue.size || sync.flushing) { e.preventDefault(); e.returnValue = ''; }
+            if (!sync.queue.size && !sync.flushing) return;
+            try { sync.flushKeepalive(); } catch (_) {}
+            e.preventDefault(); e.returnValue = '';
+        });
+
+        // ===================== Unified sync pill =====================
+        // ONE always-visible surface for data in/out. Priority (top wins):
+        //   write error > read error > saving > just-saved > paused >
+        //   anonymous-with-local-edits > live.
+        // Detailed/setup messages keep their own surfaces: connect errors in
+        // section 1, account info next to sign-in, font/auto-flow chips + save
+        // countdown on the designer badge.
+        let lastPollOkAt = 0;     // last successful sheet read
+        let readError = null;     // poll failure message (null = healthy)
+        let writeError = null;    // flush failure message (null = healthy)
+        function anyLocalDirty() {
+            return templateDirty || (state.ids || []).some(id => cardDirty[id]);
+        }
+        // "Local preview" is a transient nudge, not a permanent banner: it shows for
+        // 3s after each anonymous edit, then the pill returns to the main live/poll
+        // state. Every new edit re-triggers it.
+        const LOCAL_HINT_MS = 3000;
+        let lastLocalEditAt = 0;
+        function noteLocalEdit() {
+            if (canWriteSheet()) return;
+            lastLocalEditAt = Date.now();
+            updateSyncPill();
+        }
+        function fmtAgo(ms) {
+            const s = Math.floor(ms / 1000);
+            if (s < 5) return 'just now';
+            if (s < 60) return s + 's ago';
+            return Math.floor(s / 60) + 'min ago';
+        }
+        function updateSyncPill() {
+            const pill = document.getElementById('syncPill');
+            if (!sheetCsvUrl) {
+                // No live sheet poll. If a sheet was in play this session, say so
+                // explicitly (click = reconnect); hide for file/sample sources.
+                if (gSpreadsheetId || lastPollOkAt) {
+                    pill.hidden = false;
+                    pill.className = 'sync-pill off';
+                    pill.textContent = '○ Disconnected — click to reconnect';
+                    pill.title = 'Click to reconnect to the sheet';
+                } else {
+                    pill.hidden = true;
+                }
+                return;
+            }
+            pill.hidden = false;
+            // Next auto-refresh, shown in poll-relevant states so you always know
+            // when the sheet will pull (the poll keeps running in local preview too).
+            const refreshIn = (!sheetPaused && sheetTimer)
+                ? ' · ↻ ' + Math.max(0, Math.ceil((nextPollAt - Date.now()) / 1000)) + 's'
+                : '';
+            let cls, text;
+            const nChanges = sync.queue.size + ' change' + (sync.queue.size === 1 ? '' : 's');
+            if (writeError) { cls = 'error'; text = '⚠ Save failed — retrying'; }
+            else if (readError) { cls = 'error'; text = '⚠ Can’t reach the sheet — retrying' + refreshIn; }
+            else if (sync.flushing) { cls = 'saving'; text = '💾 Saving…'; }
+            else if (sheetPaused && sync.queue.size) { cls = 'paused'; text = '⏸ Paused — ' + nChanges + ' waiting'; }
+            else if (sync.queue.size) {
+                const s = Math.max(0, Math.ceil((sync.flushAt - Date.now()) / 1000));
+                cls = 'saving';
+                text = '💾 Saving ' + nChanges + ' (' + s + 's)…';
+            }
+            else if (sync.flashT) { cls = 'saved'; text = '✓ All changes saved'; }
+            else if (sheetPaused) { cls = 'paused'; text = '⏸ Paused — click to resume'; }
+            else if (!canWriteSheet() && anyLocalDirty() && Date.now() - lastLocalEditAt < LOCAL_HINT_MS) { cls = 'local'; text = '✏️ Local preview — sign in to save' + refreshIn; }
+            else { cls = 'live'; text = '🟢 Live — updated ' + (lastPollOkAt ? fmtAgo(Date.now() - lastPollOkAt) : '…') + refreshIn; }
+            pill.className = 'sync-pill ' + cls;
+            pill.textContent = text;
+            pill.title = sheetPaused ? 'Click to resume auto-refresh' : 'Click to pause auto-refresh';
+        }
+        setInterval(updateSyncPill, 500);
+        // The pill doubles as the pause/resume toggle — always reachable while
+        // scrolled away from the section-1 pause button. When disconnected it
+        // reconnects instead (the URL field still holds the sheet link).
+        document.getElementById('syncPill').addEventListener('click', () => {
+            if (!sheetCsvUrl) { connectSheet(); return; }
+            setSheetPaused(!sheetPaused);
         });
 
         // Queue a single content cell write.
@@ -2481,13 +3039,30 @@
             if (!row || state.metaCol < 0) return null;
             return quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + row;
         }
+        // Local-echo callback for a card's metaData write: on flush success the
+        // confirmed value becomes the in-memory sheet state and the dirty flag
+        // settles immediately (no 15s poll wait; works while paused too).
+        function metaEchoFor(id) {
+            return (val) => {
+                const i = (state.ids || []).indexOf(id);
+                if (i < 0) return;
+                sheetCardMeta[i] = parseMetaCell(val);
+                settleDirty(id, i);
+            };
+        }
+        // Same for the template (t0) row: adopt the confirmed write as the sheet
+        // template — clears templateDirty / sessionTemplateEdited when it matches.
+        function templateEcho(val) {
+            const meta = parseMetaCell(val);
+            if (isTemplateMeta(meta)) adoptSheetTemplate(meta.config);
+        }
         function queueCardMeta(id) {
             if (!canWriteSheet() || state.metaCol < 0) return;
             const i = (state.ids || []).indexOf(id);
             if (i < 0) return;
             const a1 = metaA1(i);
             if (!a1) { setGoogleStatus('Could not locate this card’s sheet row to save the layout.', true); return; }
-            sync.enqueue(a1, cardMetaJson(cardConfig[id]), true);
+            sync.enqueue(a1, cardMetaJson(cardConfig[id]), true, metaEchoFor(id));
         }
         // Resolve (or reserve, at the bottom of the tab) the template row — a row whose
         // title stays empty so it never becomes a card.
@@ -2507,13 +3082,13 @@
         async function queueTemplate() {
             if (!canWriteSheet() || state.metaCol < 0) return;
             await resolveTemplateRow();
-            sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+            sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true, templateEcho);
         }
         // Re-enqueue every card's metaData cell — used only by the explicit
         // "Reset ALL cards" action, which intentionally rewrites the whole column.
         function queueAllCardMetas() {
             if (!canWriteSheet() || state.metaCol < 0) return;
-            (state.ids || []).forEach((id, i) => { const a1 = metaA1(i); if (a1) sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); });
+            (state.ids || []).forEach((id, i) => { const a1 = metaA1(i); if (a1) sync.enqueue(a1, cardMetaJson(cardConfig[id]), true, metaEchoFor(id)); });
         }
         // On sign-in: fill the gaps. Every card whose metaData cell is EMPTY gets its
         // current config queued (this browser's local tweak if it had one, otherwise
@@ -2529,11 +3104,11 @@
             (state.ids || []).forEach((id, i) => {
                 const a1 = metaA1(i);
                 if (!a1) return;
-                if (!sheetCardMeta[i]) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true); n++; }
+                if (!sheetCardMeta[i]) { sync.enqueue(a1, cardMetaJson(cardConfig[id]), true, metaEchoFor(id)); n++; }
                 else if (configMissingElems(cardMetaConfig(sheetCardMeta[i]))) {
                     // baseConfigFor = the sheet's own config completed over the template
                     // (NOT this browser's local tweaks — those queue on their own edits).
-                    sync.enqueue(a1, cardMetaJson(baseConfigFor(i)), true); n++;
+                    sync.enqueue(a1, cardMetaJson(baseConfigFor(i)), true, metaEchoFor(id)); n++;
                 }
             });
             // Write t0 when: the row is missing entirely, its cell is empty (no
@@ -2541,12 +3116,251 @@
             // (missing elements / wrong type marker).
             if (!state.templateRowNum || !sheetTemplate || templateRowNeedsRewrite) {
                 await resolveTemplateRow();
-                sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true);
+                sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(state.metaCol) + state.templateRowNum, templateMetaJson(templateConfig), true, templateEcho);
                 templateRowNeedsRewrite = false;
                 n++;
             }
-            if (n) setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty/outdated metaData cells…');
+            if (n) {
+                // System record: one-time migration audit on the t0 row (照片 column).
+                const photoCol = sysCol('照片');
+                if (photoCol >= 0 && state.templateRowNum) {
+                    const ts = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                    sync.enqueue(quoteTab(gTabTitle) + '!' + colLetter(photoCol) + state.templateRowNum,
+                        'migrated: ' + ts + ' · ' + n + ' cells · app: ' + appVersion(), true);
+                }
+                setGoogleStatus('Queued ' + n + ' layout config(s) to fill empty/outdated metaData cells…');
+            }
         }
+        // ===================== Card & section management =====================
+        // Structural sheet edits (insert/delete rows) — signed-in only. Every flow:
+        //   1. drain the write queue (row shifts would invalidate queued A1 ranges),
+        //   2. ONE spreadsheets.batchUpdate (insert/delete row),
+        //   3. direct cell writes for the new row, re-anchor rows, refresh the poll.
+        // sync.confirmed is cleared after any structural change — its A1 keys point
+        // at shifted cells and must not suppress future writes.
+        async function sheetsStructural(requests) {
+            const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + gSpreadsheetId + ':batchUpdate';
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer ' + gToken.access_token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ requests: requests }),
+            });
+            if (!resp.ok) { const t = await resp.text(); throw new Error('HTTP ' + resp.status + ' ' + t); }
+            return resp.json();
+        }
+        // Drain the queue NOW (before structural edits). Throws if it can't.
+        async function syncDrain() {
+            clearTimeout(sync.timer); sync.timer = null;
+            for (let tries = 0; (sync.queue.size || sync.flushing) && tries < 10; tries++) {
+                if (!sync.flushing) await sync.flush();
+                else await new Promise(r => setTimeout(r, 300));
+            }
+            if (sync.queue.size || sync.flushing) throw new Error('pending saves could not be flushed');
+        }
+        function mgmtMsg(msg, isError) {
+            const el = document.getElementById('mgmtStatus');
+            el.textContent = msg || '';
+            el.classList.toggle('error', !!isError);
+        }
+        // Guard shared by all management actions.
+        function mgmtReady() {
+            if (!canWriteSheet()) { mgmtMsg('Sign in first — adding/deleting cards edits the Google Sheet.', true); return false; }
+            if (sheetPaused) { mgmtMsg('Resume auto-refresh first (sync is paused).', true); return false; }
+            return true;
+        }
+        // Ordered section labels: those that have cards (in sheet order) plus any
+        // empty legend rows found below the t0/config zone.
+        function sectionLabels() {
+            const seen = [];
+            (state.sections || []).forEach(s => { if (s && seen.indexOf(s) < 0) seen.push(s); });
+            Object.keys(state.sectionRows || {}).forEach(label => {
+                if (seen.indexOf(label) < 0 && (!state.templateRowNum || state.sectionRows[label] > state.templateRowNum)) seen.push(label);
+            });
+            return seen;
+        }
+        // Sheet row AFTER which a new card in `label` should be inserted: below the
+        // section's last card, or directly below its legend row when empty.
+        function sectionInsertRow(label) {
+            let last = null;
+            (state.sections || []).forEach((s, i) => {
+                const rn = state.sheetRowNums && state.sheetRowNums[i];
+                if (s === label && rn) last = Math.max(last || 0, rn);
+            });
+            if (last) return last;
+            if (state.sectionRows && state.sectionRows[label]) return state.sectionRows[label];
+            return state.rawRowCount || 0;
+        }
+        // Suggest the next id following the section's pattern (ch1…ch7 → ch8). The
+        // max number is taken across the WHOLE sheet so a prefix never collides.
+        function suggestCardId(label) {
+            if (state.idCol < 0) return '';
+            const counts = {};
+            let prefix = '';
+            (state.sections || []).forEach((s, i) => {
+                if (s !== label) return;
+                const m = String(state.rows[i][state.idCol] || '').trim().match(/^([A-Za-z]+)(\d+)$/);
+                if (!m) return;
+                counts[m[1]] = (counts[m[1]] || 0) + 1;
+                if (!prefix || counts[m[1]] > counts[prefix]) prefix = m[1];
+            });
+            if (!prefix) return '';
+            let maxN = 0;
+            (state.rows || []).forEach(r => {
+                const m = String(r[state.idCol] || '').trim().match(/^([A-Za-z]+)(\d+)$/);
+                if (m && m[1] === prefix) maxN = Math.max(maxN, parseInt(m[2], 10));
+            });
+            return prefix + (maxN + 1);
+        }
+        function refreshMgmtUI() {
+            const sel = document.getElementById('mgmtSection');
+            const current = sel.value;
+            sel.innerHTML = '';
+            sectionLabels().forEach(label => {
+                const o = document.createElement('option');
+                o.value = label; o.textContent = label;
+                sel.appendChild(o);
+            });
+            const nu = document.createElement('option');
+            nu.value = '__new__'; nu.textContent = '＋ New section…';
+            sel.appendChild(nu);
+            if (current && Array.prototype.some.call(sel.options, o => o.value === current)) sel.value = current;
+            onMgmtSectionChange();
+            // Delete-card picker: every card, in sheet order (independent of the
+            // designer's active card).
+            const del = document.getElementById('mgmtDeleteCard');
+            const delCurrent = del.value;
+            del.innerHTML = '';
+            (state.rows || []).forEach((_, i) => {
+                const o = document.createElement('option');
+                o.value = i; o.textContent = cardLabel(i);
+                del.appendChild(o);
+            });
+            if (delCurrent && Array.prototype.some.call(del.options, o => o.value === delCurrent)) del.value = delCurrent;
+        }
+        function onMgmtSectionChange() {
+            const sel = document.getElementById('mgmtSection');
+            const isNew = sel.value === '__new__';
+            document.getElementById('mgmtNewSectionWrap').hidden = !isNew;
+            const idInput = document.getElementById('mgmtId');
+            idInput.placeholder = (!isNew && suggestCardId(sel.value)) || 'e.g. x1';
+        }
+        async function createCard() {
+            if (!mgmtReady()) return;
+            const sel = document.getElementById('mgmtSection');
+            const isNew = sel.value === '__new__';
+            const newName = document.getElementById('mgmtNewSection').value.trim();
+            const title = document.getElementById('mgmtTitle').value.trim();
+            const id = document.getElementById('mgmtId').value.trim() || (!isNew && suggestCardId(sel.value)) || '';
+            if (isNew && !newName) { mgmtMsg('Enter the new section name.', true); return; }
+            if (!title) { mgmtMsg('Enter the mamalili品名.', true); return; }
+            if (!id) { mgmtMsg('Enter an id (e.g. x1) — this section has no existing id pattern to follow.', true); return; }
+            if (id === TEMPLATE_ROW_ID || (state.idCol >= 0 && (state.rows || []).some(r => String(r[state.idCol] || '').trim() === id))) {
+                mgmtMsg('id “' + id + '” is already taken.', true); return;
+            }
+            const btn = document.getElementById('mgmtCreateBtn');
+            btn.disabled = true;
+            try {
+                mgmtMsg('Saving pending changes…');
+                await syncDrain();
+                await buildSheetRowIndex();   // fresh row anchors
+                let afterRow;
+                if (isNew) {
+                    // New legend row appended below the last data row, card goes under it.
+                    const legendRow = (state.rawRowCount || 0) + 1;
+                    await sheetsBatchPut([{ range: quoteTab(gTabTitle) + '!' + colLetter(state.idCol) + legendRow, value: newName }], 'RAW');
+                    state.sectionRows[newName] = legendRow;
+                    state.rawRowCount = legendRow;
+                    afterRow = legendRow;
+                } else {
+                    afterRow = sectionInsertRow(sel.value);
+                }
+                mgmtMsg('Inserting row…');
+                await sheetsStructural([{ insertDimension: {
+                    range: { sheetId: gTabId, dimension: 'ROWS', startIndex: afterRow, endIndex: afterRow + 1 },
+                    inheritFromBefore: true,
+                } }]);
+                sync.confirmed.clear();   // A1 keys below the insert have shifted
+                const row = afterRow + 1;
+                const cells = [];
+                const put = (col, val) => { if (col >= 0 && val) cells.push({ range: quoteTab(gTabTitle) + '!' + colLetter(col) + row, value: val }); };
+                put(state.idCol, id);
+                put(state.itemCol, title);                                  // 品項 follows mamalili品名
+                put(state.map.title, title);
+                put(state.metaCol, cardMetaJson(clone(templateConfig)));    // starts on the shared template layout
+                await sheetsBatchPut(cells, 'RAW');
+                await buildSheetRowIndex();
+                await pollSheetOnce();
+                // Focus the new card if the refresh already picked it up.
+                const idx = (state.rows || []).findIndex(r => state.idCol >= 0 && String(r[state.idCol] || '').trim() === id);
+                if (idx >= 0) { activeCardIndex = idx; rebuildCardPicker(); renderEditor(); renderContentInputs(); }
+                document.getElementById('mgmtTitle').value = '';
+                document.getElementById('mgmtId').value = '';
+                refreshMgmtUI();
+                mgmtMsg('Created “' + title + '” (' + id + ') ✓ — fill the other fields in the Content panel below.');
+            } catch (e) {
+                mgmtMsg('Create failed: ' + (e.message || e), true);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        async function deleteSelectedCard() {
+            if (!mgmtReady()) return;
+            const i = parseInt(document.getElementById('mgmtDeleteCard').value, 10);
+            if (isNaN(i) || !state.rows[i]) { mgmtMsg('Pick the card to delete.', true); return; }
+            const row = state.sheetRowNums && state.sheetRowNums[i];
+            if (!row) { mgmtMsg('Could not locate this card’s sheet row.', true); return; }
+            if (!confirm('Delete “' + cardLabel(i) + '” PERMANENTLY?\n\nThis removes row ' + row + ' from the Google Sheet for everyone.')) return;
+            const btn = document.getElementById('deleteCardBtn');
+            btn.disabled = true;
+            try {
+                mgmtMsg('Saving pending changes…');
+                await syncDrain();
+                mgmtMsg('Deleting row ' + row + '…');
+                await sheetsStructural([{ deleteDimension: {
+                    range: { sheetId: gTabId, dimension: 'ROWS', startIndex: row - 1, endIndex: row },
+                } }]);
+                sync.confirmed.clear();
+                await buildSheetRowIndex();
+                await pollSheetOnce();
+                refreshMgmtUI();
+                mgmtMsg('Card deleted ✓');
+            } catch (e) {
+                mgmtMsg('Delete failed: ' + (e.message || e), true);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        async function deleteEmptySection() {
+            if (!mgmtReady()) return;
+            const sel = document.getElementById('mgmtSection');
+            const label = sel.value;
+            if (!label || label === '__new__') { mgmtMsg('Pick the section to delete.', true); return; }
+            if ((state.sections || []).some(s => s === label)) {
+                mgmtMsg('“' + label + '” still has cards — delete or move them first.', true); return;
+            }
+            const row = state.sectionRows && state.sectionRows[label];
+            if (!row) { mgmtMsg('Could not locate that section’s legend row.', true); return; }
+            if (!confirm('Delete the empty section “' + label + '” (row ' + row + ') from the Google Sheet?')) return;
+            try {
+                mgmtMsg('Saving pending changes…');
+                await syncDrain();
+                await sheetsStructural([{ deleteDimension: {
+                    range: { sheetId: gTabId, dimension: 'ROWS', startIndex: row - 1, endIndex: row },
+                } }]);
+                sync.confirmed.clear();
+                await buildSheetRowIndex();
+                await pollSheetOnce();
+                refreshMgmtUI();
+                mgmtMsg('Section deleted ✓');
+            } catch (e) {
+                mgmtMsg('Delete failed: ' + (e.message || e), true);
+            }
+        }
+        document.getElementById('deleteCardBtn').addEventListener('click', deleteSelectedCard);
+        document.getElementById('mgmtSection').addEventListener('change', onMgmtSectionChange);
+        document.getElementById('mgmtCreateBtn').addEventListener('click', createCard);
+        document.getElementById('mgmtDeleteSectionBtn').addEventListener('click', deleteEmptySection);
+
         document.getElementById('googlePickBtn').addEventListener('click', googleSignInAndPick);
         document.getElementById('googleTab').addEventListener('change', (e) => {
             const tab = gTabs.find(t => String(t.sheetId) === e.target.value);
