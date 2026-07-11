@@ -5,7 +5,9 @@
   "description": "Static, zero-build browser tools for designers, served from one repo.",
   "scripts": {
     "start": "http-server . -p 8000 -c-1 -o /",
-    "serve": "http-server . -p 8000 -c-1"
+    "serve": "http-server . -p 8000 -c-1",
+    "gen:schema": "node bakery-erp/tools/gen-schema.mjs",
+    "check:schema": "node bakery-erp/tools/gen-schema.mjs --check"
   },
   "devDependencies": {
     "http-server": "^14.1.1"

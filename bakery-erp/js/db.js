@@ -7,33 +7,10 @@
 //  3) 舊資料(真實快照/本地快取)載入時自動補 location_id=LOC-A(歷史異動皆屬本店)
 //  4) 獨立 localStorage 鍵與連線設定;預設「本地模式」,避免把 v2 新結構誤寫進 v1 的 Sheet
 import { SEED_OVERRIDE } from './seed-data.js'; // 真實資料庫快照(門市A 歷史資料)
+import { TABLE_COLUMNS, SYNC_TABLES } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js)
 
-export const SCHEMA = {
-  location:         ['location_id','name','type'], // type: central | store
-  location_stock:   ['location_id','ingredient_id','safety_stock'], // 地點備料配置:有列=該地點備這個料(含各自安全庫存)
-  ingredient:       ['ingredient_id','name','category','base_unit','purchase_unit','conversion_rate','safety_stock','latest_unit_cost','quote_price','quote_price_pre','tax_rate','shelf_life_days','default_supplier_id','batch_yield'], // quote_price=廠商報價(未稅/每採購單位);tax_rate=1.0或1.05;batch_yield=自製半成品一批標準產出(g/ml,配方為每批用量)
-  product:          ['product_id','name','type','sale_price','lead_days','default_yield','is_active','location_id'], // location_id=產品歸屬門市(中央顯示全部/可篩一店;門市只見自己的);舊資料/空值視為 LOC-A
-  supplier:         ['supplier_id','name','contact_person','phone','email','address','payment_terms'],
-  bom:              ['bom_id','product_id','ingredient_id','qty_per_yield'],
-  routing:          ['routing_id','product_id','step_no','step_name','duration_min','equipment_id','cross_day'],
-  equipment:        ['equipment_id','name','type','count','capacity_per_batch','batch_minutes'],
-  category:         ['category_id','name','display_order'], // display_order=分類 pills 顯示順序(拖拽調整後回寫)
-  staff:            ['staff_id','name','role','active'],
-  line:             ['line_id','name'],
-  station:          ['station_id','line_id','seq','name','match','staff_id'],
-  assignment:       ['assign_id','prod_id','step_no','staff_id','ts'],
-  purchase_line:    ['po_id','po_name','ingredient_id','qty','purchase_unit','unit_price','subtotal','supplier_id','order_date','arrival_date','status','location_id','received_qty','tax_rate'], // 狀態:已下單/部分到貨/已到貨;po_name=單據名稱(方便記憶);received_qty=累計實收(採購單位)
-  production_order: ['prod_id','product_id','plan_qty','start_date','finish_date','status','location_id'],
-  plan_draft:       ['line_id','product_id','qty','finish_date','finish_time','staff_id','location_id'], // 生產計畫草稿(每日排程①)：離開/重整可載回；每地點各自一份
-  po_draft:         ['line_id','ingredient_id','units','unit_price','tax_rate','doc_name','eta','name_ov','eta_ov','location_id'], // 進貨單草稿(中央採購③)：可累積幾天再送單
-  sales_line:       ['so_id','product_id','qty','sale_price','sale_date','idempotency_key','location_id'],
-  waste:            ['waste_id','target_type','target_id','qty','reason','date','location_id'],
-  stocktake:        ['stocktake_id','target_type','target_id','counted_qty','date','location_id'],
-  transfer_order:   ['to_id','from_loc','to_loc','status','request_date','ship_date','receive_date','need_date','urgent'], // 狀態:叫貨/已出貨/已收貨/取消;need_date+urgent=需求到貨日與急件(SCM 優先序)
-  transfer_line:    ['tl_id','to_id','ingredient_id','qty'],
-  ingredient_request: ['req_id','location_id','name','spec','weekly_qty','urgent','status','ingredient_id','request_date','done_date'], // 門市申請新原料 → 中央歸戶(待處理/已加入/併入/婉拒)
-  stock_ledger:     ['ledger_id','item_type','item_id','direction','qty','source_type','source_id','unit_cost','txn_date','location_id']
-};
+// SCHEMA = 主同步表(結構單一來源見 ./schema.js);帳號/權限表為後端專用,不在主同步.
+export const SCHEMA = Object.fromEntries(SYNC_TABLES.map(t => [t, TABLE_COLUMNS[t]]));
 
 // 中央倉期初庫存 + TO-1001 已出貨的調撥出庫流水(門市快照之外的 LOC-C 資料)
 const CENTRAL_LEDGER = `L-9001,ingredient,ING-001,in,80000,stocktake,期初,0.036,2026-07-01,LOC-C
@@ -310,6 +287,8 @@ export class DB {
     this.token = null; this.tokenExp = 0; this._tc = null; this._tcb = null; this._teb = null;
     this.pending = 0;
     this.onRemote = null; // (ok, msg) => void
+    this.rev = {};        // 每張表的樂觀鎖版本號(list 讀入 / 寫入回應更新);replace 帶 baseRev 給後端比對
+    this.onConflict = null; // (sheet) => void:整表覆寫因他人先改而被拒(conflict)時通知上層重載
     this.load();
   }
 
@@ -416,7 +395,7 @@ export class DB {
     if (this.cfg.kind === 'gapi') {
       getters = names.map(n => this.gapiList(n).catch(() => null));
     } else {
-      getters = names.map(n => this.api('action=list&sheet=' + n).then(j => (j && j.ok) ? j.rows : null).catch(() => null));
+      getters = names.map(n => this.api('action=list&sheet=' + n).then(j => { if (j && j.ok && j.rev != null) this.rev[n] = j.rev; return (j && j.ok) ? j.rows : null; }).catch(() => null));
     }
     const results = await Promise.all(getters);
     const missing = [];
@@ -453,11 +432,16 @@ export class DB {
     }
     if (!this.cfg.url) { this.pending--; return; }
     const tok = this.authToken();
+    const sheet = payload.sheet;
+    // 樂觀鎖:整表覆寫帶上本地版號給後端比對(舊後端沒這功能會忽略,行為不變)
+    if (payload.action === 'replace' && this.rev[sheet] != null) payload = Object.assign({}, payload, { baseRev: this.rev[sheet] });
     if (tok) payload = Object.assign({}, payload, { token: tok });
     fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
       .then(r => r.json())
       .then(j => {
         if (j && j.error === 'unauthorized' && this.onAuthFail) this.onAuthFail();
+        if (j && j.rev != null && sheet) this.rev[sheet] = j.rev; // 追上最新版號(成功寫入或 conflict 都會回傳目前版號)
+        if (j && j.error === 'conflict') { done(false, '⚠ 資料已被他人更新,正在載入最新版 — 請重做剛才的變更'); if (this.onConflict) this.onConflict(sheet); return; }
         done(!!j.ok, j.ok ? '' : 'Sheet 寫入失敗:' + (j.error || '未知錯誤'));
       })
       .catch(err => done(false, 'Sheet 連線失敗,本次異動僅存本地:' + err));

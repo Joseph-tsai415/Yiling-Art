@@ -29,34 +29,36 @@ var AUTH = {
   BOOTSTRAP_ADMIN: 'bingjun.cai@gmail.com'   // 第一位管理員的 Google Email;首次登入自動建立 super_admin 帳號
 };
 
+// <<gen:tables>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改結構請改 js/schema.js)
 var TABLES = {
-  location:         ['location_id','name','type'],
-  location_stock:   ['location_id','ingredient_id','safety_stock'],
-  ingredient:       ['ingredient_id','name','category','base_unit','purchase_unit','conversion_rate','safety_stock','latest_unit_cost','quote_price','quote_price_pre','tax_rate','shelf_life_days','default_supplier_id','batch_yield'],
-  product:          ['product_id','name','type','sale_price','lead_days','default_yield','is_active','location_id'],
-  supplier:         ['supplier_id','name','contact_person','phone','email','address','payment_terms'],
-  bom:              ['bom_id','product_id','ingredient_id','qty_per_yield'],
-  routing:          ['routing_id','product_id','step_no','step_name','duration_min','equipment_id','cross_day'],
-  equipment:        ['equipment_id','name','type','count','capacity_per_batch','batch_minutes'],
-  category:         ['category_id','name','display_order'],
-  staff:            ['staff_id','name','role','active'],
-  line:             ['line_id','name'],
-  station:          ['station_id','line_id','seq','name','match','staff_id'],
-  assignment:       ['assign_id','prod_id','step_no','staff_id','ts'],
-  purchase_line:    ['po_id','po_name','ingredient_id','qty','purchase_unit','unit_price','subtotal','supplier_id','order_date','arrival_date','status','location_id','received_qty','tax_rate'],
-  production_order: ['prod_id','product_id','plan_qty','start_date','finish_date','status','location_id'],
-  plan_draft:       ['line_id','product_id','qty','finish_date','finish_time','staff_id','location_id'],
-  po_draft:         ['line_id','ingredient_id','units','unit_price','tax_rate','doc_name','eta','name_ov','eta_ov','location_id'],
-  sales_line:       ['so_id','product_id','qty','sale_price','sale_date','idempotency_key','location_id'],
-  waste:            ['waste_id','target_type','target_id','qty','reason','date','location_id'],
-  stocktake:        ['stocktake_id','target_type','target_id','counted_qty','date','location_id'],
-  transfer_order:   ['to_id','from_loc','to_loc','status','request_date','ship_date','receive_date','need_date','urgent'],
-  transfer_line:    ['tl_id','to_id','ingredient_id','qty'],
-  ingredient_request: ['req_id','location_id','name','spec','weekly_qty','urgent','status','ingredient_id','request_date','done_date'],
-  stock_ledger:     ['ledger_id','item_type','item_id','direction','qty','source_type','source_id','unit_cost','txn_date','location_id'],
-  user_account:     ['user_id','name','email','role','location_ids','active','created_at','last_login'], // 名單:role=super_admin/central_ops/store_admin/store_kitchen/store_front;location_ids=ALL 或 LOC-A|LOC-B
-  role_permission:  ['role_id','perm_key','allow'] // 角色×權限矩陣(可直接在 Sheet 改,即時生效):perm_key=screen.<畫面>/feature.cost;super_admin 恆為全部不需列
+  location: ['location_id', 'name', 'type'],
+  location_stock: ['location_id', 'ingredient_id', 'safety_stock'],
+  ingredient: ['ingredient_id', 'name', 'category', 'base_unit', 'purchase_unit', 'conversion_rate', 'safety_stock', 'latest_unit_cost', 'quote_price', 'quote_price_pre', 'tax_rate', 'shelf_life_days', 'default_supplier_id', 'batch_yield'],
+  product: ['product_id', 'name', 'type', 'sale_price', 'lead_days', 'default_yield', 'is_active', 'location_id'],
+  supplier: ['supplier_id', 'name', 'contact_person', 'phone', 'email', 'address', 'payment_terms'],
+  bom: ['bom_id', 'product_id', 'ingredient_id', 'qty_per_yield'],
+  routing: ['routing_id', 'product_id', 'step_no', 'step_name', 'duration_min', 'equipment_id', 'cross_day'],
+  equipment: ['equipment_id', 'name', 'type', 'count', 'capacity_per_batch', 'batch_minutes'],
+  category: ['category_id', 'name', 'display_order'],
+  staff: ['staff_id', 'name', 'role', 'active'],
+  line: ['line_id', 'name'],
+  station: ['station_id', 'line_id', 'seq', 'name', 'match', 'staff_id'],
+  assignment: ['assign_id', 'prod_id', 'step_no', 'staff_id', 'ts'],
+  purchase_line: ['po_id', 'po_name', 'ingredient_id', 'qty', 'purchase_unit', 'unit_price', 'subtotal', 'supplier_id', 'order_date', 'arrival_date', 'status', 'location_id', 'received_qty', 'tax_rate'],
+  production_order: ['prod_id', 'product_id', 'plan_qty', 'start_date', 'finish_date', 'status', 'location_id'],
+  plan_draft: ['line_id', 'product_id', 'qty', 'finish_date', 'finish_time', 'staff_id', 'location_id'],
+  po_draft: ['line_id', 'ingredient_id', 'units', 'unit_price', 'tax_rate', 'doc_name', 'eta', 'name_ov', 'eta_ov', 'location_id'],
+  sales_line: ['so_id', 'product_id', 'qty', 'sale_price', 'sale_date', 'idempotency_key', 'location_id'],
+  waste: ['waste_id', 'target_type', 'target_id', 'qty', 'reason', 'date', 'location_id'],
+  stocktake: ['stocktake_id', 'target_type', 'target_id', 'counted_qty', 'date', 'location_id'],
+  transfer_order: ['to_id', 'from_loc', 'to_loc', 'status', 'request_date', 'ship_date', 'receive_date', 'need_date', 'urgent'],
+  transfer_line: ['tl_id', 'to_id', 'ingredient_id', 'qty'],
+  ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date'],
+  stock_ledger: ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
+  user_account: ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'],
+  role_permission: ['role_id', 'perm_key', 'allow']
 };
+// <</gen:tables>>
 
 // role_permission 預設值(setup 種入;migrate 只在分頁不存在或空白時種入 — 不覆蓋你的調整)
 // 依 doc/PERMISSION_ROLE_MAP.md:central_ops 可見成本;門市角色(含店長)全部隱藏成本
@@ -339,6 +341,11 @@ function login_(credential) {
 }
 
 // ─── 讀取:GET ?action=list&sheet=ingredient&token=… ───
+// ── 樂觀鎖:每張表一個版本號(存 DocumentProperties)。list 回傳目前版號;replace 帶 baseRev 比對,
+//    不合(代表有人先改過)就回 conflict,讓前端重新載入再改 — 避免整表覆寫把別人的變更蓋掉。──
+function rev_(sheet) { return Number(PropertiesService.getDocumentProperties().getProperty('rev:' + sheet) || '0'); }
+function bumpRev_(sheet) { var p = PropertiesService.getDocumentProperties(); var n = rev_(sheet) + 1; p.setProperty('rev:' + sheet, String(n)); return n; }
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'tables';
   var sess = null;
@@ -359,12 +366,13 @@ function doGet(e) {
     if ((e.parameter.sheet === 'user_account' || e.parameter.sheet === 'role_permission') && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     var sh = ss_().getSheetByName(e.parameter.sheet);
     if (!sh) return json_({ ok: false, error: '找不到分頁:' + e.parameter.sheet + '(請先執行 setup)' });
+    var curRev = rev_(e.parameter.sheet); // 先讀版號再讀資料:寧可誤判 conflict 也不要漏掉別人剛寫入的變更
     var tz = Session.getScriptTimeZone();
     var rows = sh.getDataRange().getValues().map(function (r) {
       return r.map(function (v) { return (v instanceof Date) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v; });
     });
     rows = filterRows_(e.parameter.sheet, rows, scopeOf_(sess)); // 地點範圍外的列不回傳
-    return json_({ ok: true, rows: rows });
+    return json_({ ok: true, rows: rows, rev: curRev });
   }
   return json_({ ok: true, tables: Object.keys(TABLES) });
 }
@@ -391,6 +399,9 @@ function doPost(e) {
     // 讀取已過濾 + 整表覆寫,若不這樣做會把其他店的資料清掉。
     if (body.action === 'replace') {
       if (!canReplace_(sess, body.sheet)) return json_({ ok: false, error: 'forbidden' });
+      // 樂觀鎖:前端帶了 baseRev 且與目前版號不同 → 有人先改過,回 conflict 讓前端重載再改.
+      // 舊前端沒帶 baseRev(undefined/null)則略過檢查,行為與之前完全相同(向後相容).
+      if (body.baseRev != null && Number(body.baseRev) !== rev_(body.sheet)) return json_({ ok: false, error: 'conflict', rev: rev_(body.sheet) });
       var shR = ss_().getSheetByName(body.sheet) || ss_().insertSheet(body.sheet);
       var headersR = body.headers;
       var incoming = body.rows || [];
@@ -413,7 +424,7 @@ function doPost(e) {
       var data = [headersR].concat(incoming);
       shR.getRange(1, 1, data.length, headersR.length).setValues(data);
       shR.setFrozenRows(1);
-      return json_({ ok: true, replaced: data.length - 1 });
+      return json_({ ok: true, replaced: data.length - 1, rev: bumpRev_(body.sheet) });
     }
 
     var sh = ss_().getSheetByName(body.sheet);
@@ -442,7 +453,7 @@ function doPost(e) {
 
     var row = headers.map(function (h) { return body.row && body.row[h] !== undefined ? body.row[h] : ''; });
     sh.appendRow(row); // append-only:只新增、不改舊列
-    return json_({ ok: true, appended: row });
+    return json_({ ok: true, appended: row, rev: bumpRev_(body.sheet) }); // 版號 +1:讓別人未送出的整表覆寫變成 stale
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {

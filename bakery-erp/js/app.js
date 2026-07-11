@@ -6,6 +6,7 @@
 //   2) 單據狀態機:transfer_order(叫貨→已出貨→已收貨/取消)、purchase_line(已下單/…/補送中 →
 //      部分到貨/已到貨,received_qty 分批累計)
 import { DCLogic, mountApp } from './runtime.js';
+import { TABLE_COLUMNS } from './schema.js'; // 帳號/權限欄位取自單一結構來源(見 ./schema.js)
 
 class Component extends DCLogic {
   state = {
@@ -53,6 +54,11 @@ class Component extends DCLogic {
       this.db = new m.DB();
       this.db.onRemote = (ok, msg) => { if (!ok && msg) this.notify('⚠ ' + msg); };
       this.db.onAuthFail = () => this.doLogout('⚠ 登入已過期,請重新登入');
+      // 樂觀鎖 conflict:整表覆寫被拒(他人先改過)→ 重新載入最新版,使用者再重做剛才的變更
+      this.db.onConflict = sheet => {
+        if (sheet === 'user_account' || sheet === 'role_permission') this.loadAccounts(true);
+        else this.startCloud();
+      };
       const c = this.db.cfg || {};
       this.setState({
         ready: true,
@@ -167,8 +173,8 @@ class Component extends DCLogic {
     if (msg) this.notify(msg);
   }
   // ── 帳號與角色(super_admin):user_account / role_permission 直接讀寫 Sheet ──
-  ACC_HEAD = ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'];
-  PERM_HEAD = ['role_id', 'perm_key', 'allow'];
+  ACC_HEAD = TABLE_COLUMNS.user_account;
+  PERM_HEAD = TABLE_COLUMNS.role_permission;
   ROLE_OPTS = [
     { id: 'super_admin', name: 'super_admin(系統管理員)' },
     { id: 'central_ops', name: 'central_ops(中央倉)' },
@@ -186,7 +192,11 @@ class Component extends DCLogic {
       return j.rows.slice(1).map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] === undefined || r[i] === null ? '' : String(r[i])); return o; });
     };
     Promise.all([this.db.api('action=list&sheet=user_account'), this.db.api('action=list&sheet=role_permission')])
-      .then(([a, b]) => this.setState({ accUsers: objs(a), accPerms: objs(b), accBusy: false, accErr: (a && a.ok) ? '' : (a && a.error || '讀取失敗') }))
+      .then(([a, b]) => {
+        if (a && a.rev != null) this.db.rev['user_account'] = a.rev; // 記住版號:之後 saveAccounts 的整表覆寫帶 baseRev 給後端比對
+        if (b && b.rev != null) this.db.rev['role_permission'] = b.rev;
+        this.setState({ accUsers: objs(a), accPerms: objs(b), accBusy: false, accErr: (a && a.ok) ? '' : (a && a.error || '讀取失敗') });
+      })
       .catch(err => this.setState({ accBusy: false, accErr: String(err) }));
   }
   // 防抖寫回(和 po_draft 同節奏):整表覆寫,後端限 super_admin

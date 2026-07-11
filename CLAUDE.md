@@ -8,7 +8,7 @@ This repo hosts multiple self-contained browser apps, one folder per app at the 
 
 ## bakery-erp: new features must update the data schema
 
-Any `bakery-erp/` feature that persists data **must** register its sheet(s) and columns in `SCHEMA` (`bakery-erp/js/db.js`). `SCHEMA` is the single source of truth for the whole data lifecycle:
+Any `bakery-erp/` feature that persists data **must** register its sheet(s) and columns in **`bakery-erp/js/schema.js`** (`TABLE_COLUMNS`) — the single source of truth. The frontend `SCHEMA` (`db.js`) and `ACC_HEAD`/`PERM_HEAD` (`app.js`) derive from it directly; the backend `apps-script.js` `TABLES` block is generated from it via **`npm run gen:schema`** (then manually pasted into Apps Script to deploy). `npm run check:schema` fails CI if the backend block is stale. Add a table only to the ad-hoc/auth set (`AUTH_TABLES`) if it must stay out of the main sync. `TABLE_COLUMNS` drives the whole data lifecycle:
 
 - **Sync** — `pullAll()` only pulls sheets listed in `SCHEMA`. A sheet missing from `SCHEMA` will never sync from Google Sheets, even after 「重新同步」.
 - **Migrate / setup** — `action=migrate` and `action=setup` only create/repair `SCHEMA` sheets, so an unregistered sheet is never auto-created on the backend.
