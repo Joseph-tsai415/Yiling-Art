@@ -25,8 +25,8 @@
 
 // ─── 登入驗證設定(貼上你的值再部署)───
 var AUTH = {
-  CLIENT_ID: '',        // OAuth Client ID(和前端同一個,xxxx.apps.googleusercontent.com);留空 = 不驗證
-  BOOTSTRAP_ADMIN: ''   // 第一位管理員的 Google Email;首次登入自動建立 super_admin 帳號
+  CLIENT_ID: '51586710707-uc7fumj0ahggfdtgqbhevsk6h0ho9pjc.apps.googleusercontent.com',        // OAuth Client ID(和前端同一個,xxxx.apps.googleusercontent.com);留空 = 不驗證
+  BOOTSTRAP_ADMIN: 'bingjun.cai@gmail.com'   // 第一位管理員的 Google Email;首次登入自動建立 super_admin 帳號
 };
 
 var TABLES = {
