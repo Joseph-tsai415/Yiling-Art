@@ -6,9 +6,15 @@ desktop.ini
 # IDE
 .vscode/
 .idea/
-.claude/
 *.swp
 *.swo
+
+# Claude Code — all local config & state: settings.local.json, agents/, docs/,
+# commands/, skills/, plans/, session data. Keep the whole dir local to this machine.
+# NOTE: CLAUDE.md (project memory) lives at the repo root and is intentionally TRACKED —
+# it is NOT matched by these patterns and must stay committed.
+.claude/
+CLAUDE.local.md
 
 # Node (if added later)
 node_modules/
