@@ -6,6 +6,35 @@
 
 This repo hosts multiple self-contained browser apps, one folder per app at the repo root (currently `brand-palette-pantone/` and `product-card-printer/`). A root `index.html` is the hub that links to each app. When adding a new app, create a new top-level folder and add a card to the hub. See [README.md](README.md) for the current app list.
 
+## bakery-erp: execute work as an agent team
+
+When a request involves **building, changing, debugging, or reviewing `bakery-erp/`**, don't do it solo — plan and run it as an **agent team**. The feature is enabled locally and a 6-agent bench already exists; see the master guide **`.claude/docs/agent-teams.md`** and the definitions in **`.claude/agents/`** (`bakery-flow-expert`, `bakery-backend`, `bakery-frontend`, `schema-guard`, `qa-pm`, `ux-researcher`).
+
+Before spawning, restate the work in this exact shape:
+
+```
+Goal:        <what the user actually wants — 1–2 sentences, derived from their request>
+Teammates:   <N agents from the bench + why each; name the ONE dev-lead who integrates>
+Deliverable: <the concrete, verifiable "done" state>
+```
+
+Rules:
+- The **main session is the team lead / orchestrator** (leadership can't be handed off). Among the spawned teammates, designate **one dev-lead** — usually `bakery-backend` or `bakery-frontend`, whichever owns the primary change — who integrates the others' output; teammates message each other directly to resolve file overlaps.
+- Draw from the bench but **spawn 3–5, not all 6** (Windows = in-process; token cost is real). Typical full-feature flow: `bakery-flow-expert` specs → `bakery-backend` + `bakery-frontend` build (distinct files) → `schema-guard` + `qa-pm` gate. Per-task compositions live in §5 of the guide.
+- Give each teammate full context in its spawn prompt (they don't inherit the lead's history), and require plan approval for risky implementation. Every teammate must honor the schema single-source-of-truth + anti-drift + Git guardrails in the sections below.
+- **Stay solo / use a subagent** for a trivial one-line edit or a pure read-only question — a full team is overkill there.
+- **Fallbacks:** if agent teams are disabled or the local `.claude/agents/` are absent (e.g. a fresh clone — `.claude/` is gitignored), proceed with a single session or subagents and say so. If *you are already a teammate*, just execute your assigned task — teammates can't spawn teammates (no nested teams).
+
+Example:
+```
+Goal:        Add a 庫存盤點 (stocktake) variance report per 門市.
+Teammates:   flow-expert (spec + acceptance criteria), bakery-backend (DEV-LEAD: stocktake vs
+             stock_ledger query + gen:schema), bakery-frontend (report screen), qa-pm (per-role
+             verification). 4 total.
+Deliverable: Report screen gated by screen.reports, backed by stocktake vs stock_ledger,
+             `npm run check:schema` green, verified for store_admin and super_admin.
+```
+
 ## bakery-erp: new features must update the data schema
 
 Any `bakery-erp/` feature that persists data **must** register its sheet(s) and columns in **`bakery-erp/js/schema.js`** (`TABLE_COLUMNS`) — the single source of truth. The frontend `SCHEMA` (`db.js`) and `ACC_HEAD`/`PERM_HEAD` (`app.js`) derive from it directly; the backend `apps-script.js` `TABLES` block is generated from it via **`npm run gen:schema`** (then manually pasted into Apps Script to deploy). `npm run check:schema` fails CI if the backend block is stale. Add a table only to the ad-hoc/auth set (`AUTH_TABLES`) if it must stay out of the main sync. `TABLE_COLUMNS` drives the whole data lifecycle:
