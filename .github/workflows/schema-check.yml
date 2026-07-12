@@ -1,0 +1,29 @@
+name: Schema drift check
+
+# 防前後端漂移:apps-script.js 的 <<gen:*>> 區塊必須與 js/schema.js(單一來源)一致。
+# 規則見 CLAUDE.md「no hand-duplicated constants between frontend and backend」。
+on:
+  push:
+    paths:
+      - 'bakery-erp/**'
+  pull_request:
+    paths:
+      - 'bakery-erp/**'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: check generated blocks are in sync with js/schema.js
+        run: node bakery-erp/tools/gen-schema.mjs --check
+      - name: syntax-check app modules and backend script
+        run: |
+          node --check bakery-erp/js/app.js
+          node --check bakery-erp/js/db.js
+          node --check bakery-erp/js/runtime.js
+          node --check bakery-erp/js/schema.js
+          node --check bakery-erp/apps-script.js

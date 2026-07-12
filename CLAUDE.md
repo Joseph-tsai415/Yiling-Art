@@ -16,6 +16,16 @@ Any `bakery-erp/` feature that persists data **must** register its sheet(s) and 
 
 Sheets loaded ad-hoc outside `SCHEMA` (e.g. `user_account`, `role_permission`, fetched via `db.api('action=list&sheet=…')`) are the exception, not the pattern: they must own their own load/refresh and do **not** ride the main sync. Prefer adding to `SCHEMA` unless a sheet is intentionally kept out (e.g. super_admin-only, backend-managed).
 
+## bakery-erp: no hand-duplicated constants between frontend and backend (anti-drift rule)
+
+**Never copy a constant into both `bakery-erp/js/*` and `bakery-erp/apps-script.js` by hand.** The backend file cannot `import`, so any value both sides must agree on (table columns, `DEFAULT_PERMS`, future role lists / perm keys / status enums…) follows one pattern:
+
+1. Define it **once** in `bakery-erp/js/schema.js` (frontend imports it directly).
+2. Give `apps-script.js` a marker block (`// <<gen:xxx>> … // <</gen:xxx>>`) and teach `bakery-erp/tools/gen-schema.mjs` to generate it (see `gen:tables` / `gen:perms` as the model).
+3. Run `npm run gen:schema` after changing the source; `npm run check:schema` must stay green (enforced by the schema-check GitHub workflow) — if it fails, the generated block is stale and the pasted backend would disagree with the frontend.
+
+If you catch yourself writing the same literal in two files, stop and route it through `schema.js` + a gen block instead. (This rule exists because `DEFAULT_PERMS` was once duplicated by hand and drifted-by-construction until unified.)
+
 ## Git Workflow
 
 - Do NOT include `Co-Authored-By` lines in commit messages.
