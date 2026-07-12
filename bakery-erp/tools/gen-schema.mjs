@@ -7,29 +7,42 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const SCHEMA_URL = new URL('../js/schema.js', import.meta.url);
 const APP_URL = new URL('../apps-script.js', import.meta.url);
-const START = '// <<gen:tables>>';
-const END = '// <</gen:tables>>';
 
 // schema.js 是瀏覽器 ESM;node 預設把 .js 當 CJS,所以用文字擷取 + 安全 eval 物件字面值(不動模組語意).
 const schemaSrc = readFileSync(SCHEMA_URL, 'utf8');
-const m = schemaSrc.match(/export const TABLE_COLUMNS\s*=\s*(\{[\s\S]*?\n\});/);
-if (!m) { fail('js/schema.js 找不到 TABLE_COLUMNS 物件'); }
-const TABLE_COLUMNS = new Function('return (' + m[1] + ')')();
+const TABLE_COLUMNS = extract('TABLE_COLUMNS');
+const DEFAULT_PERMS = extract('DEFAULT_PERMS');
 
 const src = readFileSync(APP_URL, 'utf8');
 const eol = src.includes('\r\n') ? '\r\n' : '\n'; // 依檔案現有行尾(Windows 常是 CRLF)產生,避免混行尾讓 --check 誤判過期
-const lines = Object.entries(TABLE_COLUMNS)
-  .map(([t, cols]) => `  ${t}: [${cols.map(c => `'${c}'`).join(', ')}]`);
-const block = [
-  `${START} — 由 \`npm run gen:schema\` 依 js/schema.js 自動產生;勿手改此區塊(改結構請改 js/schema.js)`,
+
+// <<gen:tables>>:資料表結構
+let next = replaceBlock(src, 'gen:tables', [
   'var TABLES = {',
-  lines.join(',' + eol),
-  '};',
-  END
-].join(eol);
-const re = new RegExp(esc(START) + '[\\s\\S]*?' + esc(END));
-if (!re.test(src)) { fail('apps-script.js 找不到 <<gen:tables>> 標記'); }
-const next = src.replace(re, block);
+  Object.entries(TABLE_COLUMNS).map(([t, cols]) => `  ${t}: [${cols.map(c => `'${c}'`).join(', ')}]`).join(',' + eol),
+  '};'
+], '(改結構請改 js/schema.js)');
+
+// <<gen:perms>>:角色權限預設矩陣(與前端同一份;見 doc/PERMISSION_ROLE_MAP.md)
+next = replaceBlock(next, 'gen:perms', [
+  'var DEFAULT_PERMS = {',
+  Object.entries(DEFAULT_PERMS).map(([r, keys]) => `  ${r}: [${keys.map(k => `'${k}'`).join(', ')}]`).join(',' + eol),
+  '};'
+], '(改預設權限請改 js/schema.js)');
+
+function extract(name) {
+  const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\{[\\s\\S]*?\\n\\});'));
+  if (!m) fail('js/schema.js 找不到 ' + name + ' 物件');
+  return new Function('return (' + m[1] + ')')();
+}
+function replaceBlock(text, tag, bodyLines, why) {
+  const START = '// <<' + tag + '>>';
+  const END = '// <</' + tag + '>>';
+  const re = new RegExp(esc(START) + '[\\s\\S]*?' + esc(END));
+  if (!re.test(text)) fail('apps-script.js 找不到 <<' + tag + '>> 標記');
+  const block = [`${START} — 由 \`npm run gen:schema\` 依 js/schema.js 自動產生;勿手改此區塊${why}`, ...bodyLines, END].join(eol);
+  return text.replace(re, block);
+}
 
 if (process.argv.includes('--check')) {
   if (next !== src) { fail('apps-script.js 的 TABLES 已過期 — 請執行 `npm run gen:schema` 後重新貼到 Apps Script'); }

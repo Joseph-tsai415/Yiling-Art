@@ -6,7 +6,7 @@
 //   2) 單據狀態機:transfer_order(叫貨→已出貨→已收貨/取消)、purchase_line(已下單/…/補送中 →
 //      部分到貨/已到貨,received_qty 分批累計)
 import { DCLogic, mountApp } from './runtime.js';
-import { TABLE_COLUMNS } from './schema.js'; // 帳號/權限欄位取自單一結構來源(見 ./schema.js)
+import { TABLE_COLUMNS, DEFAULT_PERMS as PERM_DEFAULTS } from './schema.js'; // 帳號/權限欄位與預設矩陣取自單一結構來源(見 ./schema.js)
 
 class Component extends DCLogic {
   state = {
@@ -182,14 +182,9 @@ class Component extends DCLogic {
     { id: 'store_kitchen', name: 'store_kitchen(內場)' },
     { id: 'store_front', name: 'store_front(外場)' }
   ];
-  // 內建預設矩陣 — 與 apps-script.js 的 DEFAULT_PERMS 一致:
+  // 內建預設矩陣 — 單一來源 js/schema.js(後端 apps-script 由 gen:schema 產生同一份):
   // role_permission 分頁「空白」時,前後端都以此運作;矩陣 UI 以淡色 ✓ 呈現並提示先「寫入預設矩陣」
-  DEFAULT_PERMS = {
-    central_ops: ['screen.setup', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.locations', 'screen.products', 'screen.suppliers', 'feature.cost'],
-    store_admin: ['screen.overview', 'screen.schedule', 'screen.production', 'screen.sales', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.products', 'screen.staff', 'screen.reports', 'screen.closing'],
-    store_kitchen: ['screen.production', 'screen.products'],
-    store_front: ['screen.sales']
-  };
+  DEFAULT_PERMS = PERM_DEFAULTS;
   defaultPermRows() {
     const out = [];
     Object.keys(this.DEFAULT_PERMS).forEach(role => this.DEFAULT_PERMS[role].forEach(k => out.push({ role_id: role, perm_key: k, allow: 'TRUE' })));

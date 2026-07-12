@@ -42,3 +42,13 @@ export const TABLE_COLUMNS = {
 // 前端主同步(pullAll)拉取的表 = 全部表扣掉帳號/權限這兩張後端專用表.
 export const AUTH_TABLES = ['user_account', 'role_permission'];
 export const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => AUTH_TABLES.indexOf(t) < 0);
+
+// 角色權限預設矩陣(單一來源;完整說明見 doc/PERMISSION_ROLE_MAP.md)。
+// role_permission 分頁空白時,前端矩陣 UI 與後端 permsOf_ 都依此運作;super_admin 恆為全部,不需列。
+// 前端 app.js 直接 import;後端 apps-script.js 的 DEFAULT_PERMS 由 `npm run gen:schema` 產生 <<gen:perms>> 區塊。
+export const DEFAULT_PERMS = {
+  central_ops: ['screen.setup', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.locations', 'screen.products', 'screen.suppliers', 'feature.cost'],
+  store_admin: ['screen.overview', 'screen.schedule', 'screen.production', 'screen.sales', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.products', 'screen.staff', 'screen.reports', 'screen.closing'],
+  store_kitchen: ['screen.production', 'screen.products'],
+  store_front: ['screen.sales']
+};

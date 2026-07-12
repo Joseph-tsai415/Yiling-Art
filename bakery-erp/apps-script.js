@@ -62,12 +62,14 @@ var TABLES = {
 
 // role_permission 預設值(setup 種入;migrate 只在分頁不存在或空白時種入 — 不覆蓋你的調整)
 // 依 doc/PERMISSION_ROLE_MAP.md:central_ops 可見成本;門市角色(含店長)全部隱藏成本
+// <<gen:perms>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改預設權限請改 js/schema.js)
 var DEFAULT_PERMS = {
-  central_ops:   ['screen.setup', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.locations', 'screen.products', 'screen.suppliers', 'feature.cost'],
-  store_admin:   ['screen.overview', 'screen.schedule', 'screen.production', 'screen.sales', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.products', 'screen.staff', 'screen.reports', 'screen.closing'],
+  central_ops: ['screen.setup', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.locations', 'screen.products', 'screen.suppliers', 'feature.cost'],
+  store_admin: ['screen.overview', 'screen.schedule', 'screen.production', 'screen.sales', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.products', 'screen.staff', 'screen.reports', 'screen.closing'],
   store_kitchen: ['screen.production', 'screen.products'],
-  store_front:   ['screen.sales']
+  store_front: ['screen.sales']
 };
+// <</gen:perms>>
 function defaultPermRows_() {
   var out = [];
   Object.keys(DEFAULT_PERMS).forEach(function (role) {
