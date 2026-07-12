@@ -1438,7 +1438,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pah">使用者帳號(user_account)<span style="font-weight:400;color:#66707f;font-size:12px">{{accBusyTxt}}</span><span style="margin-left:auto;display:flex;gap:8px"><span class="btn3o" onClick="{{accReload}}">重新載入</span><span class="btn3" onClick="{{accAdd}}">+ 新增帳號</span></span></div>
             <div style="overflow-x:auto">
             <table class="t3 tacc">
-              <tr><th>編號</th><th>姓名</th><th>Email(Google 帳號)</th><th>角色</th><th>門市範圍</th><th>狀態</th><th>最後登入</th></tr>
+              <tr><th>編號</th><th>姓名</th><th>Email(Google 帳號)</th><th>角色</th><th>門市範圍</th><th>狀態</th><th>最後登入</th><th></th></tr>
               <sc-for list="{{accRows}}" as="r" hint-placeholder-count="3">
                 <tr>
                   <td style="color:#66707f">{{r.id}}</td>
@@ -1448,6 +1448,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                   <td><span class="inp" style="min-width:120px;max-width:180px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{r.locBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.locBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span></td>
                   <td><span class="tag3" style="{{r.actStyle}}" onClick="{{r.onToggle}}">{{r.actTxt}}</span></td>
                   <td style="color:#66707f;font-size:11px;white-space:nowrap">{{r.lastLogin}}</td>
+                  <td style="color:#c11f28;cursor:pointer;text-align:right" title="刪除帳號(不能刪自己)" onClick="{{r.onDel}}">✕</td>
                 </tr>
               </sc-for>
             </table>
@@ -1457,15 +1458,16 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
           </div>
           <div class="pan">
             <div class="pah">角色權限矩陣(role_permission)<span style="margin-left:auto;font-weight:400;font-size:11.5px;color:#66707f">super_admin 恆為全部,不在此列</span></div>
+            <div style="{{permSeedStyle}}"><span style="flex:1;min-width:0">⚠ 矩陣尚未寫入 Sheet — 系統目前依「內建預設」運作(淡色 ✓ 即預設值)。寫入後才能逐格微調。</span><span class="btn3" style="flex:none;white-space:nowrap" onClick="{{permSeed}}">寫入預設矩陣</span></div>
             <div style="overflow-x:auto">
             <table class="t3">
               <tr><th>權限</th><sc-for list="{{permRoleHead}}" as="h"><th style="text-align:center">{{h}}</th></sc-for></tr>
               <sc-for list="{{permMatrix}}" as="row">
-                <tr><td style="font-weight:500">{{row.label}}</td><sc-for list="{{row.cells}}" as="c"><td style="text-align:center"><span class="tag3" style="{{c.style}}" onClick="{{c.toggle}}">{{c.txt}}</span></td></sc-for></tr>
+                <tr><td style="font-weight:500">{{row.label}}</td><sc-for list="{{row.cells}}" as="c"><td style="text-align:center"><span class="tag3" style="{{c.style}}" title="{{c.tip}}" onClick="{{c.toggle}}">{{c.txt}}</span></td></sc-for></tr>
               </sc-for>
             </table>
             </div>
-            <div style="padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">點格子切換 ✓/—,自動存檔;也可以直接在 Google Sheet 的 role_permission 分頁編輯,效果相同。</div>
+            <div style="padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">點格子切換 ✓/—,自動存檔;也可以直接在 Google Sheet 的 role_permission 分頁編輯,效果相同。「帳號與角色」畫面固定僅 super_admin 可用,不在矩陣內。</div>
           </div>
         </div>
       </sc-if>

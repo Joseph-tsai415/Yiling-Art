@@ -98,7 +98,7 @@ class Component extends DCLogic {
           else reveal(() => { this.db.clearAuth(); this.setState({ authState: 'login' }); });
         })
         .catch(() => reveal(() => { this.setState({ authState: 'login' }); this.notify('✕ 連不上登入伺服器 — 請檢查網路後重試'); }));
-    } else reveal(() => this.setState({ authState: 'login' }));
+    } else reveal(() => { if (this.state.authState !== 'ok') this.setState({ authState: 'login' }); }); // 防競態:splash 期間若已完成登入(如未來 One-Tap),不得把狀態打回 login
   }
   // ── 權限(Phase 2):角色×畫面矩陣(role_permission 分頁)+ 地點範圍 ──
   // 後端才是強制點;這裡只決定 UI 顯示。未登入模式(本地示範)全部開放。
@@ -182,6 +182,19 @@ class Component extends DCLogic {
     { id: 'store_kitchen', name: 'store_kitchen(內場)' },
     { id: 'store_front', name: 'store_front(外場)' }
   ];
+  // 內建預設矩陣 — 與 apps-script.js 的 DEFAULT_PERMS 一致:
+  // role_permission 分頁「空白」時,前後端都以此運作;矩陣 UI 以淡色 ✓ 呈現並提示先「寫入預設矩陣」
+  DEFAULT_PERMS = {
+    central_ops: ['screen.setup', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.locations', 'screen.products', 'screen.suppliers', 'feature.cost'],
+    store_admin: ['screen.overview', 'screen.schedule', 'screen.production', 'screen.sales', 'screen.inventory', 'screen.purchase', 'screen.ingredients', 'screen.products', 'screen.staff', 'screen.reports', 'screen.closing'],
+    store_kitchen: ['screen.production', 'screen.products'],
+    store_front: ['screen.sales']
+  };
+  defaultPermRows() {
+    const out = [];
+    Object.keys(this.DEFAULT_PERMS).forEach(role => this.DEFAULT_PERMS[role].forEach(k => out.push({ role_id: role, perm_key: k, allow: 'TRUE' })));
+    return out;
+  }
   loadAccounts(force) {
     if (this.state.accBusy) return;
     if (!force && this.state.accUsers) return;
@@ -3209,39 +3222,82 @@ class Component extends DCLogic {
             const locsCur = String(u.location_ids || '').trim();
             const isAll = !locsCur || locsCur.toUpperCase() === 'ALL';
             const list = isAll ? [] : locsCur.split(/[|;,]/).map(x => x.trim()).filter(Boolean);
+            const isSelf = S.authState === 'ok' && String(u.email || '').toLowerCase() === String(S.authEmail || '').toLowerCase(); // 防鎖死:不能停用/降級/刪除自己
             return {
               id: u.user_id,
               nameVal: u.name, onName: e => setAcc(i, 'name', e.target.value),
-              emailVal: u.email, onEmail: e => setAcc(i, 'email', e.target.value.trim().toLowerCase()),
-              roleBtn: this.ddBtn(this.ROLE_OPTS, u.role, v => setAcc(i, 'role', v)),
+              onEmail: e => {
+                const v = e.target.value.trim().toLowerCase();
+                if (v && (S.accUsers || []).some((x, j) => j !== i && String(x.email).toLowerCase() === v)) this.notify('⚠ Email 重複:' + v + ' 已在名單上(同一帳號請勿建兩列)');
+                setAcc(i, 'email', v);
+              },
+              emailVal: u.email,
+              roleBtn: this.ddBtn(this.ROLE_OPTS, u.role, v => {
+                if (isSelf && v !== 'super_admin') { this.notify('✕ 不能把自己降級(會失去帳號管理權限)— 請由另一位 super_admin 操作'); this.forceUpdate(); return; }
+                setAcc(i, 'role', v);
+              }),
               locBtn: this.ddBtnMulti(
                 isAll ? '全部門市(不限)' : (list.map(id => (this.t('location').find(l => l.location_id === id) || {}).name || id).join('、') || '未選門市'),
                 () => this.locItems(i)
               ),
               actTxt: String(u.active).toUpperCase() === 'TRUE' ? '啟用' : '停用',
               actStyle: this.tag(String(u.active).toUpperCase() === 'TRUE' ? C.grn : C.mut) + ';cursor:pointer',
-              onToggle: () => setAcc(i, 'active', String(u.active).toUpperCase() === 'TRUE' ? 'FALSE' : 'TRUE'),
-              lastLogin: u.last_login || '—'
+              onToggle: () => {
+                if (isSelf) { this.notify('✕ 不能停用自己的帳號 — 請由另一位 super_admin 操作'); return; }
+                setAcc(i, 'active', String(u.active).toUpperCase() === 'TRUE' ? 'FALSE' : 'TRUE');
+              },
+              lastLogin: u.last_login || '—',
+              onDel: () => {
+                if (isSelf) { this.notify('✕ 不能刪除自己的帳號'); return; }
+                const arr = (S.accUsers || []).filter((_, j) => j !== i);
+                this.setState({ accUsers: arr });
+                this.saveAccounts();
+                this.notify('✓ 已刪除帳號 ' + (u.email || u.user_id) + '(其歷史紀錄不受影響;誤刪可「重新載入」前手動加回)');
+              }
             };
           }),
           accEmpty: ((S.accUsers && S.accUsers.length) || S.accBusy) ? 'display:none' : 'padding:14px 16px;font-size:12px;color:#66707f',
           permRoleHead: PERM_ROLES.map(r => r[1]),
-          permMatrix: PERM_ITEMS.map(it => ({
-            label: it[1],
-            cells: PERM_ROLES.map(pr => {
-              const on = (S.accPerms || []).some(p => p.role_id === pr[0] && p.perm_key === it[0] && String(p.allow).toUpperCase() === 'TRUE');
-              return {
-                txt: on ? '✓' : '—',
-                style: (on ? this.tag(C.grn) : 'color:#c6ccd4;border-color:#eef0f3') + ';cursor:pointer;min-width:26px;text-align:center;user-select:none',
-                toggle: () => {
-                  let arr = (S.accPerms || []).filter(p => !(p.role_id === pr[0] && p.perm_key === it[0]));
-                  if (!on) arr = arr.concat([{ role_id: pr[0], perm_key: it[0], allow: 'TRUE' }]);
-                  this.setState({ accPerms: arr });
-                  this.savePerms();
-                }
-              };
-            })
-          }))
+          // 矩陣空白(分頁未種入)= 前後端都依「內建預設」運作 → 以淡色 ✓ 呈現預設、鎖住單格切換,
+          // 必須先「寫入預設矩陣」再微調 — 否則點一格只寫入一列,後端會離開預設模式、其餘權限全被視為未授權
+          ...(() => {
+            const permEmpty = !S.accBusy && S.accPerms && S.accPerms.length === 0;
+            return {
+              permSeedStyle: permEmpty ? 'display:flex;gap:10px;align-items:center;padding:10px 14px;background:#fdf8ee;border-bottom:1px solid #f3e3c2;font-size:12px;color:#946800;line-height:1.6' : 'display:none',
+              permSeed: () => {
+                const rows = this.defaultPermRows();
+                this.setState({ accPerms: rows });
+                this.savePerms();
+                this.notify('✓ 已把預設矩陣寫入 role_permission(' + rows.length + ' 列)— 現在可以逐格微調');
+              },
+              permMatrix: PERM_ITEMS.map(it => ({
+                label: it[1],
+                cells: PERM_ROLES.map(pr => {
+                  if (permEmpty) { // 淡色 ✓ = 內建預設值(尚未寫入 Sheet,不可單格改)
+                    const defOn = (this.DEFAULT_PERMS[pr[0]] || []).indexOf(it[0]) >= 0;
+                    return {
+                      txt: defOn ? '✓' : '—',
+                      tip: '內建預設值(尚未寫入 Sheet)— 按上方「寫入預設矩陣」後才能微調',
+                      style: (defOn ? 'color:#8fbcae;border-color:#d3e8e0;border-style:dashed' : 'color:#e0e4e9;border-color:#f2f4f6;border-style:dashed') + ';cursor:pointer;min-width:26px;text-align:center;user-select:none',
+                      toggle: () => this.notify('矩陣尚未寫入 Sheet(目前依內建預設運作)— 先按「寫入預設矩陣」,再逐格微調')
+                    };
+                  }
+                  const on = (S.accPerms || []).some(p => p.role_id === pr[0] && p.perm_key === it[0] && String(p.allow).toUpperCase() === 'TRUE');
+                  return {
+                    txt: on ? '✓' : '—',
+                    tip: '',
+                    style: (on ? this.tag(C.grn) : 'color:#c6ccd4;border-color:#eef0f3') + ';cursor:pointer;min-width:26px;text-align:center;user-select:none',
+                    toggle: () => {
+                      let arr = (S.accPerms || []).filter(p => !(p.role_id === pr[0] && p.perm_key === it[0]));
+                      if (!on) arr = arr.concat([{ role_id: pr[0], perm_key: it[0], allow: 'TRUE' }]);
+                      this.setState({ accPerms: arr });
+                      this.savePerms();
+                    }
+                  };
+                })
+              }))
+            };
+          })()
         };
       })()
     };
