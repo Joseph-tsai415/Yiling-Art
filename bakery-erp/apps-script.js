@@ -60,6 +60,11 @@ var TABLES = {
 };
 // <</gen:tables>>
 
+// 前端主同步(pullAll)與 listAll 批次讀取的分頁清單 — 由 gen:schema 依 js/schema.js 產生
+// <<gen:synctables>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改結構請改 js/schema.js)
+var SYNC_TABLES = ['location', 'location_stock', 'ingredient', 'product', 'supplier', 'bom', 'routing', 'equipment', 'category', 'staff', 'line', 'station', 'assignment', 'purchase_line', 'production_order', 'plan_draft', 'po_draft', 'sales_line', 'waste', 'stocktake', 'transfer_order', 'transfer_line', 'ingredient_request', 'stock_ledger'];
+// <</gen:synctables>>
+
 // role_permission 預設值(setup 種入;migrate 只在分頁不存在或空白時種入 — 不覆蓋你的調整)
 // 依 doc/PERMISSION_ROLE_MAP.md:central_ops 可見成本;門市角色(含店長)全部隱藏成本
 // <<gen:perms>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改預設權限請改 js/schema.js)
@@ -363,6 +368,24 @@ function doGet(e) {
   if (action === 'migrate') {
     if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     var rep = migrate(); return json_({ ok: true, msg: rep.length ? rep.join(';') : '全部已是最新結構' });
+  }
+  // 批次讀取:一次回傳所有主同步分頁,取代前端逐表 24 個 list 請求(單一往返 → 少 23 次冷啟動)。
+  // 只含 SYNC_TABLES(不含 user_account/role_permission,那兩張仍由前端 loadAccounts 另外讀),故無需 super_admin 檢查。
+  if (action === 'listAll') {
+    var tzA = Session.getScriptTimeZone();
+    var scopeA = scopeOf_(sess);
+    var sheets = {};
+    for (var iA = 0; iA < SYNC_TABLES.length; iA++) {
+      var nameA = SYNC_TABLES[iA];
+      var shA = ss_().getSheetByName(nameA);
+      if (!shA) continue; // 缺分頁略過 → 前端列為 missing 並自動 migrate 後重拉
+      var revA = rev_(nameA); // 先讀版號再讀資料(同單表 list:寧可誤判 conflict 也不漏別人剛寫入的變更)
+      var rowsA = shA.getDataRange().getValues().map(function (r) {
+        return r.map(function (v) { return (v instanceof Date) ? Utilities.formatDate(v, tzA, 'yyyy-MM-dd') : v; });
+      });
+      sheets[nameA] = { rows: filterRows_(nameA, rowsA, scopeA), rev: revA };
+    }
+    return json_({ ok: true, sheets: sheets });
   }
   if (action === 'list') {
     if ((e.parameter.sheet === 'user_account' || e.parameter.sheet === 'role_permission') && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });

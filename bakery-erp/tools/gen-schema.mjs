@@ -12,6 +12,9 @@ const APP_URL = new URL('../apps-script.js', import.meta.url);
 const schemaSrc = readFileSync(SCHEMA_URL, 'utf8');
 const TABLE_COLUMNS = extract('TABLE_COLUMNS');
 const DEFAULT_PERMS = extract('DEFAULT_PERMS');
+const AUTH_TABLES = extractArray('AUTH_TABLES');
+// 主同步表 = 全部表扣掉帳號/權限表(與 js/schema.js 的 SYNC_TABLES 同一算式,零漂移)
+const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => !AUTH_TABLES.includes(t));
 
 const src = readFileSync(APP_URL, 'utf8');
 const eol = src.includes('\r\n') ? '\r\n' : '\n'; // 依檔案現有行尾(Windows 常是 CRLF)產生,避免混行尾讓 --check 誤判過期
@@ -30,9 +33,19 @@ next = replaceBlock(next, 'gen:perms', [
   '};'
 ], '(改預設權限請改 js/schema.js)');
 
+// <<gen:synctables>>:pullAll / listAll 一次批次讀取的分頁清單(= 全部表扣掉帳號/權限表)
+next = replaceBlock(next, 'gen:synctables', [
+  'var SYNC_TABLES = [' + SYNC_TABLES.map(t => `'${t}'`).join(', ') + '];'
+], '(改結構請改 js/schema.js)');
+
 function extract(name) {
   const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\{[\\s\\S]*?\\n\\});'));
   if (!m) fail('js/schema.js 找不到 ' + name + ' 物件');
+  return new Function('return (' + m[1] + ')')();
+}
+function extractArray(name) {
+  const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\[[^\\]]*\\])'));
+  if (!m) fail('js/schema.js 找不到 ' + name + ' 陣列');
   return new Function('return (' + m[1] + ')')();
 }
 function replaceBlock(text, tag, bodyLines, why) {

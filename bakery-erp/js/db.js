@@ -391,13 +391,26 @@ export class DB {
       }
       return c;
     };
-    let getters;
+    let results;
     if (this.cfg.kind === 'gapi') {
-      getters = names.map(n => this.gapiList(n).catch(() => null));
+      results = await Promise.all(names.map(n => this.gapiList(n).catch(() => null)));
     } else {
-      getters = names.map(n => this.api('action=list&sheet=' + n).then(j => { if (j && j.ok && j.rev != null) this.rev[n] = j.rev; return (j && j.ok) ? j.rows : null; }).catch(() => null));
+      // 方案 B:先試一次 listAll(單一往返,取代逐表 24 個 list 請求);後端太舊/失敗才回退逐表.
+      const perSheet = () => Promise.all(names.map(n => this.api('action=list&sheet=' + n)
+        .then(j => { if (j && j.ok && j.rev != null) this.rev[n] = j.rev; return (j && j.ok) ? j.rows : null; })
+        .catch(() => null)));
+      const batch = await this.api('action=listAll').catch(() => null);
+      if (batch && batch.ok && batch.sheets && !Array.isArray(batch.sheets)) {
+        // 新後端:一次拿到所有分頁 {sheet:{rows,rev}};缺的分頁(後端略過)→ null → 列為 missing
+        results = names.map(n => { const t = batch.sheets[n]; if (t && t.rev != null) this.rev[n] = t.rev; return t ? t.rows : null; });
+      } else if (batch && batch.ok === false) {
+        // 後端有回應但拒絕(unauthorized 等)— api() 已觸發 onAuthFail;不逐表重打一輪
+        results = names.map(() => null);
+      } else {
+        // 舊後端(未知 action 會回 {ok:true, tables:[...]})或連線失敗 → 回退逐表 list
+        results = await perSheet();
+      }
     }
-    const results = await Promise.all(getters);
     const missing = [];
     names.forEach((n, i) => {
       const rows = results[i];
