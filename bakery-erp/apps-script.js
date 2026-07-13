@@ -52,7 +52,7 @@ var TABLES = {
   waste: ['waste_id', 'target_type', 'target_id', 'qty', 'reason', 'date', 'location_id'],
   stocktake: ['stocktake_id', 'target_type', 'target_id', 'counted_qty', 'date', 'location_id'],
   transfer_order: ['to_id', 'from_loc', 'to_loc', 'status', 'request_date', 'ship_date', 'receive_date', 'need_date', 'urgent'],
-  transfer_line: ['tl_id', 'to_id', 'ingredient_id', 'qty'],
+  transfer_line: ['tl_id', 'to_id', 'item_type', 'item_id', 'qty'],
   ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date'],
   stock_ledger: ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
   user_account: ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'],
@@ -246,11 +246,11 @@ var SEED = {
     ['REQ-001','LOC-B','T55 麵粉','法棍用、25kg 袋',40000,'TRUE','待處理','','2026-07-04','']
   ],
   transfer_line: [
-    ['TL-001','TO-1001','ING-001',25000],
-    ['TL-002','TO-1001','ING-021',6000],
-    ['TL-003','TO-1002','ING-001',25000],
-    ['TL-004','TO-1002','ING-006',5000],
-    ['TL-005','TO-1002','ING-003',5000]
+    ['TL-001','TO-1001','ingredient','ING-001',25000],
+    ['TL-002','TO-1001','ingredient','ING-021',6000],
+    ['TL-003','TO-1002','ingredient','ING-001',25000],
+    ['TL-004','TO-1002','ingredient','ING-006',5000],
+    ['TL-005','TO-1002','ingredient','ING-003',5000]
   ],
   stock_ledger: [
     // 門市(LOC-A)

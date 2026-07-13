@@ -30,7 +30,7 @@ export const TABLE_COLUMNS = {
   waste:              ['waste_id', 'target_type', 'target_id', 'qty', 'reason', 'date', 'location_id'],
   stocktake:          ['stocktake_id', 'target_type', 'target_id', 'counted_qty', 'date', 'location_id'],
   transfer_order:     ['to_id', 'from_loc', 'to_loc', 'status', 'request_date', 'ship_date', 'receive_date', 'need_date', 'urgent'],
-  transfer_line:      ['tl_id', 'to_id', 'ingredient_id', 'qty'],
+  transfer_line:      ['tl_id', 'to_id', 'item_type', 'item_id', 'qty'],
   ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date'],
   stock_ledger:       ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
 

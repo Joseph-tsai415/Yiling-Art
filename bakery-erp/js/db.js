@@ -49,12 +49,12 @@ TO-1002,LOC-C,LOC-B,叫貨,2026-07-04,,,2026-07-05,TRUE`,
 ingredient_request: `req_id,location_id,name,spec,weekly_qty,urgent,status,ingredient_id,request_date,done_date
 REQ-001,LOC-B,T55 麵粉,法棍用、25kg 袋,40000,TRUE,待處理,,2026-07-04,
 REQ-002,LOC-A,抹茶粉,想做抹茶捲,1000,,婉拒,,2026-06-30,2026-07-01`,
-transfer_line: `tl_id,to_id,ingredient_id,qty
-TL-001,TO-1001,ING-001,25000
-TL-002,TO-1001,ING-010,6000
-TL-003,TO-1002,ING-001,25000
-TL-004,TO-1002,ING-008,5000
-TL-005,TO-1002,ING-004,5000`,
+transfer_line: `tl_id,to_id,item_type,item_id,qty
+TL-001,TO-1001,ingredient,ING-001,25000
+TL-002,TO-1001,ingredient,ING-010,6000
+TL-003,TO-1002,ingredient,ING-001,25000
+TL-004,TO-1002,ingredient,ING-008,5000
+TL-005,TO-1002,ingredient,ING-004,5000`,
 ingredient: `ingredient_id,name,category,base_unit,purchase_unit,conversion_rate,safety_stock,latest_unit_cost,quote_price,tax_rate,shelf_life_days,default_supplier_id
 ING-001,高筋麵粉 T65,麵粉,g,袋,25000,10000,0.035,833,1.05,180,SUP-01
 ING-003,細砂糖,糖,g,包,10000,3000,0.028,267,1.05,365,SUP-01

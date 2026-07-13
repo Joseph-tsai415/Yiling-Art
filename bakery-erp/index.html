@@ -673,6 +673,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                       <span class="btn3" onClick="{{tsSubmit}}">送出叫貨</span>
                     </span>
                   </div>
+                  <!-- 品項類型分頁(休眠:FLAGS.transferItemTypes=false 時整條隱藏,畫面與 Phase-1 一致)-->
+                  <div style="{{tsTypeTabsStyle}}"><span class="seg"><span style="{{tsTypeRawStyle}}" onClick="{{goTsTypeRaw}}">原料</span><span style="{{tsTypeSemiStyle}}" onClick="{{goTsTypeSemi}}">半成品</span><span style="{{tsTypeProdStyle}}" onClick="{{goTsTypeProd}}">成品</span></span></div>
                   <table class="t3">
                     <tr><th>原料</th><th class="num">數量</th><th>單位</th><th></th></tr>
                     <sc-for list="{{tsDraftRows}}" as="r" hint-placeholder-count="1">
