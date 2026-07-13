@@ -27,7 +27,7 @@ class Component extends DCLogic {
     puView: 'store', toDraft: [], tsAddIng: 'ING-001', tsAddQty: '25000',
     tsNeed: '', tsUrgent: false, reqName: '', reqSpec: '', reqQty: '', reqUrgent: false, newStoreName: '', mergePick: {},
     selIng: 'ING-001', draft: null,
-    selProd: 'PRD-01', bomAddIng: 'ING-003', bomAddQty: '100',
+    selProd: 'PRD-01', bomAddIng: 'ING-003', bomAddQty: '100', bomTrail: [],
     finVals: {}, closing: {}, closed: false, toast: '',
     apiUrl: '', sid: '', gKey: '', gCid: '', connBusy: false, confirmWipe: null,
     catOpen: false, newCat: ''
@@ -1363,7 +1363,8 @@ class Component extends DCLogic {
         icon: NAVICON[s[0]] || 'circle',
         icoStyle: active ? 'color:#0e7490;font-variation-settings:\'FILL\' 1,\'wght\' 400,\'GRAD\' 0,\'opsz\' 20' : '',
         style: (active ? 'background:#e0f0f4;color:#0e7490;font-weight:600' : '') + (navFold ? ';justify-content:center;padding:9px 0' : '') + (!navFold && badge && bs !== 'display:none' ? '' : ''),
-        go: () => this.setState({ screen: s[0] })
+        // 換畫面 = BOM 下鑽麵包屑視為全新 mount（清空 trail 與加料選取器暫存篩選）
+        go: () => this.setState({ screen: s[0], bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' })
       };
     });
     const flags = {}; SCREENS.forEach(s => flags['is' + s[0][0].toUpperCase() + s[0].slice(1)] = S.screen === s[0]);
@@ -2307,29 +2308,50 @@ class Component extends DCLogic {
     const prodLocTabs = [{ id: 'all', name: '全部' }].concat(this.t('location').filter(l => l.type !== 'central').map(l => ({ id: l.location_id, name: l.name }))).map(o => ({
       name: o.name,
       style: 'padding:4px 11px;border-radius:7px;cursor:pointer;font-size:12px;user-select:none' + (prodScope === o.id ? ';background:#0e7490;color:#fff;font-weight:600' : ';color:#66707f;border:1px solid #e3e6eb'),
-      go: () => this.setState({ prodLoc: o.id })
+      // 切門市分頁 = 全新情境：清空下鑽 trail 與加料篩選
+      go: () => this.setState({ prodLoc: o.id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' })
     }));
     const prodLocBarStyle = atCentral ? 'display:flex;gap:5px;padding:8px 12px;border-bottom:1px solid #eef0f3;flex-wrap:wrap;align-items:center' : 'display:none';
+    // 左側清單選取 = 全新情境（清 trail + 加料篩選）；鑽入/鑽出/點麵包屑時把選中列捲入可視範圍（block:nearest）
+    const pickSel = id => () => this.setState({ selProd: id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' });
+    const scrollSel = matches => matches ? (el => { if (this._bomScrollWanted) { this._bomScrollWanted = false; requestAnimationFrame(() => el && el.scrollIntoView({ block: 'nearest' })); } }) : null;
     const prodListRows = this.lfilter('lsProd', this.t('product').filter(inProdScope), ['product_id', 'name', 'type']).map(p => ({
       name: p.name, sub: (atCentral ? (this.prodShared(p) ? '共用 · ' : this.prodLocList(p).map(x => this.locName(x)).join('、') + ' · ') : '') + (this.leadOf(p.product_id) ? '跨 ' + this.leadOf(p.product_id) + ' 天' : '當日') + ' · NT$' + p.sale_price,
       rowStyle: S.selProd === p.product_id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
-      onSel: () => this.setState({ selProd: p.product_id })
+      onSel: pickSel(p.product_id), selRef: scrollSel(S.selProd === p.product_id)
     })).concat(selfIngs.map(g => ({
       name: '🫙 ' + g.name, sub: '自製半成品' + (prodScope !== 'all' ? (this.stocksAt(prodScope, g.ingredient_id) ? ' · 已備料' : ' · 共用(未備料)') : '') + ' · 批產 ' + this.fmt(this.n(g.batch_yield) || 1) + ' g · ' + this.n(g.latest_unit_cost).toFixed(2) + '/g',
       rowStyle: S.selProd === g.ingredient_id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
-      onSel: () => this.setState({ selProd: g.ingredient_id })
+      onSel: pickSel(g.ingredient_id), selRef: scrollSel(S.selProd === g.ingredient_id)
     })));
     // 選取產品不在目前地點範圍 → 退回範圍內第一個；半成品共用、不受限
     if (db && prodScope !== 'all') {
       const inSel = (this.prod(S.selProd) && this.prodAtStore(this.prod(S.selProd), prodScope)) || this.isIngId(S.selProd);
-      if (!inSel) { const first = ((this.t('product').filter(inProdScope)[0] || {}).product_id) || ((selfIngs[0] || {}).ingredient_id); if (first && first !== S.selProd) setTimeout(() => this.setState({ selProd: first }), 0); }
+      if (!inSel) { const first = ((this.t('product').filter(inProdScope)[0] || {}).product_id) || ((selfIngs[0] || {}).ingredient_id); if (first && first !== S.selProd) setTimeout(() => this.setState({ selProd: first, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }), 0); }
     }
     const setP = k => e => db.replace('product', this.t('product').map(p => p.product_id === S.selProd ? Object.assign({}, p, { [k]: e.target.value }) : p)) || this.forceUpdate();
     const setR = (rid, k) => e => { db.replace('routing', this.t('routing').map(r => r.routing_id === rid ? Object.assign({}, r, { [k]: e.target.value }) : r)); this.forceUpdate(); };
+    const trail = S.bomTrail || [];
     const bomRows = this.bomOf(S.selProd).map(b => {
       const g = this.ing(b.ingredient_id) || {};
+      // 自製半成品（purchase_unit==='自製'）＝可下鑽其配方；沿用既有慣例，不新增 is_semi 欄
+      const isSemi = g.purchase_unit === '自製';
+      const hasOwnBom = isSemi && this.bomOf(b.ingredient_id).length > 0;
+      const isCycle = isSemi && (b.ingredient_id === S.selProd || trail.indexOf(b.ingredient_id) >= 0);
       return {
         name: g.name, qtyVal: b.qty_per_yield,
+        // 整個名稱格是點擊熱區；pointer-events:auto 覆寫唯讀外層的 none → 店端角色可瀏覽進子配方（不可編輯不變）
+        nameCls: isSemi ? 'bomdrill' : '',
+        nameCellStyle: isSemi ? 'cursor:pointer;pointer-events:auto' : '',
+        semiTagStyle: isSemi ? this.tag(C.amb) + ';margin-left:6px' : 'display:none',
+        cycTagStyle: isCycle ? this.tag(C.red) + ';margin-left:4px' : 'display:none',
+        noRecipeStyle: (isSemi && !hasOwnBom) ? 'color:#9aa1ab;font-size:11px' : 'display:none',
+        chevStyle: isSemi ? 'font-size:16px;color:#9aa1ab;vertical-align:-3px;margin-left:2px' : 'display:none',
+        onDrill: isSemi ? () => {
+          if (isCycle) this.notify('⚠ 此配方在目前路徑中已出現過 — 可能是循環配方,請確認');
+          this._bomScrollWanted = true;
+          this.setState({ selProd: b.ingredient_id, bomTrail: trail.concat([S.selProd]), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' });
+        } : null,
         supTxt: (this.t('supplier').find(s2 => s2.supplier_id === g.default_supplier_id) || {}).name || (g.purchase_unit === '自製' ? '自製' : '—'),
         catTxt: this.gcat(g) || '—',
         onQty: e => { db.replace('bom', this.t('bom').map(x => x.bom_id === b.bom_id ? Object.assign({}, x, { qty_per_yield: e.target.value }) : x)); this.forceUpdate(); },
@@ -2338,6 +2360,19 @@ class Component extends DCLogic {
         onRemove: () => { db.replace('bom', this.t('bom').filter(x => x.bom_id !== b.bom_id)); this.forceUpdate(); }
       };
     });
+    // 麵包屑：祖先鏈只存 id，name 永遠即時查（改名後不顯示舊字）；末段為目前主體，不可點
+    const bomCrumbs = trail.map((id, i) => ({
+      name: this.nameOf(id), title: this.nameOf(id), cls: 'bomcrumb',
+      style: 'color:#0e7490;cursor:pointer;flex:none;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+      sepStyle: i === 0 ? 'display:none' : 'color:#9aa1ab;flex:none',
+      onPick: () => { this._bomScrollWanted = true; this.setState({ selProd: id, bomTrail: trail.slice(0, i), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }); }
+    })).concat([{
+      name: this.nameOf(S.selProd), title: this.nameOf(S.selProd), cls: '',
+      style: 'color:#1b2330;font-weight:600;flex:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+      sepStyle: 'color:#9aa1ab;flex:none', onPick: null
+    }]);
+    // 「用於」反查：半成品是共用主檔，改它的配方會影響所有引用它的上層 — central 顯示影響面（純文字）
+    const usedInParents = [...new Set(this.t('bom').filter(x => x.ingredient_id === S.selProd).map(x => x.product_id))].map(pid => this.nameOf(pid));
     const selfG = this.ing(S.selProd) || {};
     const yieldN = Math.max(this.n(isIngSel ? selfG.batch_yield : selP.default_yield), 0) || 1; // 0/空/負 → 1
     const bCost = this.bomOf(S.selProd).reduce((a, b) => a + this.n(b.qty_per_yield) * this.n((this.ing(b.ingredient_id) || {}).latest_unit_cost), 0);
@@ -3152,6 +3187,15 @@ class Component extends DCLogic {
         return (t >= 60 ? (t / 60).toFixed(1) + ' 小時' : t + ' 分') + (ld ? ' · 跨 ' + ld + ' 天' : ' · 當日完成');
       })(),
       bomRows,
+      // ── BOM 多階下鑽:麵包屑放在唯讀外層之外 → 任何角色都可導覽 ──
+      bomCrumbs,
+      bomCrumbStyle: trail.length ? 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid #e3e6eb;border-radius:9px;font-size:12.5px;overflow-x:auto;white-space:nowrap' : 'display:none',
+      bomBackStyle: 'color:#0e7490;cursor:pointer;flex:none;display:inline-flex;align-items:center;gap:1px;font-weight:500;user-select:none',
+      bomBack: () => { if (!trail.length) return; this._bomScrollWanted = true; this.setState({ selProd: trail[trail.length - 1], bomTrail: trail.slice(0, -1), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }); },
+      bomEmptyStyle: bomRows.length ? 'display:none' : 'padding:14px 16px;color:#66707f;font-size:12px;border-top:1px solid #eef0f3;background:#fbfcfd',
+      bomEmptyTxt: atCentral ? '尚無配方 — 從下方「加入」原料開始建立' : '尚無配方(尚未建立)',
+      pUsedInStyle: (isIngSel && atCentral && usedInParents.length) ? 'padding:7px 16px;border-bottom:1px solid #eef0f3;font-size:11.5px;color:#66707f;background:#fbfcfd' : 'display:none',
+      pUsedInTxt: usedInParents.length ? '用於 ' + usedInParents.slice(0, 3).join('、') + (usedInParents.length > 3 ? ' +' + (usedInParents.length - 3) + ' 項' : '') : '',
       // 加原料:先用 廠商/分類 縮小原料清單(目錄大時好找)
       ...(() => {
         const supF = S.bomSupFilter || '';
