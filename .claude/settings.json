@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node bakery-erp/tools/hooks/task-created.mjs",
+            "timeout": 30,
+            "statusMessage": "Checking the task names a file owner…"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node bakery-erp/tools/hooks/task-completed.mjs",
+            "timeout": 60,
+            "statusMessage": "Gating task completion on npm run check:schema…"
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node bakery-erp/tools/hooks/teammate-idle.mjs",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

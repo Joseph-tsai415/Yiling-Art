@@ -9,11 +9,13 @@ desktop.ini
 *.swp
 *.swo
 
-# Claude Code — all local config & state: settings.local.json, agents/, docs/,
-# commands/, skills/, plans/, session data. Keep the whole dir local to this machine.
-# NOTE: CLAUDE.md (project memory) lives at the repo root and is intentionally TRACKED —
-# it is NOT matched by these patterns and must stay committed.
-.claude/
+# Claude Code — local config & state stays local: settings.local.json, agents/, docs/,
+# commands/, skills/, plans/, session data. EXCEPTION: .claude/settings.json is TRACKED
+# (team-shared agent-team hooks). Git can't re-include a child of a fully-ignored dir, so
+# we ignore the CONTENTS (.claude/*) and re-include just settings.json.
+# NOTE: CLAUDE.md (project memory) at the repo root is also intentionally TRACKED.
+.claude/*
+!.claude/settings.json
 CLAUDE.local.md
 
 # Node (if added later)
