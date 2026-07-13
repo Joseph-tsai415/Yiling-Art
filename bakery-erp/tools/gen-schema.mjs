@@ -13,6 +13,7 @@ const schemaSrc = readFileSync(SCHEMA_URL, 'utf8');
 const TABLE_COLUMNS = extract('TABLE_COLUMNS');
 const DEFAULT_PERMS = extract('DEFAULT_PERMS');
 const AUTH_TABLES = extractArray('AUTH_TABLES');
+const BATCH_EXCLUDE = extractArray('BATCH_EXCLUDE');
 // 主同步表 = 全部表扣掉帳號/權限表(與 js/schema.js 的 SYNC_TABLES 同一算式,零漂移)
 const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => !AUTH_TABLES.includes(t));
 
@@ -38,15 +39,32 @@ next = replaceBlock(next, 'gen:synctables', [
   'var SYNC_TABLES = [' + SYNC_TABLES.map(t => `'${t}'`).join(', ') + '];'
 ], '(改結構請改 js/schema.js)');
 
+// <<gen:batchexclude>>:listAll 批次排除的無界成長帳本(改由前端逐表 list 拉取;與前端同一份常數)
+next = replaceBlock(next, 'gen:batchexclude', [
+  'var BATCH_EXCLUDE = [' + BATCH_EXCLUDE.map(t => `'${t}'`).join(', ') + '];'
+], '(改結構請改 js/schema.js)');
+
 function extract(name) {
   const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\{[\\s\\S]*?\\n\\});'));
   if (!m) fail('js/schema.js 找不到 ' + name + ' 物件');
   return new Function('return (' + m[1] + ')')();
 }
 function extractArray(name) {
-  const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\[[^\\]]*\\])'));
+  // 從宣告後第一個 `[` 起做括號平衡掃描(略過字串內容),抓到配對的 `]` 為止 ——
+  // 舊版 `\[[^\]]*\]` 會停在第一個 `]`,一旦陣列改成多行 / 帶行尾註解 / 內含巢狀括號就會被截斷後 eval 失敗。
+  const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*'));
   if (!m) fail('js/schema.js 找不到 ' + name + ' 陣列');
-  return new Function('return (' + m[1] + ')')();
+  const start = schemaSrc.indexOf('[', m.index + m[0].length);
+  if (start < 0) fail('js/schema.js 的 ' + name + ' 不是陣列字面值');
+  let depth = 0, quote = '';
+  for (let i = start; i < schemaSrc.length; i++) {
+    const ch = schemaSrc[i];
+    if (quote) { if (ch === quote && schemaSrc[i - 1] !== '\\') quote = ''; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    else if (ch === '[') depth++;
+    else if (ch === ']' && --depth === 0) return new Function('return (' + schemaSrc.slice(start, i + 1) + ')')();
+  }
+  fail('js/schema.js 的 ' + name + ' 陣列括號不對稱');
 }
 function replaceBlock(text, tag, bodyLines, why) {
   const START = '// <<' + tag + '>>';

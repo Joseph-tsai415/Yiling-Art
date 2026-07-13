@@ -43,6 +43,9 @@ export const TABLE_COLUMNS = {
 export const AUTH_TABLES = ['user_account', 'role_permission'];
 export const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => AUTH_TABLES.indexOf(t) < 0);
 
+// 無界帳本:刻意不併入 listAll 批次回應(避免撐爆),前端改逐表補拉(見 db.js)。
+export const BATCH_EXCLUDE = ['stock_ledger', 'sales_line'];
+
 // 角色權限預設矩陣(單一來源;完整說明見 doc/PERMISSION_ROLE_MAP.md)。
 // role_permission 分頁空白時,前端矩陣 UI 與後端 permsOf_ 都依此運作;super_admin 恆為全部,不需列。
 // 前端 app.js 直接 import;後端 apps-script.js 的 DEFAULT_PERMS 由 `npm run gen:schema` 產生 <<gen:perms>> 區塊。

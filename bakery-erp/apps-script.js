@@ -65,6 +65,11 @@ var TABLES = {
 var SYNC_TABLES = ['location', 'location_stock', 'ingredient', 'product', 'supplier', 'bom', 'routing', 'equipment', 'category', 'staff', 'line', 'station', 'assignment', 'purchase_line', 'production_order', 'plan_draft', 'po_draft', 'sales_line', 'waste', 'stocktake', 'transfer_order', 'transfer_line', 'ingredient_request', 'stock_ledger'];
 // <</gen:synctables>>
 
+// listAll 批次「排除」的無界成長帳本(append-only,單批全讀會撐爆回應大小 → 整批 throw);改由前端逐表 list 拉取
+// <<gen:batchexclude>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改結構請改 js/schema.js)
+var BATCH_EXCLUDE = ['stock_ledger', 'sales_line'];
+// <</gen:batchexclude>>
+
 // role_permission 預設值(setup 種入;migrate 只在分頁不存在或空白時種入 — 不覆蓋你的調整)
 // 依 doc/PERMISSION_ROLE_MAP.md:central_ops 可見成本;門市角色(含店長)全部隱藏成本
 // <<gen:perms>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改預設權限請改 js/schema.js)
@@ -83,17 +88,74 @@ function defaultPermRows_() {
   return out;
 }
 
-// 整表覆寫 ACL:表 → 允許角色(未列 = 所有已登入角色,但受 scoped replace 保護)
+// 寫入 ACL(deny-by-default,防提權/防洗表)—— 每張表 → 允許「新增(append)」或「整表覆寫(replace)」的角色名單。
+// 規則(見 canWrite_):!sess(未啟用登入/demo)→ 放行;super_admin → 全部放行(故不列於名單);
+//   其餘角色必須「該表有登記且名單含此角色」才放行;未登記的表 → 只有 super_admin 能寫(空陣列 [] 同義)。
+// 名單依 js/app.js 每個 db.append/db.replace 的呼叫畫面→角色反推(改動前務必重跑該對照,避免誤殺合法流程)。
+// 角色:central_ops=中央 / store_admin=店長 / store_kitchen=廚房 / store_front=前台收銀。
+var APPEND_ACL = {
+  location: ['central_ops'],
+  location_stock: ['central_ops', 'store_admin'],
+  ingredient: ['central_ops', 'store_admin', 'store_kitchen'], // INTERIM:見下方 REPLACE_ACL.ingredient 註解
+  category: ['central_ops', 'store_admin'],
+  product: ['central_ops'],
+  supplier: ['central_ops'],
+  bom: ['central_ops'],
+  routing: ['central_ops'],
+  equipment: ['central_ops'],
+  staff: ['store_admin'],
+  line: ['store_admin', 'store_kitchen'],
+  station: ['store_admin', 'store_kitchen'],
+  assignment: ['store_admin', 'store_kitchen'],
+  purchase_line: ['central_ops'],
+  // central_ops 也可 append:中央「自製 — 排入生產」草稿(doRestock→schedulePrep@CENTRAL)是刻意支援的流程
+  //   (中央自製為 owner 需求);只有生產「完成/出貨」是未來工作,規劃草稿本身允許。
+  production_order: ['central_ops', 'store_admin', 'store_kitchen'],
+  plan_draft: ['store_admin'],
+  po_draft: ['central_ops'],
+  sales_line: ['store_admin', 'store_front'],
+  waste: ['store_admin', 'store_kitchen'],
+  stocktake: ['central_ops', 'store_admin'],
+  transfer_order: ['central_ops', 'store_admin'],
+  transfer_line: ['central_ops', 'store_admin'],
+  ingredient_request: ['central_ops', 'store_admin'],
+  stock_ledger: ['central_ops', 'store_admin', 'store_kitchen', 'store_front'], // 所有角色皆會寫帳本(出入庫/銷售/盤點)
+  user_account: [],     // super_admin only(帳號管理)
+  role_permission: []   // super_admin only(權限管理)— 擋自助提權
+};
+// 整表覆寫 ACL:仍受 scoped replace 保護(範圍外的既有列會保留),但角色 gate 一律 deny-by-default。
+// 空陣列 [] 的 append-only 稽核表(stock_ledger/sales_line/waste/stocktake/assignment)= 任何人(除 super_admin)都不能整表覆寫 → 擋洗稽核軌跡。
 var REPLACE_ACL = {
-  user_account: ['super_admin'],
-  role_permission: ['super_admin'],
-  product: ['super_admin', 'central_ops'],
-  bom: ['super_admin', 'central_ops'],
-  routing: ['super_admin', 'central_ops'],
-  supplier: ['super_admin', 'central_ops'],
-  equipment: ['super_admin', 'central_ops'],
-  location: ['super_admin', 'central_ops'],
-  transfer_line: ['super_admin', 'central_ops'] // 部分出貨改寫明細=中央操作;門市只 append
+  location: ['central_ops'],
+  location_stock: ['central_ops', 'store_admin'],
+  // INTERIM:目標為中央專屬(central_ops),但門市生產完成會以 db.replace('ingredient',…) 回寫自製半成品成本
+  //   (js/app.js finish(),store_admin+store_kitchen 於生產畫面可達),addSelfIng 也會 append ingredient。
+  //   鎖成 central_ops-only 會打斷這些「現行」門市流程,故暫留 store_admin/store_kitchen —
+  //   仍擋住不受信任的 store_front(文件記載的洗表 exploit)。待門市自製成本回寫改版後再收斂為中央專屬。
+  ingredient: ['central_ops', 'store_admin', 'store_kitchen'],
+  category: ['central_ops', 'store_admin'],
+  product: ['central_ops'],
+  supplier: ['central_ops'],
+  bom: ['central_ops'],
+  routing: ['central_ops'],
+  equipment: ['central_ops'],
+  staff: ['store_admin'],
+  line: ['store_admin', 'store_kitchen'],
+  station: ['store_admin', 'store_kitchen'],
+  assignment: [],       // super_admin only(append-only 指派紀錄,不整表覆寫)
+  purchase_line: ['central_ops'],
+  production_order: ['store_admin', 'store_kitchen'],
+  plan_draft: ['store_admin'],
+  po_draft: ['central_ops'],
+  sales_line: [],       // super_admin only(append-only 銷售帳)
+  waste: [],            // super_admin only(append-only 報廢帳)
+  stocktake: [],        // super_admin only(append-only 盤點帳)
+  transfer_order: ['central_ops', 'store_admin'],
+  transfer_line: ['central_ops'], // 部分出貨改寫明細=中央操作;門市只 append
+  ingredient_request: ['central_ops'],
+  stock_ledger: [],     // super_admin only(append-only 庫存帳本)
+  user_account: [],     // super_admin only
+  role_permission: []   // super_admin only
 };
 
 var SEED = {
@@ -292,15 +354,42 @@ function rowInScope_(name, headers, rowArr, scope) {
     var iT = headers.indexOf('to_loc'), iF = headers.indexOf('from_loc');
     return !!(scope[String(rowArr[iT] || '').trim()] || scope[String(rowArr[iF] || '').trim()]);
   }
+  if (name === 'transfer_line') {
+    // transfer_line 無 location_id;其歸屬由父單 transfer_order.to_id 決定。鏡像 filterRows_ 的可見性:
+    // 找出這列 to_id 的父單,要求父單 to_loc/from_loc 與呼叫者範圍相交 —— 否則等於把明細塞進別家門市的
+    // 調撥單(跨店注入)。舊碼因無 location_id 走 iL<0 → return true,任何店都能注入 → 本 case 修補。
+    var iTo = headers.indexOf('to_id');
+    if (iTo < 0) return true;
+    var toId = String(rowArr[iTo] || '').trim();
+    if (!toId) return true;
+    var toSh = ss_().getSheetByName('transfer_order');
+    if (toSh && toSh.getLastRow() > 1) {
+      var td = toSh.getDataRange().getValues();
+      var th = td[0].map(String);
+      var iId = th.indexOf('to_id'), iT2 = th.indexOf('to_loc'), iF2 = th.indexOf('from_loc');
+      for (var r = 1; r < td.length; r++) {
+        if (String(td[r][iId]).trim() === toId) {
+          return !!(scope[String(td[r][iT2] || '').trim()] || scope[String(td[r][iF2] || '').trim()]);
+        }
+      }
+    }
+    // 找不到父單 → 放行。理由:(1) 門市自建叫貨(submitTO)先 append transfer_order 再 append transfer_line,
+    //   而前端寫入是非同步、後端僅以 LockService 排隊、不保證兩個 POST 的先後 → 明細可能先於父單抵達,
+    //   若此時 deny 會誤殺合法叫貨;(2) 無主孤列在讀取端本就被 filterRows_ 濾掉、無資料外洩。
+    //   跨店注入的攻擊面是「注入別家既存單」,該父單一定存在 → 已被上面的相交檢查擋下。
+    return true;
+  }
   var iL = headers.indexOf('location_id');
   if (iL < 0) return true;
   return !!scope[String(rowArr[iL] || '').trim() || 'LOC-A'];
 }
-function canReplace_(sess, sheet) {
+// 寫入 ACL 檢查(append 與 replace 共用)。deny-by-default:未列的 sheet / 名單不含此角色 → 只有 super_admin 可寫。
+//   !sess = 後端未啟用登入(demo/公開模式)→ 一律放行(維持原行為)。action 決定查 APPEND_ACL 或 REPLACE_ACL。
+function canWrite_(sess, sheet, action) {
   if (!sess) return true; // 未啟用驗證
   if (sess.role === 'super_admin') return true;
-  var acl = REPLACE_ACL[sheet];
-  return !acl || acl.indexOf(sess.role) >= 0;
+  var acl = (action === 'append' ? APPEND_ACL : REPLACE_ACL)[sheet];
+  return !!acl && acl.indexOf(sess.role) >= 0; // 未登記 sheet(acl undefined)或名單不含此角色 → 拒絕
 }
 function accountsSheet_() {
   var sh = ss_().getSheetByName('user_account');
@@ -374,12 +463,19 @@ function doGet(e) {
   if (action === 'listAll') {
     var tzA = Session.getScriptTimeZone();
     var scopeA = scopeOf_(sess);
+    // 一次讀入全部版號(取代逐表 rev_ 的 24 次 property store 往返);key/coercion 與 rev_ 保持一致 → 回傳版號與單表 list 位元相同。
+    var propsA = PropertiesService.getDocumentProperties().getProperties();
+    // 批次集 = 主同步表扣掉無界成長帳本(stock_ledger / sales_line):那兩張一大就會撐爆單批回應而整批 throw,
+    // 改由前端逐表 list 拉(仍讓 24 → 約 3 個請求)。注意:只縮這個批次迴圈,SYNC_TABLES 本身不動(它同時是前端 SCHEMA 全集)。
+    var batchA = SYNC_TABLES.filter(function (t) { return BATCH_EXCLUDE.indexOf(t) < 0; });
     var sheets = {};
-    for (var iA = 0; iA < SYNC_TABLES.length; iA++) {
-      var nameA = SYNC_TABLES[iA];
+    for (var iA = 0; iA < batchA.length; iA++) {
+      var nameA = batchA[iA];
       var shA = ss_().getSheetByName(nameA);
-      if (!shA) continue; // 缺分頁略過 → 前端列為 missing 並自動 migrate 後重拉
-      var revA = rev_(nameA); // 先讀版號再讀資料(同單表 list:寧可誤判 conflict 也不漏別人剛寫入的變更)
+      // 契約(刻意有別於單表 list 的 {ok:false, error:'找不到分頁'}):缺分頁在此靜默略過、不放進回應 →
+      // 前端據此把該表列為 missing → 自動 migrate → 重拉。批次端不因單一缺表而失敗。
+      if (!shA) continue;
+      var revA = Number(propsA['rev:' + nameA] || '0'); // 同 rev_():先讀版號再讀資料(寧可誤判 conflict 也不漏別人剛寫入的變更)
       var rowsA = shA.getDataRange().getValues().map(function (r) {
         return r.map(function (v) { return (v instanceof Date) ? Utilities.formatDate(v, tzA, 'yyyy-MM-dd') : v; });
       });
@@ -423,7 +519,7 @@ function doPost(e) {
     // 有地點範圍的工作階段走 scoped replace:只覆寫範圍內的列、保留範圍外既有列 —
     // 讀取已過濾 + 整表覆寫,若不這樣做會把其他店的資料清掉。
     if (body.action === 'replace') {
-      if (!canReplace_(sess, body.sheet)) return json_({ ok: false, error: 'forbidden' });
+      if (!canWrite_(sess, body.sheet, 'replace')) return json_({ ok: false, error: 'forbidden' });
       // 樂觀鎖:前端帶了 baseRev 且與目前版號不同 → 有人先改過,回 conflict 讓前端重載再改.
       // 舊前端沒帶 baseRev(undefined/null)則略過檢查,行為與之前完全相同(向後相容).
       if (body.baseRev != null && Number(body.baseRev) !== rev_(body.sheet)) return json_({ ok: false, error: 'conflict', rev: rev_(body.sheet) });
@@ -451,6 +547,10 @@ function doPost(e) {
       shR.setFrozenRows(1);
       return json_({ ok: true, replaced: data.length - 1, rev: bumpRev_(body.sheet) });
     }
+
+    // append 角色 ACL — 與 replace 同為 deny-by-default(未列 sheet / 名單不含此角色 → 只有 super_admin)。
+    //   放在地點範圍檢查之前:先擋掉角色無權寫的表(如 role_permission 自助提權),再談範圍。
+    if (!canWrite_(sess, body.sheet, 'append')) return json_({ ok: false, error: 'forbidden' });
 
     var sh = ss_().getSheetByName(body.sheet);
     if (!sh) return json_({ ok: false, error: '找不到分頁:' + body.sheet + '(請先執行 setup)' });

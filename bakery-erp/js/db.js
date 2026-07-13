@@ -7,7 +7,7 @@
 //  3) 舊資料(真實快照/本地快取)載入時自動補 location_id=LOC-A(歷史異動皆屬本店)
 //  4) 獨立 localStorage 鍵與連線設定;預設「本地模式」,避免把 v2 新結構誤寫進 v1 的 Sheet
 import { SEED_OVERRIDE } from './seed-data.js'; // 真實資料庫快照(門市A 歷史資料)
-import { TABLE_COLUMNS, SYNC_TABLES } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js)
+import { TABLE_COLUMNS, SYNC_TABLES, BATCH_EXCLUDE } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js);BATCH_EXCLUDE=不併入 listAll 的無界帳本
 
 // SCHEMA = 主同步表(結構單一來源見 ./schema.js);帳號/權限表為後端專用,不在主同步.
 export const SCHEMA = Object.fromEntries(SYNC_TABLES.map(t => [t, TABLE_COLUMNS[t]]));
@@ -289,6 +289,8 @@ export class DB {
     this.onRemote = null; // (ok, msg) => void
     this.rev = {};        // 每張表的樂觀鎖版本號(list 讀入 / 寫入回應更新);replace 帶 baseRev 給後端比對
     this.onConflict = null; // (sheet) => void:整表覆寫因他人先改而被拒(conflict)時通知上層重載
+    this.lastPullError = null; // pullAll 失敗型態:'auth'(工作階段過期)/ 'network'(整趟都沒連上可運作後端)/ null(後端有回應);呼叫端據此決定是否 migrate
+    this._batchUnsupported = false; // 能力快取:此後端已確認不支援 action=listAll → 之後直接逐表,不再探測
     this.load();
   }
 
@@ -373,6 +375,7 @@ export class DB {
   }
   async pullAll() {
     const names = Object.keys(SCHEMA);
+    this.lastPullError = null; // 每次重置;呼叫端讀取以區分 auth / network(沒連上後端)/ 結構缺分頁(null)
     const norm = c => {
       const s = String(c);
       let m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(s);
@@ -396,20 +399,46 @@ export class DB {
       results = await Promise.all(names.map(n => this.gapiList(n).catch(() => null)));
     } else {
       // 方案 B:先試一次 listAll(單一往返,取代逐表 24 個 list 請求);後端太舊/失敗才回退逐表.
-      const perSheet = () => Promise.all(names.map(n => this.api('action=list&sheet=' + n)
-        .then(j => { if (j && j.ok && j.rev != null) this.rev[n] = j.rev; return (j && j.ok) ? j.rows : null; })
+      // reached = 這趟是否真的碰到「可運作的後端」(收到可解析、含布林 ok 的 JSON);用來把
+      // 「沒連上」(network,不該 migrate)和「後端有回應但分頁真的不存在」(結構缺,該 migrate)分開.
+      let reached = false;
+      // 逐表 list(可指定子集,預設全部);回傳與 list 對齊的 rows(失敗→null)並更新 rev.
+      // 只要拿到可解析的 j(即使是 {ok:false,'找不到分頁'})就算碰到後端 → reached=true.
+      const listSome = list => Promise.all(list.map(n => this.api('action=list&sheet=' + n)
+        .then(j => { if (j) reached = true; if (j && j.ok && j.rev != null) this.rev[n] = j.rev; return (j && j.ok) ? j.rows : null; })
         .catch(() => null)));
-      const batch = await this.api('action=listAll').catch(() => null);
+      // 能力快取:先前已確認此後端不支援 listAll(正向舊後端回應)→ 不再探測,直接逐表.
+      const batch = this._batchUnsupported ? null : await this.api('action=listAll').catch(() => null);
       if (batch && batch.ok && batch.sheets && !Array.isArray(batch.sheets)) {
         // 新後端:一次拿到所有分頁 {sheet:{rows,rev}};缺的分頁(後端略過)→ null → 列為 missing
-        results = names.map(n => { const t = batch.sheets[n]; if (t && t.rev != null) this.rev[n] = t.rev; return t ? t.rows : null; });
+        reached = true;
+        results = names.map(n => {
+          const t = batch.sheets[n];
+          if (!t) return null;
+          // 有 rows 但缺 rev:清掉舊版號,避免套用新 rows 卻留著過期 rev → 下次存檔誤判 conflict
+          if (t.rev != null) this.rev[n] = t.rev; else delete this.rev[n];
+          return t.rows;
+        });
+        // 無界帳本(BATCH_EXCLUDE)後端刻意排除於 listAll(防回應撐爆)→ 一律逐表補拉,依名稱併回 results
+        const excluded = names.filter(n => BATCH_EXCLUDE.indexOf(n) >= 0);
+        if (excluded.length) {
+          const exRows = await listSome(excluded);
+          excluded.forEach((n, i) => { results[names.indexOf(n)] = exRows[i]; });
+        }
       } else if (batch && batch.ok === false) {
-        // 後端有回應但拒絕(unauthorized 等)— api() 已觸發 onAuthFail;不逐表重打一輪
+        // 後端有回應但拒絕(unauthorized 等)— api() 已觸發 onAuthFail;記下 auth 訊號讓呼叫端別再 migrate/重拉
+        reached = true;
+        this.lastPullError = 'auth';
         results = names.map(() => null);
       } else {
-        // 舊後端(未知 action 會回 {ok:true, tables:[...]})或連線失敗 → 回退逐表 list
-        results = await perSheet();
+        // 舊後端(未知 action 回 {ok:true, tables:[...]},無 sheets)或連線失敗(batch===null)→ 回退逐表 list.
+        // 只有「正向舊後端回應」才算碰到後端並快取不支援旗標;batch===null 可能只是暫時斷線,不可快取.
+        if (batch && batch.ok && !batch.sheets) { reached = true; this._batchUnsupported = true; }
+        console.warn('[bakery] listAll batch unavailable, falling back to per-sheet', this._batchUnsupported ? '(old backend: no listAll)' : '(no/invalid batch response)');
+        results = await listSome(names); // listSome 內若任一 j 可解析 → reached=true
       }
+      // 整趟都沒碰到可運作後端(且非 auth)→ 連線/傳輸問題,呼叫端據此略過必失敗的 migrate
+      if (this.lastPullError !== 'auth' && !reached) this.lastPullError = 'network';
     }
     const missing = [];
     names.forEach((n, i) => {

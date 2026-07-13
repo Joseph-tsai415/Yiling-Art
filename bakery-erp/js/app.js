@@ -115,12 +115,31 @@ class Component extends DCLogic {
     if (!l || l.toUpperCase() === 'ALL') return true;
     return l.split(/[|;,]/).map(x => x.trim()).indexOf(id) >= 0;
   }
+  // 登入落點視角:依帳號決定「進來站在哪個地點」,而非沿用裝置層殘留的 bakery_loc_v2。
+  // 中央/全域帳號(super_admin、central_ops,或 location_ids 為空/ALL)→ 中央倉;單一門市帳號 → 該門市;
+  // 多門市帳號 → 名單第一個門市(名單含中央倉則落在中央倉)。一律用 this.CENTRAL(atCentral/CENOK/setLoc
+  // 全都以它為準),不從 location.type==='central' 推導以免與中央機制的地點常數不一致。
+  loginLoc(role, locs) {
+    const raw = String(locs || '').trim();
+    if (role === 'super_admin' || role === 'central_ops' || !raw || raw.toUpperCase() === 'ALL') return this.CENTRAL;
+    const list = raw.split(/[|;,]/).map(x => x.trim()).filter(Boolean);
+    if (list.indexOf(this.CENTRAL) >= 0) return this.CENTRAL;
+    return list[0] || this.CENTRAL;
+  }
   startCloud() {
     if (!this.db || this.db.mode !== 'cloud') return;
     this.notify('☁ 雲端模式 — 正在從 Google Sheet 同步…');
     this.db.pullAll()
       .then(async missing => {
-        // Sheet 還沒建表 → 自動補建再拉一次(migrate 保留資料;setup 會清空,絕不自動跑)
+        // 缺分頁但「沒真的連上後端」(network)或工作階段過期(auth)→ 不做註定失敗的 migrate,提示重登/檢查連線
+        if (missing.length && this.db.lastPullError) {
+          this.prunePlan();
+          this.notify(this.db.lastPullError === 'auth'
+            ? '⚠ 工作階段已過期 — 請重新登入後再同步'
+            : '✕ 連線失敗 — 未連上後端,先用本地快取(到「資料連線」檢查網路/後端網址)');
+          return;
+        }
+        // 後端有回應、分頁確實不存在(lastPullError===null)→ 自動補建再拉一次(migrate 保留資料;setup 會清空,絕不自動跑)
         if (missing.length && this.db.cfg.kind === 'gas') {
           this.notify('Sheet 缺分頁,自動補建中(保留現有資料)…');
           try { await this.db.api('action=migrate'); missing = await this.db.pullAll(); } catch (e2) { }
@@ -148,11 +167,14 @@ class Component extends DCLogic {
       .then(j => {
         if (j && j.ok) {
           this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role, locs: j.location_ids || '', perms: j.perms || null });
-          // 剛登入 → 依角色落在第一個允許的畫面(重新整理則維持原畫面,由 renderVals 守門)
+          // 剛登入 → 依角色落在第一個允許的畫面 + 帳號對應的起始視角(中央/全域帳號→中央倉,門市帳號→其門市);
+          // 重新整理維持原畫面/視角由 renderVals 守門。loc 於此處權威設定,自癒(renderVals)僅作後備。
           const perms = j.perms || null;
           const has = k => !perms ? true : (perms.indexOf('*') >= 0 || perms.indexOf('screen.' + k) >= 0);
           const land = ['overview', 'production', 'sales', 'purchase', 'inventory', 'products', 'setup'].find(has) || 'overview';
-          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '', authLocs: j.location_ids || '', authPerms: j.perms || null, screen: land });
+          const startLoc = this.loginLoc(j.role || '', j.location_ids || ''); // 以帳號決定操作視角,取代裝置層殘留的 bakery_loc_v2
+          try { localStorage.setItem('bakery_loc_v2', startLoc); } catch (e) { } // 同步寫回裝置鍵:重新整理(whoami 路徑)沿用此帳號的視角
+          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '', authLocs: j.location_ids || '', authPerms: j.perms || null, screen: land, loc: startLoc });
           this.notify('✓ 歡迎,' + (j.name || j.email));
           this.startCloud();
         } else if (j && j.error === 'not_on_list') {
@@ -169,7 +191,8 @@ class Component extends DCLogic {
     const g = window.google && window.google.accounts && window.google.accounts.id;
     if (g && g.disableAutoSelect) g.disableAutoSelect(); // 下次登入顯示帳號選擇器
     if (this._gsiEl) this._gsiEl.__gsiMounted = false;
-    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authLocs: '', authPerms: null, authBusy: false, accUsers: null, accPerms: null });
+    try { localStorage.removeItem('bakery_loc_v2'); } catch (e) { } // 清掉裝置層殘留的操作視角 — 共用/門市機不把上一位使用者的門市帶給下一位(下次登入由 loginLoc 重設)
+    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authLocs: '', authPerms: null, authBusy: false, accUsers: null, accPerms: null, loc: 'LOC-A' });
     if (msg) this.notify(msg);
   }
   // ── 帳號與角色(super_admin):user_account / role_permission 直接讀寫 Sheet ──
@@ -2478,7 +2501,15 @@ class Component extends DCLogic {
         this.prunePlan();
         // user_account / role_permission 不在 SCHEMA(pullAll 不含)→ 同步時一併刷新(限能看帳號的 super_admin)
         if (this.hasPerm('screen.accounts')) this.loadAccounts(true);
-        this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 按「② 升級結構(保留資料)」補分頁;若後端太舊請重貼最新 apps-script.js 部署新版本再升級' : (okMsg || '✓ 已從 Google Sheet 載入最新資料'));
+        if (missing.length && db.lastPullError) {
+          // 沒連上後端(network)或工作階段過期(auth)→ 別誤導使用者去「升級結構」
+          this.notify(db.lastPullError === 'auth'
+            ? '⚠ 工作階段已過期 — 請重新登入後再同步'
+            : '✕ 連線失敗 — 未連上後端,請檢查網路或後端 /exec 網址');
+        } else {
+          // 後端有回應、分頁確實不存在(lastPullError===null)→ 引導使用者按「② 升級結構」補分頁
+          this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 按「② 升級結構(保留資料)」補分頁;若後端太舊請重貼最新 apps-script.js 部署新版本再升級' : (okMsg || '✓ 已從 Google Sheet 載入最新資料'));
+        }
       } catch (e2) { this.notify('✕ 同步失敗:' + e2); }
       this.setState({ connBusy: false });
     };
@@ -3083,6 +3114,11 @@ class Component extends DCLogic {
       addProdShow: atCentral ? '' : 'display:none',
       prodEditPE: atCentral ? '' : 'pointer-events:none',
       prodRoStyle: atCentral ? 'display:none' : 'padding:9px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;font-size:12px;color:#9a3412;font-weight:500',
+      // 唯讀說明依「這個使用者是否能進中央倉」而定,別把限制誤植給有中央權限的人:
+      //   有中央權限(super_admin/central_ops)看門市 → 指引切到「中央倉」視角;純門市帳號 → 維持「通知中央」
+      prodRoTxt: this.allowedLoc(this.CENTRAL)
+        ? '產品與配方由中央倉維護 — 目前為門市檢視,請切換到上方「中央倉」視角新增或修改配方'
+        : '產品與配方由中央維護,門市僅供檢視(需新增或修改配方請通知中央)',
       pLocStyle: (isIngSel || !atCentral) ? 'display:none' : 'margin-left:8px;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:400',
       pLocChips: (() => {
         const stores = this.t('location').filter(l => l.type !== 'central');
