@@ -897,8 +897,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <!-- 門市視角:本店備料 -->
         <sc-if value="{{ingStoreOn}}" hint-placeholder-val="{{false}}">
           <div style="display:grid;grid-template-columns:1.1fr 1fr 320px;gap:14px;align-items:start" data-screen-label="本店備料">
-            <div class="pan">
-              <div class="pah">本店備料清單({{locShort}})<input class="inp" style="margin-left:auto;width:150px;font-weight:400" placeholder="{{smQ.ph}}" value="{{smQ.val}}" onChange="{{smQ.onQ}}"></div>
+            <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
+              <div class="pah" style="flex:none">本店備料清單({{locShort}})<input class="inp" style="margin-left:auto;width:150px;font-weight:400" placeholder="{{smQ.ph}}" value="{{smQ.val}}" onChange="{{smQ.onQ}}"></div>
+              <div style="overflow:auto;flex:1;min-height:0">
               <table class="t3">
                 <tr><sc-for list="{{smHead}}" as="h" hint-placeholder-count="5"><th style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</th></sc-for></tr>
                 <sc-for list="{{smRows}}" as="r" hint-placeholder-count="4">
@@ -908,10 +909,12 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 </sc-for>
               </table>
               <div style="{{smEmpty}}">尚未配置 — 從中間「中央目錄」加入</div>
-              <div style="padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">安全庫存每店獨立;低於此值 → 缺料預警+叫貨建議。移除為門市自主,不需中央審核。</div>
+              </div>
+              <div style="flex:none;padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">安全庫存每店獨立;低於此值 → 缺料預警+叫貨建議。移除為門市自主,不需中央審核。</div>
             </div>
-            <div class="pan">
-              <div class="pah">中央目錄 — 可加入<input class="inp" style="margin-left:auto;width:140px;font-weight:400" placeholder="{{scQ.ph}}" value="{{scQ.val}}" onChange="{{scQ.onQ}}"></div>
+            <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
+              <div class="pah" style="flex:none">中央目錄 — 可加入<input class="inp" style="margin-left:auto;width:140px;font-weight:400" placeholder="{{scQ.ph}}" value="{{scQ.val}}" onChange="{{scQ.onQ}}"></div>
+              <div style="overflow:auto;flex:1;min-height:0">
               <table class="t3">
                 <tr><sc-for list="{{scHead}}" as="h" hint-placeholder-count="4"><th style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</th></sc-for></tr>
                 <sc-for list="{{scRows}}" as="r" hint-placeholder-count="4">
@@ -919,8 +922,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 </sc-for>
               </table>
               <div style="{{scEmpty}}">目錄品項都已加入本店 — 需要新料用右側申請</div>
+              </div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;flex-direction:column;gap:14px;position:sticky;top:0;max-height:calc(100vh - 86px);overflow:auto">
               <div class="pan">
                 <div class="pah" style="font-size:13px">申請新原料(目錄沒有的)</div>
                 <div style="padding:12px 14px;display:flex;flex-direction:column;gap:8px;font-size:12.5px">
@@ -974,20 +978,22 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             </table>
             <div style="{{reqEmpty}}">目前沒有待處理申請 — 門市在「本店備料」頁送出後會出現在這裡</div>
           </div>
-          <div class="pan">
-            <div class="pah">原料目錄(中央維護)<span style="margin-left:auto;display:flex;gap:8px;align-items:center"><input class="inp" style="width:200px;font-weight:400" placeholder="{{ingQ.ph}}" value="{{ingQ.val}}" onChange="{{ingQ.onQ}}"><span class="btn3o" style="color:#c11f28;border-color:#c11f28" onClick="{{revertImport}}">還原匯入</span><span class="btn3o" onClick="{{importSemis}}">匯入半成品(Excel)</span><span class="btn3o" onClick="{{loadCommon}}">載入常用清單</span><span class="btn3o" onClick="{{addSelfIng}}">+ 自製半成品</span><span class="btn3" onClick="{{addIng}}">+ 新增原料</span></span></div>
-            <div style="display:flex;gap:6px;padding:9px 14px;border-bottom:1px solid #eef0f3;flex-wrap:wrap" onDragOver="{{catBarOver}}" onDrop="{{catBarDrop}}">
+          <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
+            <div class="pah" style="flex:none">原料目錄(中央維護)<span style="margin-left:auto;display:flex;gap:8px;align-items:center"><input class="inp" style="width:200px;font-weight:400" placeholder="{{ingQ.ph}}" value="{{ingQ.val}}" onChange="{{ingQ.onQ}}"><span class="btn3o" style="color:#c11f28;border-color:#c11f28" onClick="{{revertImport}}">還原匯入</span><span class="btn3o" onClick="{{importSemis}}">匯入半成品(Excel)</span><span class="btn3o" onClick="{{loadCommon}}">載入常用清單</span><span class="btn3o" onClick="{{addSelfIng}}">+ 自製半成品</span><span class="btn3" onClick="{{addIng}}">+ 新增原料</span></span></div>
+            <div style="display:flex;gap:6px;padding:9px 14px;border-bottom:1px solid #eef0f3;flex-wrap:wrap;flex:none" onDragOver="{{catBarOver}}" onDrop="{{catBarDrop}}">
               <sc-for list="{{ingCatTabs}}" as="c" hint-placeholder-count="5"><span class="tag3" draggable="{{c.drag}}" style="{{c.style}}" onClick="{{c.go}}" onDragStart="{{c.onDragStart}}" onDragOver="{{c.onDragOver}}" onDrop="{{c.onDrop}}" onDragEnd="{{c.onDragEnd}}">{{c.name}}</span></sc-for>
               <span style="font-size:10.5px;color:#9aa1ab;align-self:center">拖曳 pills 可調順序,寫入分類主檔</span>
             </div>
+            <div style="overflow:auto;flex:1;min-height:0">
             <table class="t3">
               <tr><sc-for list="{{ingHead}}" as="h" hint-placeholder-count="8"><th style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</th></sc-for></tr>
               <sc-for list="{{ingRows}}" as="r" hint-placeholder-count="6">
                 <tr style="{{r.rowStyle}}" onClick="{{r.onSel}}"><td style="color:#66707f">{{r.id}}</td><td style="font-weight:500">{{r.name}}</td><td>{{r.cat}}</td><td style="color:#66707f;font-size:11.5px">{{r.convTxt}}</td><td class="num">{{r.safeTxt}}</td><td class="num" style="white-space:nowrap">{{r.quoteTxt}}</td><td class="num">{{r.costTxt}}</td><td>{{r.sup}}</td></tr>
               </sc-for>
             </table>
+            </div>
           </div>
-          <div class="pan">
+          <div class="pan" style="position:sticky;top:0;max-height:calc(100vh - 86px);overflow:auto">
             <div class="pah" style="font-size:13px">編輯 — {{dName}}</div>
             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;font-size:12.5px">
               <div style="display:grid;grid-template-columns:84px 1fr;gap:8px;align-items:center">
