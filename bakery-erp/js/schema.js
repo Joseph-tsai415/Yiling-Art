@@ -30,7 +30,7 @@ export const TABLE_COLUMNS = {
   waste:              ['waste_id', 'target_type', 'target_id', 'qty', 'reason', 'date', 'location_id'],
   stocktake:          ['stocktake_id', 'target_type', 'target_id', 'counted_qty', 'date', 'location_id'],
   transfer_order:     ['to_id', 'from_loc', 'to_loc', 'status', 'request_date', 'ship_date', 'receive_date', 'need_date', 'urgent'],
-  transfer_line:      ['tl_id', 'to_id', 'ingredient_id', 'qty'],
+  transfer_line:      ['tl_id', 'to_id', 'item_type', 'item_id', 'qty'],
   ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date'],
   stock_ledger:       ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
 
@@ -42,6 +42,9 @@ export const TABLE_COLUMNS = {
 // 前端主同步(pullAll)拉取的表 = 全部表扣掉帳號/權限這兩張後端專用表.
 export const AUTH_TABLES = ['user_account', 'role_permission'];
 export const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => AUTH_TABLES.indexOf(t) < 0);
+
+// 無界帳本:刻意不併入 listAll 批次回應(避免撐爆),前端改逐表補拉(見 db.js)。
+export const BATCH_EXCLUDE = ['stock_ledger', 'sales_line'];
 
 // 角色權限預設矩陣(單一來源;完整說明見 doc/PERMISSION_ROLE_MAP.md)。
 // role_permission 分頁空白時,前端矩陣 UI 與後端 permsOf_ 都依此運作;super_admin 恆為全部,不需列。

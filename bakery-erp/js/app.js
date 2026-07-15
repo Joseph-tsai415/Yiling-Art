@@ -8,6 +8,12 @@
 import { DCLogic, mountApp } from './runtime.js';
 import { TABLE_COLUMNS, DEFAULT_PERMS as PERM_DEFAULTS } from './schema.js'; // 帳號/權限欄位與預設矩陣取自單一結構來源(見 ./schema.js)
 
+// 前端功能旗標(休眠模式)。transferItemTypes=false → 叫貨/出貨/收貨維持「原料限定」,
+// 品項類型分頁隱藏、item_type 隱含視為 'ingredient',與 Phase-1 逐位元一致;
+// 之後中央具備自產能力時改 true 即可開啟 [原料|半成品|成品] 分頁,資料流(transfer_line 的
+// item_type/item_id 多型欄位)已就緒、不需重接。詳見 doc/flexible-delivery-ux.md §3。
+const FLAGS = { transferItemTypes: false };
+
 class Component extends DCLogic {
   state = {
     splashOn: true, splashHide: false, // 開機 splash 疊層(蓋住載入/驗證),就緒後淡出露出底下畫面
@@ -24,10 +30,10 @@ class Component extends DCLogic {
     cart: {},
     invTab: 'ingredient', selItem: 'ING-001', countQty: '', prodView: 'board', viewAs: 'all', traceId: '', tlZoom: 1, ganttZoom: 1, lineSel: 'LINE-01', stationSel: 'all', lineCfg: false,
     poLines: [], poSupplier: 'SUP-01', poEta: '', poName: '', rcvVals: {}, retOpen: '', retVals: {}, retMode: {},
-    puView: 'store', toDraft: [], tsAddIng: 'ING-001', tsAddQty: '25000',
+    puView: 'store', toDraft: [], tsAddIng: 'ING-001', tsAddQty: '25000', tsAddType: 'ingredient',
     tsNeed: '', tsUrgent: false, reqName: '', reqSpec: '', reqQty: '', reqUrgent: false, newStoreName: '', mergePick: {},
     selIng: 'ING-001', draft: null,
-    selProd: 'PRD-01', bomAddIng: 'ING-003', bomAddQty: '100',
+    selProd: 'PRD-01', bomAddIng: 'ING-003', bomAddQty: '100', bomTrail: [],
     finVals: {}, closing: {}, closed: false, toast: '',
     apiUrl: '', sid: '', gKey: '', gCid: '', connBusy: false, confirmWipe: null,
     catOpen: false, newCat: ''
@@ -115,12 +121,31 @@ class Component extends DCLogic {
     if (!l || l.toUpperCase() === 'ALL') return true;
     return l.split(/[|;,]/).map(x => x.trim()).indexOf(id) >= 0;
   }
+  // 登入落點視角:依帳號決定「進來站在哪個地點」,而非沿用裝置層殘留的 bakery_loc_v2。
+  // 中央/全域帳號(super_admin、central_ops,或 location_ids 為空/ALL)→ 中央倉;單一門市帳號 → 該門市;
+  // 多門市帳號 → 名單第一個門市(名單含中央倉則落在中央倉)。一律用 this.CENTRAL(atCentral/CENOK/setLoc
+  // 全都以它為準),不從 location.type==='central' 推導以免與中央機制的地點常數不一致。
+  loginLoc(role, locs) {
+    const raw = String(locs || '').trim();
+    if (role === 'super_admin' || role === 'central_ops' || !raw || raw.toUpperCase() === 'ALL') return this.CENTRAL;
+    const list = raw.split(/[|;,]/).map(x => x.trim()).filter(Boolean);
+    if (list.indexOf(this.CENTRAL) >= 0) return this.CENTRAL;
+    return list[0] || this.CENTRAL;
+  }
   startCloud() {
     if (!this.db || this.db.mode !== 'cloud') return;
     this.notify('☁ 雲端模式 — 正在從 Google Sheet 同步…');
     this.db.pullAll()
       .then(async missing => {
-        // Sheet 還沒建表 → 自動補建再拉一次(migrate 保留資料;setup 會清空,絕不自動跑)
+        // 缺分頁但「沒真的連上後端」(network)或工作階段過期(auth)→ 不做註定失敗的 migrate,提示重登/檢查連線
+        if (missing.length && this.db.lastPullError) {
+          this.prunePlan();
+          this.notify(this.db.lastPullError === 'auth'
+            ? '⚠ 工作階段已過期 — 請重新登入後再同步'
+            : '✕ 連線失敗 — 未連上後端,先用本地快取(到「資料連線」檢查網路/後端網址)');
+          return;
+        }
+        // 後端有回應、分頁確實不存在(lastPullError===null)→ 自動補建再拉一次(migrate 保留資料;setup 會清空,絕不自動跑)
         if (missing.length && this.db.cfg.kind === 'gas') {
           this.notify('Sheet 缺分頁,自動補建中(保留現有資料)…');
           try { await this.db.api('action=migrate'); missing = await this.db.pullAll(); } catch (e2) { }
@@ -148,11 +173,14 @@ class Component extends DCLogic {
       .then(j => {
         if (j && j.ok) {
           this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role, locs: j.location_ids || '', perms: j.perms || null });
-          // 剛登入 → 依角色落在第一個允許的畫面(重新整理則維持原畫面,由 renderVals 守門)
+          // 剛登入 → 依角色落在第一個允許的畫面 + 帳號對應的起始視角(中央/全域帳號→中央倉,門市帳號→其門市);
+          // 重新整理維持原畫面/視角由 renderVals 守門。loc 於此處權威設定,自癒(renderVals)僅作後備。
           const perms = j.perms || null;
           const has = k => !perms ? true : (perms.indexOf('*') >= 0 || perms.indexOf('screen.' + k) >= 0);
           const land = ['overview', 'production', 'sales', 'purchase', 'inventory', 'products', 'setup'].find(has) || 'overview';
-          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '', authLocs: j.location_ids || '', authPerms: j.perms || null, screen: land });
+          const startLoc = this.loginLoc(j.role || '', j.location_ids || ''); // 以帳號決定操作視角,取代裝置層殘留的 bakery_loc_v2
+          try { localStorage.setItem('bakery_loc_v2', startLoc); } catch (e) { } // 同步寫回裝置鍵:重新整理(whoami 路徑)沿用此帳號的視角
+          this.setState({ authState: 'ok', authBusy: false, authName: j.name || '', authEmail: j.email || '', authRole: j.role || '', authLocs: j.location_ids || '', authPerms: j.perms || null, screen: land, loc: startLoc });
           this.notify('✓ 歡迎,' + (j.name || j.email));
           this.startCloud();
         } else if (j && j.error === 'not_on_list') {
@@ -169,7 +197,8 @@ class Component extends DCLogic {
     const g = window.google && window.google.accounts && window.google.accounts.id;
     if (g && g.disableAutoSelect) g.disableAutoSelect(); // 下次登入顯示帳號選擇器
     if (this._gsiEl) this._gsiEl.__gsiMounted = false;
-    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authLocs: '', authPerms: null, authBusy: false, accUsers: null, accPerms: null });
+    try { localStorage.removeItem('bakery_loc_v2'); } catch (e) { } // 清掉裝置層殘留的操作視角 — 共用/門市機不把上一位使用者的門市帶給下一位(下次登入由 loginLoc 重設)
+    this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authLocs: '', authPerms: null, authBusy: false, accUsers: null, accPerms: null, loc: 'LOC-A' });
     if (msg) this.notify(msg);
   }
   // ── 帳號與角色(super_admin):user_account / role_permission 直接讀寫 Sheet ──
@@ -794,10 +823,12 @@ class Component extends DCLogic {
     this.db.replace('location_stock', rows);
     this.forceUpdate();
   }
-  // 調撥以包裝為單位:外購原料整包(袋/箱/瓶)進出,不走散裝;自製半成品維持 g
-  isPackaged(g) { return !!g && g.purchase_unit !== '自製' && this.n(g.conversion_rate) > 1; }
-  pkgCeil(g, q) { if (!this.isPackaged(g)) return Math.max(1, Math.ceil(this.n(q))); const c = this.n(g.conversion_rate); return Math.max(1, Math.ceil((this.n(q) - 1e-9) / c)) * c; }
-  pkgTxt(g, q) { if (!this.isPackaged(g)) return ''; const c = this.n(g.conversion_rate); const n0 = this.n(q) / c; return this.fmt(n0, n0 % 1 ? 1 : 0) + ' ' + (g.purchase_unit || '包'); }
+  // 調撥以包裝為單位:外購原料整包(袋/箱/瓶)進出,不走散裝;自製半成品維持 g。
+  // type 先判斷:'product'(成品)一律整件計數、不走 purchase_unit/conversion_rate 包裝換算;
+  // 省略或 'ingredient' 則維持原邏輯不變(旗標關閉時所有呼叫端皆走此路徑,逐位元一致)。
+  isPackaged(g, type) { if (type === 'product') return false; return !!g && g.purchase_unit !== '自製' && this.n(g.conversion_rate) > 1; }
+  pkgCeil(g, q, type) { if (!this.isPackaged(g, type)) return Math.max(1, Math.ceil(this.n(q))); const c = this.n(g.conversion_rate); return Math.max(1, Math.ceil((this.n(q) - 1e-9) / c)) * c; }
+  pkgTxt(g, q, type) { if (!this.isPackaged(g, type)) return ''; const c = this.n(g.conversion_rate); const n0 = this.n(q) / c; return this.fmt(n0, n0 % 1 ? 1 : 0) + ' ' + (g.purchase_unit || '包'); }
   addDraft(iid, qty, stay) {
     const g = this.ing(iid) || {};
     if (this.state.toDraft.some(l => l.iid === iid)) {
@@ -817,13 +848,13 @@ class Component extends DCLogic {
       const g = this.ing(l.iid);
       const rq = this.pkgCeil(g, l.qty); // 送出前強制整包(手改的散量自動進位)
       if (rq !== this.n(l.qty)) adjusted++;
-      return { iid: l.iid, qty: rq };
+      return { iid: l.iid, qty: rq, item_type: l.item_type || 'ingredient' };
     });
     if (!lines.length) { this.notify('叫貨單沒有明細 — 從左側建議加入或手動加原料'); return; }
     const id = this.db.nextId('transfer_order', 'to_id', 'TO-', 4);
     const urg = this.state.tsUrgent;
     this.db.append('transfer_order', { to_id: id, from_loc: this.CENTRAL, to_loc: this.THIS_LOC, status: '叫貨', request_date: this.NOW, ship_date: '', receive_date: '', need_date: this.state.tsNeed || this.addDays(this.TODAY, 1), urgent: urg ? 'TRUE' : '' });
-    for (const l of lines) this.db.append('transfer_line', { tl_id: this.db.nextId('transfer_line', 'tl_id', 'TL-', 3), to_id: id, ingredient_id: l.iid, qty: this.n(l.qty) });
+    for (const l of lines) this.db.append('transfer_line', { tl_id: this.db.nextId('transfer_line', 'tl_id', 'TL-', 3), to_id: id, item_type: l.item_type || 'ingredient', item_id: l.iid, qty: this.n(l.qty) });
     this.setState({ toDraft: [], tsUrgent: false });
     this.notify('✓ ' + id + ' 已送出叫貨(' + lines.length + ' 項' + (urg ? '・急件' : '') + (adjusted ? ';' + adjusted + ' 項散量已進位整包' : '') + ')— 等待中央倉出貨(頁籤 ②)');
   }
@@ -832,11 +863,12 @@ class Component extends DCLogic {
   }
   shipTO(t) {
     const lines = this.t('transfer_line').filter(l => l.to_id === t.to_id);
-    const lack = lines.filter(l => this.stock('ingredient', l.ingredient_id, this.CENTRAL) < this.n(l.qty)).map(l => (this.ing(l.ingredient_id) || {}).name || l.ingredient_id);
+    const lack = lines.filter(l => this.stock(l.item_type || 'ingredient', l.item_id, this.CENTRAL) < this.n(l.qty)).map(l => this.nameOf(l.item_id));
     if (lack.length) { this.notify('✕ 中央庫存不足:' + lack.join('、') + ' — 到「③ 中央採購」進貨後再出'); return; }
     for (const l of lines) {
-      const g = this.ing(l.ingredient_id);
-      this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: 'ingredient', item_id: l.ingredient_id, direction: 'out', qty: this.n(l.qty), source_type: 'transfer_out', source_id: t.to_id, unit_cost: g ? g.latest_unit_cost : 0, txn_date: this.NOW, location_id: this.CENTRAL });
+      const it = l.item_type || 'ingredient';
+      const g = it === 'ingredient' ? this.ing(l.item_id) : null; // 成品無 latest_unit_cost → unit_cost 記 0
+      this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: it, item_id: l.item_id, direction: 'out', qty: this.n(l.qty), source_type: 'transfer_out', source_id: t.to_id, unit_cost: g ? g.latest_unit_cost : 0, txn_date: this.NOW, location_id: this.CENTRAL });
     }
     this.setTOStatus(t.to_id, { status: '已出貨', ship_date: this.NOW });
     this.notify('✓ ' + t.to_id + ' 已出貨 → ' + this.locName(t.to_loc) + ',中央庫存已扣(在途)' + (t.to_loc === this.THIS_LOC ? ' — 回頁籤 ① 確認收貨' : ''));
@@ -845,8 +877,9 @@ class Component extends DCLogic {
     if (t.status !== '已出貨') { this.notify('此單不在「已出貨」狀態,無法收貨'); return; }
     const lines = this.t('transfer_line').filter(l => l.to_id === t.to_id);
     for (const l of lines) {
-      const g = this.ing(l.ingredient_id);
-      this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: 'ingredient', item_id: l.ingredient_id, direction: 'in', qty: this.n(l.qty), source_type: 'transfer_in', source_id: t.to_id, unit_cost: g ? g.latest_unit_cost : 0, txn_date: this.NOW, location_id: this.THIS_LOC });
+      const it = l.item_type || 'ingredient';
+      const g = it === 'ingredient' ? this.ing(l.item_id) : null;
+      this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: it, item_id: l.item_id, direction: 'in', qty: this.n(l.qty), source_type: 'transfer_in', source_id: t.to_id, unit_cost: g ? g.latest_unit_cost : 0, txn_date: this.NOW, location_id: this.THIS_LOC });
     }
     this.setTOStatus(t.to_id, { status: '已收貨', receive_date: this.NOW });
     this.notify('✓ ' + t.to_id + ' 已收貨:' + lines.length + ' 項原料入本店庫存,排程與投料即可使用');
@@ -860,18 +893,20 @@ class Component extends DCLogic {
   partialShipTO(t) {
     const mine = this.t('transfer_line').filter(l => l.to_id === t.to_id);
     const plan = mine.map(l => {
-      const g = this.ing(l.ingredient_id);
-      const cs = Math.max(0, this.stock('ingredient', l.ingredient_id, this.CENTRAL));
-      // 外購原料部分出貨也要整包:可出量向下取整包(半包不出)
-      const avail = this.isPackaged(g) ? Math.floor(cs / this.n(g.conversion_rate)) * this.n(g.conversion_rate) : cs;
+      const it = l.item_type || 'ingredient';
+      const g = it === 'ingredient' ? this.ing(l.item_id) : null;
+      const cs = Math.max(0, this.stock(it, l.item_id, this.CENTRAL));
+      // 外購原料部分出貨也要整包:可出量向下取整包(半包不出);成品/自製半成品直接整量
+      const avail = this.isPackaged(g, it) ? Math.floor(cs / this.n(g.conversion_rate)) * this.n(g.conversion_rate) : cs;
       const s = Math.min(this.n(l.qty), avail);
       return { l, s, r: this.n(l.qty) - s };
     });
     if (!plan.some(p => p.s > 0)) { this.notify('✕ 中央庫存為 0,無法部分出貨 — 先到「③ 中央採購」進貨'); return; }
     if (!plan.some(p => p.r > 0)) { this.shipTO(t); return; }
     for (const p of plan) if (p.s > 0) {
-      const g = this.ing(p.l.ingredient_id);
-      this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: 'ingredient', item_id: p.l.ingredient_id, direction: 'out', qty: p.s, source_type: 'transfer_out', source_id: t.to_id, unit_cost: g ? g.latest_unit_cost : 0, txn_date: this.NOW, location_id: this.CENTRAL });
+      const it = p.l.item_type || 'ingredient';
+      const g = it === 'ingredient' ? this.ing(p.l.item_id) : null;
+      this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: it, item_id: p.l.item_id, direction: 'out', qty: p.s, source_type: 'transfer_out', source_id: t.to_id, unit_cost: g ? g.latest_unit_cost : 0, txn_date: this.NOW, location_id: this.CENTRAL });
     }
     const keep = [];
     for (const x of this.t('transfer_line')) {
@@ -882,7 +917,7 @@ class Component extends DCLogic {
     this.db.replace('transfer_line', keep);
     const boId = this.db.nextId('transfer_order', 'to_id', 'TO-', 4);
     this.db.append('transfer_order', { to_id: boId, from_loc: this.CENTRAL, to_loc: t.to_loc, status: '叫貨', request_date: this.NOW, ship_date: '', receive_date: '', need_date: t.need_date || '', urgent: t.urgent || '' });
-    for (const p of plan) if (p.r > 0) this.db.append('transfer_line', { tl_id: this.db.nextId('transfer_line', 'tl_id', 'TL-', 3), to_id: boId, ingredient_id: p.l.ingredient_id, qty: p.r });
+    for (const p of plan) if (p.r > 0) this.db.append('transfer_line', { tl_id: this.db.nextId('transfer_line', 'tl_id', 'TL-', 3), to_id: boId, item_type: p.l.item_type || 'ingredient', item_id: p.l.item_id, qty: p.r });
     this.setTOStatus(t.to_id, { status: '已出貨', ship_date: this.NOW });
     this.notify('✓ ' + t.to_id + ' 部分出貨 → ' + this.locName(t.to_loc) + ';短缺 ' + plan.filter(p => p.r > 0).length + ' 項轉補貨單 ' + boId + '(採購到貨後再出)');
   }
@@ -1340,7 +1375,8 @@ class Component extends DCLogic {
         icon: NAVICON[s[0]] || 'circle',
         icoStyle: active ? 'color:#0e7490;font-variation-settings:\'FILL\' 1,\'wght\' 400,\'GRAD\' 0,\'opsz\' 20' : '',
         style: (active ? 'background:#e0f0f4;color:#0e7490;font-weight:600' : '') + (navFold ? ';justify-content:center;padding:9px 0' : '') + (!navFold && badge && bs !== 'display:none' ? '' : ''),
-        go: () => this.setState({ screen: s[0] })
+        // 換畫面 = BOM 下鑽麵包屑視為全新 mount（清空 trail 與加料選取器暫存篩選）
+        go: () => this.setState({ screen: s[0], bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' })
       };
     });
     const flags = {}; SCREENS.forEach(s => flags['is' + s[0][0].toUpperCase() + s[0].slice(1)] = S.screen === s[0]);
@@ -2018,18 +2054,19 @@ class Component extends DCLogic {
     // 視角隔離:中央倉沒有「① 門市叫貨」;門市沒有「② 中央倉出貨 / ③ 中央採購」(那是中央倉的管理)
     const puV = atCentral ? (S.puView === 'store' ? 'central' : S.puView) : 'store';
     const allTO = this.t('transfer_order');
-    // 門市↔中央以「包/箱/瓶」溝通:外購原料顯示包數(散裝只用於自製半成品)
-    const qtyUnitTxt = (g, q) => this.isPackaged(g) ? this.pkgTxt(g, q) : kg(this.n(q));
+    // 門市↔中央以「包/箱/瓶」溝通:外購原料顯示包數(散裝只用於自製半成品);type 供成品(整件計數)分流
+    const qtyUnitTxt = (g, q, type) => this.isPackaged(g, type) ? this.pkgTxt(g, q, type) : kg(this.n(q));
     // 原料資訊列(對齊「產品與配方」的顯示):ING id · 供應商 · 分類
     const supNmP = {}; for (const s2 of this.t('supplier')) supNmP[s2.supplier_id] = s2.name;
     const ingSub = g => [g.ingredient_id, supNmP[g.default_supplier_id] || (g.purchase_unit === '自製' ? '自製' : ''), this.gcat(g)].filter(Boolean).join(' · ');
-    const toTxt = id => this.t('transfer_line').filter(l => l.to_id === id).map(l => { const g = this.ing(l.ingredient_id) || {}; return (g.name || l.ingredient_id) + ' ' + qtyUnitTxt(g, l.qty); }).join('、');
+    // 調撥明細一律讀該行 item_type/item_id(多型):原料走 this.ing() 包裝換算;成品(休眠)整件計數
+    const toTxt = id => this.t('transfer_line').filter(l => l.to_id === id).map(l => { const it = l.item_type || 'ingredient'; const g = it === 'ingredient' ? (this.ing(l.item_id) || {}) : {}; return this.nameOf(l.item_id) + ' ' + qtyUnitTxt(g, l.qty, it); }).join('、');
     // 在途/已叫量(本店):狀態=叫貨或已出貨的明細加總 → 建議量會扣除,避免重複叫貨
     const transitMine = iid => {
       let q = 0;
       for (const t of allTO) {
         if (t.to_loc !== this.THIS_LOC || (t.status !== '叫貨' && t.status !== '已出貨')) continue;
-        for (const l of this.t('transfer_line')) if (l.to_id === t.to_id && l.ingredient_id === iid) q += this.n(l.qty);
+        for (const l of this.t('transfer_line')) if (l.to_id === t.to_id && l.item_id === iid) q += this.n(l.qty);
       }
       return q;
     };
@@ -2074,8 +2111,18 @@ class Component extends DCLogic {
         onRemove: () => this.setState({ toDraft: S.toDraft.filter((_, j) => j !== i) })
       };
     });
+    // 叫貨挑選器品項類型(休眠模式):旗標關閉 → 恆為 'ingredient',挑選器與 Phase-1 完全一致;
+    // 旗標開啟(未來)→ 依 tsAddType 分頁切換資料源(原料 / 半成品=自製 / 成品),資料流已就緒。
+    const tItemType = FLAGS.transferItemTypes ? (S.tsAddType || 'ingredient') : 'ingredient';
     // 半成品也可叫貨(中央做好調撥門市);只排除本店未配置的
-    const tsIngOptions = this.t('ingredient').filter(g => this.stocksAt(this.THIS_LOC, g.ingredient_id)).map(g => ({ id: g.ingredient_id, name: g.name, meta: [this.gcat(g), buyable(g) ? '' : '自製'].filter(Boolean).join('・') }));
+    const tsIngOptions = tItemType === 'product'
+      // 成品(休眠):列本站/全站在售成品,整件計數(不走包裝換算)
+      ? this.t('product').filter(p => p.is_active !== 'FALSE' && (p.location_id === this.THIS_LOC || p.location_id === 'ALL')).map(p => ({ id: p.product_id, name: p.name, meta: '件' }))
+      : tItemType === 'semi'
+        // 半成品(休眠):沿用 bomSupBtn 的 __self 慣例 = purchase_unit==='自製',與 BOM 加料選取器同一份清單
+        ? this.t('ingredient').filter(g => g.purchase_unit === '自製' && this.stocksAt(this.THIS_LOC, g.ingredient_id)).map(g => ({ id: g.ingredient_id, name: g.name, meta: [this.gcat(g), '自製'].filter(Boolean).join('・') }))
+        // 原料(旗標關閉時的唯一路徑):本店已配置原料,與 Phase-1 逐位元一致
+        : this.t('ingredient').filter(g => this.stocksAt(this.THIS_LOC, g.ingredient_id)).map(g => ({ id: g.ingredient_id, name: g.name, meta: [this.gcat(g), buyable(g) ? '' : '自製'].filter(Boolean).join('・') }));
     const effTsIng = (this.ing(S.tsAddIng) && buyable(this.ing(S.tsAddIng))) ? S.tsAddIng : (tsIngOptions[0] || {}).id || '';
     const stTO = { '叫貨': ['待中央出貨', C.amb], '已出貨': ['在途 — 可收貨', C.acc], '已收貨': ['已收貨', C.grn], '取消': ['取消', C.mut] };
     const tsMyRows = allTO.filter(t => t.to_loc === this.THIS_LOC).slice().reverse().slice(0, 6).map(t => {
@@ -2095,7 +2142,7 @@ class Component extends DCLogic {
     const shipTOs = allTO.filter(t => t.status === '已出貨');
     const pendingAll = iid => {
       let q = 0;
-      for (const t of pendTOs) for (const l of this.t('transfer_line')) if (l.to_id === t.to_id && l.ingredient_id === iid) q += this.n(l.qty);
+      for (const t of pendTOs) for (const l of this.t('transfer_line')) if (l.to_id === t.to_id && l.item_id === iid) q += this.n(l.qty);
       return q;
     };
     // 採購在途(已下單未到,基本單位):建議量要扣掉,避免重複下單
@@ -2111,10 +2158,11 @@ class Component extends DCLogic {
     const prioSort = (a, b) => ((b.urgent === 'TRUE') - (a.urgent === 'TRUE')) || String(a.need_date || '9999').localeCompare(String(b.need_date || '9999'));
     const tcPending = pendTOs.slice().sort(prioSort).map(t => {
       const ls = this.t('transfer_line').filter(l => l.to_id === t.to_id).map(l => {
-        const g = this.ing(l.ingredient_id) || {};
-        const cs = this.stock('ingredient', l.ingredient_id, this.CENTRAL);
+        const it = l.item_type || 'ingredient';
+        const g = it === 'ingredient' ? (this.ing(l.item_id) || {}) : {};
+        const cs = this.stock(it, l.item_id, this.CENTRAL);
         const ok = cs >= this.n(l.qty);
-        return { name: g.name || l.ingredient_id, sub: ingSub(g), qtyTxt: qtyUnitTxt(g, l.qty), stockTxt: qtyUnitTxt(g, cs), okTxt: ok ? '足夠' : '不足', okStyle: this.tag(ok ? C.grn : C.red), _ok: ok, _s: cs };
+        return { name: this.nameOf(l.item_id), sub: ingSub(g), qtyTxt: qtyUnitTxt(g, l.qty, it), stockTxt: qtyUnitTxt(g, cs, it), okTxt: ok ? '足夠' : '不足', okStyle: this.tag(ok ? C.grn : C.red), _ok: ok, _s: cs };
       });
       const allOk = ls.length > 0 && ls.every(x => x._ok);
       const anyStock = ls.some(x => x._s > 0);
@@ -2284,29 +2332,50 @@ class Component extends DCLogic {
     const prodLocTabs = [{ id: 'all', name: '全部' }].concat(this.t('location').filter(l => l.type !== 'central').map(l => ({ id: l.location_id, name: l.name }))).map(o => ({
       name: o.name,
       style: 'padding:4px 11px;border-radius:7px;cursor:pointer;font-size:12px;user-select:none' + (prodScope === o.id ? ';background:#0e7490;color:#fff;font-weight:600' : ';color:#66707f;border:1px solid #e3e6eb'),
-      go: () => this.setState({ prodLoc: o.id })
+      // 切門市分頁 = 全新情境：清空下鑽 trail 與加料篩選
+      go: () => this.setState({ prodLoc: o.id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' })
     }));
     const prodLocBarStyle = atCentral ? 'display:flex;gap:5px;padding:8px 12px;border-bottom:1px solid #eef0f3;flex-wrap:wrap;align-items:center' : 'display:none';
+    // 左側清單選取 = 全新情境（清 trail + 加料篩選）；鑽入/鑽出/點麵包屑時把選中列捲入可視範圍（block:nearest）
+    const pickSel = id => () => this.setState({ selProd: id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' });
+    const scrollSel = matches => matches ? (el => { if (this._bomScrollWanted) { this._bomScrollWanted = false; requestAnimationFrame(() => el && el.scrollIntoView({ block: 'nearest' })); } }) : null;
     const prodListRows = this.lfilter('lsProd', this.t('product').filter(inProdScope), ['product_id', 'name', 'type']).map(p => ({
       name: p.name, sub: (atCentral ? (this.prodShared(p) ? '共用 · ' : this.prodLocList(p).map(x => this.locName(x)).join('、') + ' · ') : '') + (this.leadOf(p.product_id) ? '跨 ' + this.leadOf(p.product_id) + ' 天' : '當日') + ' · NT$' + p.sale_price,
       rowStyle: S.selProd === p.product_id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
-      onSel: () => this.setState({ selProd: p.product_id })
+      onSel: pickSel(p.product_id), selRef: scrollSel(S.selProd === p.product_id)
     })).concat(selfIngs.map(g => ({
       name: '🫙 ' + g.name, sub: '自製半成品' + (prodScope !== 'all' ? (this.stocksAt(prodScope, g.ingredient_id) ? ' · 已備料' : ' · 共用(未備料)') : '') + ' · 批產 ' + this.fmt(this.n(g.batch_yield) || 1) + ' g · ' + this.n(g.latest_unit_cost).toFixed(2) + '/g',
       rowStyle: S.selProd === g.ingredient_id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
-      onSel: () => this.setState({ selProd: g.ingredient_id })
+      onSel: pickSel(g.ingredient_id), selRef: scrollSel(S.selProd === g.ingredient_id)
     })));
     // 選取產品不在目前地點範圍 → 退回範圍內第一個；半成品共用、不受限
     if (db && prodScope !== 'all') {
       const inSel = (this.prod(S.selProd) && this.prodAtStore(this.prod(S.selProd), prodScope)) || this.isIngId(S.selProd);
-      if (!inSel) { const first = ((this.t('product').filter(inProdScope)[0] || {}).product_id) || ((selfIngs[0] || {}).ingredient_id); if (first && first !== S.selProd) setTimeout(() => this.setState({ selProd: first }), 0); }
+      if (!inSel) { const first = ((this.t('product').filter(inProdScope)[0] || {}).product_id) || ((selfIngs[0] || {}).ingredient_id); if (first && first !== S.selProd) setTimeout(() => this.setState({ selProd: first, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }), 0); }
     }
     const setP = k => e => db.replace('product', this.t('product').map(p => p.product_id === S.selProd ? Object.assign({}, p, { [k]: e.target.value }) : p)) || this.forceUpdate();
     const setR = (rid, k) => e => { db.replace('routing', this.t('routing').map(r => r.routing_id === rid ? Object.assign({}, r, { [k]: e.target.value }) : r)); this.forceUpdate(); };
+    const trail = S.bomTrail || [];
     const bomRows = this.bomOf(S.selProd).map(b => {
       const g = this.ing(b.ingredient_id) || {};
+      // 自製半成品（purchase_unit==='自製'）＝可下鑽其配方；沿用既有慣例，不新增 is_semi 欄
+      const isSemi = g.purchase_unit === '自製';
+      const hasOwnBom = isSemi && this.bomOf(b.ingredient_id).length > 0;
+      const isCycle = isSemi && (b.ingredient_id === S.selProd || trail.indexOf(b.ingredient_id) >= 0);
       return {
         name: g.name, qtyVal: b.qty_per_yield,
+        // 整個名稱格是點擊熱區；pointer-events:auto 覆寫唯讀外層的 none → 店端角色可瀏覽進子配方（不可編輯不變）
+        nameCls: isSemi ? 'bomdrill' : '',
+        nameCellStyle: isSemi ? 'cursor:pointer;pointer-events:auto' : '',
+        semiTagStyle: isSemi ? this.tag(C.amb) + ';margin-left:6px' : 'display:none',
+        cycTagStyle: isCycle ? this.tag(C.red) + ';margin-left:4px' : 'display:none',
+        noRecipeStyle: (isSemi && !hasOwnBom) ? 'color:#9aa1ab;font-size:11px' : 'display:none',
+        chevStyle: isSemi ? 'font-size:16px;color:#9aa1ab;vertical-align:-3px;margin-left:2px' : 'display:none',
+        onDrill: isSemi ? () => {
+          if (isCycle) this.notify('⚠ 此配方在目前路徑中已出現過 — 可能是循環配方,請確認');
+          this._bomScrollWanted = true;
+          this.setState({ selProd: b.ingredient_id, bomTrail: trail.concat([S.selProd]), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' });
+        } : null,
         supTxt: (this.t('supplier').find(s2 => s2.supplier_id === g.default_supplier_id) || {}).name || (g.purchase_unit === '自製' ? '自製' : '—'),
         catTxt: this.gcat(g) || '—',
         onQty: e => { db.replace('bom', this.t('bom').map(x => x.bom_id === b.bom_id ? Object.assign({}, x, { qty_per_yield: e.target.value }) : x)); this.forceUpdate(); },
@@ -2315,6 +2384,19 @@ class Component extends DCLogic {
         onRemove: () => { db.replace('bom', this.t('bom').filter(x => x.bom_id !== b.bom_id)); this.forceUpdate(); }
       };
     });
+    // 麵包屑：祖先鏈只存 id，name 永遠即時查（改名後不顯示舊字）；末段為目前主體，不可點
+    const bomCrumbs = trail.map((id, i) => ({
+      name: this.nameOf(id), title: this.nameOf(id), cls: 'bomcrumb',
+      style: 'color:#0e7490;cursor:pointer;flex:none;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+      sepStyle: i === 0 ? 'display:none' : 'color:#9aa1ab;flex:none',
+      onPick: () => { this._bomScrollWanted = true; this.setState({ selProd: id, bomTrail: trail.slice(0, i), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }); }
+    })).concat([{
+      name: this.nameOf(S.selProd), title: this.nameOf(S.selProd), cls: '',
+      style: 'color:#1b2330;font-weight:600;flex:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+      sepStyle: 'color:#9aa1ab;flex:none', onPick: null
+    }]);
+    // 「用於」反查：半成品是共用主檔，改它的配方會影響所有引用它的上層 — central 顯示影響面（純文字）
+    const usedInParents = [...new Set(this.t('bom').filter(x => x.ingredient_id === S.selProd).map(x => x.product_id))].map(pid => this.nameOf(pid));
     const selfG = this.ing(S.selProd) || {};
     const yieldN = Math.max(this.n(isIngSel ? selfG.batch_yield : selP.default_yield), 0) || 1; // 0/空/負 → 1
     const bCost = this.bomOf(S.selProd).reduce((a, b) => a + this.n(b.qty_per_yield) * this.n((this.ing(b.ingredient_id) || {}).latest_unit_cost), 0);
@@ -2478,7 +2560,15 @@ class Component extends DCLogic {
         this.prunePlan();
         // user_account / role_permission 不在 SCHEMA(pullAll 不含)→ 同步時一併刷新(限能看帳號的 super_admin)
         if (this.hasPerm('screen.accounts')) this.loadAccounts(true);
-        this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 按「② 升級結構(保留資料)」補分頁;若後端太舊請重貼最新 apps-script.js 部署新版本再升級' : (okMsg || '✓ 已從 Google Sheet 載入最新資料'));
+        if (missing.length && db.lastPullError) {
+          // 沒連上後端(network)或工作階段過期(auth)→ 別誤導使用者去「升級結構」
+          this.notify(db.lastPullError === 'auth'
+            ? '⚠ 工作階段已過期 — 請重新登入後再同步'
+            : '✕ 連線失敗 — 未連上後端,請檢查網路或後端 /exec 網址');
+        } else {
+          // 後端有回應、分頁確實不存在(lastPullError===null)→ 引導使用者按「② 升級結構」補分頁
+          this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 按「② 升級結構(保留資料)」補分頁;若後端太舊請重貼最新 apps-script.js 部署新版本再升級' : (okMsg || '✓ 已從 Google Sheet 載入最新資料'));
+        }
       } catch (e2) { this.notify('✕ 同步失敗:' + e2); }
       this.setState({ connBusy: false });
     };
@@ -2928,6 +3018,15 @@ class Component extends DCLogic {
       puCenBadge: pendTOs.length ? '(' + pendTOs.length + ')' : '',
       puHintTxt: atCentral ? '中央倉管理:② 彙總各店叫貨出貨;③ 向供應商採購入中央倉' : '門市不直接向供應商採購:缺料 → 向中央叫貨 → 中央出貨 → 回此頁確認收貨;出貨/採購由中央倉視角管理',
       tsSugRows, tsDraftRows, tsIngOptions, tsMyRows,
+      // 品項類型分頁(休眠):FLAGS.transferItemTypes=false → 整條隱藏(display:none),畫面零變化;
+      // 開啟後才顯示 [原料|半成品|成品],切換只換挑選器資料源(tItemType),不動草稿表格結構
+      tsTypeTabsStyle: FLAGS.transferItemTypes ? 'padding:9px 16px 0' : 'display:none',
+      tsTypeRawStyle: (tItemType === 'ingredient' ? 'background:#0e7490;color:#fff;font-weight:500' : ''),
+      tsTypeSemiStyle: (tItemType === 'semi' ? 'background:#0e7490;color:#fff;font-weight:500' : ''),
+      tsTypeProdStyle: (tItemType === 'product' ? 'background:#0e7490;color:#fff;font-weight:500' : ''),
+      goTsTypeRaw: () => this.setState({ tsAddType: 'ingredient', tsAddIng: '' }),
+      goTsTypeSemi: () => this.setState({ tsAddType: 'semi', tsAddIng: '' }),
+      goTsTypeProd: () => this.setState({ tsAddType: 'product', tsAddIng: '' }),
       tsSugEmpty: tsSugRows.length ? 'display:none' : 'padding:14px 16px;font-size:12px;color:#66707f',
       tsMyEmpty: tsMyRows.length ? 'display:none' : 'font-size:12px;color:#66707f;padding:4px 2px',
       tsAddIng: effTsIng, onTsAddIng: e => this.setState({ tsAddIng: e.target.value }),
@@ -3083,6 +3182,11 @@ class Component extends DCLogic {
       addProdShow: atCentral ? '' : 'display:none',
       prodEditPE: atCentral ? '' : 'pointer-events:none',
       prodRoStyle: atCentral ? 'display:none' : 'padding:9px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;font-size:12px;color:#9a3412;font-weight:500',
+      // 唯讀說明依「這個使用者是否能進中央倉」而定,別把限制誤植給有中央權限的人:
+      //   有中央權限(super_admin/central_ops)看門市 → 指引切到「中央倉」視角;純門市帳號 → 維持「通知中央」
+      prodRoTxt: this.allowedLoc(this.CENTRAL)
+        ? '產品與配方由中央倉維護 — 目前為門市檢視,請切換到上方「中央倉」視角新增或修改配方'
+        : '產品與配方由中央維護,門市僅供檢視(需新增或修改配方請通知中央)',
       pLocStyle: (isIngSel || !atCentral) ? 'display:none' : 'margin-left:8px;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:400',
       pLocChips: (() => {
         const stores = this.t('location').filter(l => l.type !== 'central');
@@ -3116,6 +3220,15 @@ class Component extends DCLogic {
         return (t >= 60 ? (t / 60).toFixed(1) + ' 小時' : t + ' 分') + (ld ? ' · 跨 ' + ld + ' 天' : ' · 當日完成');
       })(),
       bomRows,
+      // ── BOM 多階下鑽:麵包屑放在唯讀外層之外 → 任何角色都可導覽 ──
+      bomCrumbs,
+      bomCrumbStyle: trail.length ? 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid #e3e6eb;border-radius:9px;font-size:12.5px;overflow-x:auto;white-space:nowrap' : 'display:none',
+      bomBackStyle: 'color:#0e7490;cursor:pointer;flex:none;display:inline-flex;align-items:center;gap:1px;font-weight:500;user-select:none',
+      bomBack: () => { if (!trail.length) return; this._bomScrollWanted = true; this.setState({ selProd: trail[trail.length - 1], bomTrail: trail.slice(0, -1), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }); },
+      bomEmptyStyle: bomRows.length ? 'display:none' : 'padding:14px 16px;color:#66707f;font-size:12px;border-top:1px solid #eef0f3;background:#fbfcfd',
+      bomEmptyTxt: atCentral ? '尚無配方 — 從下方「加入」原料開始建立' : '尚無配方(尚未建立)',
+      pUsedInStyle: (isIngSel && atCentral && usedInParents.length) ? 'padding:7px 16px;border-bottom:1px solid #eef0f3;font-size:11.5px;color:#66707f;background:#fbfcfd' : 'display:none',
+      pUsedInTxt: usedInParents.length ? '用於 ' + usedInParents.slice(0, 3).join('、') + (usedInParents.length > 3 ? ' +' + (usedInParents.length - 3) + ' 項' : '') : '',
       // 加原料:先用 廠商/分類 縮小原料清單(目錄大時好找)
       ...(() => {
         const supF = S.bomSupFilter || '';

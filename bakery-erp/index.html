@@ -37,6 +37,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 .btn3:hover{background:#0c6076}
 .btn3o{display:inline-block;font-size:12px;font-weight:500;padding:4px 11px;border-radius:8px;border:1px solid #e3e6eb;color:#1b2330;background:#fff;white-space:nowrap;cursor:pointer;user-select:none}
 .btn3o:hover{background:#f1f4f6}
+.bomdrill:hover{background:#eef6f8}
+.bomcrumb:hover{text-decoration:underline}
 .bar3{height:6px;border-radius:3px;background:#eef0f3;overflow:hidden;flex:1}
 .inp{display:inline-block;padding:5px 10px;border:1px solid #e3e6eb;border-radius:8px;background:#fff;font-size:12.5px;font-variant-numeric:tabular-nums;font-family:'Noto Sans TC',sans-serif;color:#1b2330;box-sizing:border-box}
 .seg{display:inline-flex;border:1px solid #e3e6eb;border-radius:8px;overflow:hidden;font-size:12px;background:#fff}
@@ -671,6 +673,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                       <span class="btn3" onClick="{{tsSubmit}}">送出叫貨</span>
                     </span>
                   </div>
+                  <!-- 品項類型分頁(休眠:FLAGS.transferItemTypes=false 時整條隱藏,畫面與 Phase-1 一致)-->
+                  <div style="{{tsTypeTabsStyle}}"><span class="seg"><span style="{{tsTypeRawStyle}}" onClick="{{goTsTypeRaw}}">原料</span><span style="{{tsTypeSemiStyle}}" onClick="{{goTsTypeSemi}}">半成品</span><span style="{{tsTypeProdStyle}}" onClick="{{goTsTypeProd}}">成品</span></span></div>
                   <table class="t3">
                     <tr><th>原料</th><th class="num">數量</th><th>單位</th><th></th></tr>
                     <sc-for list="{{tsDraftRows}}" as="r" hint-placeholder-count="1">
@@ -1077,17 +1081,26 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
       <!-- ═══ 產品與配方 ═══ -->
       <sc-if value="{{isProducts}}" hint-placeholder-val="{{false}}">
         <div style="display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start" data-screen-label="產品與配方">
-          <div class="pan">
-            <div class="pah" style="font-size:13px">產品<input class="inp" style="margin-left:auto;width:92px;min-width:0;font-weight:400" placeholder="{{prodQ.ph}}" value="{{prodQ.val}}" onChange="{{prodQ.onQ}}"><span class="btn3" style="margin-left:6px;{{addProdShow}}" onClick="{{addProd}}">+ 新增</span></div>
+          <!-- 左側清單自成捲動容器(sticky):鑽入時 scrollIntoView 只捲清單本身,右側編輯器不被帶走 -->
+          <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
+            <div class="pah" style="font-size:13px;flex:none">產品<input class="inp" style="margin-left:auto;width:92px;min-width:0;font-weight:400" placeholder="{{prodQ.ph}}" value="{{prodQ.val}}" onChange="{{prodQ.onQ}}"><span class="btn3" style="margin-left:6px;{{addProdShow}}" onClick="{{addProd}}">+ 新增</span></div>
             <div style="{{prodLocBarStyle}}"><sc-for list="{{prodLocTabs}}" as="t" hint-placeholder-count="3"><span style="{{t.style}}" onClick="{{t.go}}">{{t.name}}</span></sc-for></div>
+            <div style="overflow:auto;flex:1;min-height:0">
             <table class="t3">
               <sc-for list="{{prodListRows}}" as="r" hint-placeholder-count="5">
-                <tr style="{{r.rowStyle}}" onClick="{{r.onSel}}"><td><div style="font-weight:500">{{r.name}}</div><div style="font-size:11px;color:#66707f">{{r.sub}}</div></td></tr>
+                <tr ref="{{r.selRef}}" style="{{r.rowStyle}}" onClick="{{r.onSel}}"><td><div style="font-weight:500">{{r.name}}</div><div style="font-size:11px;color:#66707f">{{r.sub}}</div></td></tr>
               </sc-for>
             </table>
+            </div>
+          </div>
+          <!-- 右欄外框:麵包屑放在唯讀 pointer-events 容器之外,任何角色都能點段落導覽 -->
+          <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+          <div style="{{bomCrumbStyle}}">
+            <span style="{{bomBackStyle}}" onClick="{{bomBack}}"><span class="msi" style="font-size:16px;color:#0e7490;vertical-align:-3px">arrow_back</span>返回</span>
+            <sc-for list="{{bomCrumbs}}" as="c" hint-placeholder-count="2"><span style="{{c.sepStyle}}">›</span><span class="{{c.cls}}" style="{{c.style}}" title="{{c.title}}" onClick="{{c.onPick}}">{{c.name}}</span></sc-for>
           </div>
           <div style="display:flex;flex-direction:column;gap:14px;{{prodEditPE}}">
-            <div style="{{prodRoStyle}}"><span class="msi" style="font-size:15px;vertical-align:-3px;margin-right:4px">lock</span>產品與配方由中央維護,門市僅供檢視(需新增或修改配方請通知中央)</div>
+            <div style="{{prodRoStyle}}"><span class="msi" style="font-size:15px;vertical-align:-3px;margin-right:4px">lock</span><span>{{prodRoTxt}}</span></div>
             <div class="pan">
               <div class="pah"><input class="inp" style="width:130px;font-weight:600" value="{{pName}}" onChange="{{onPName}}"> 配方 BOM
                 <span class="tag3" style="{{pIngTagStyle}}">自製半成品</span>
@@ -1099,10 +1112,11 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                   <span style="color:#66707f">標準產出</span><input class="inp" style="width:64px;text-align:right" type="number" value="{{pYield}}" onChange="{{onPYield}}">
                 </span>
               </div>
+              <div style="{{pUsedInStyle}}"><span class="msi" style="font-size:14px;vertical-align:-2px;margin-right:3px">account_tree</span>{{pUsedInTxt}}</div>
               <table class="t3">
                 <tr><th>原料</th><th>供應商</th><th>分類</th><th class="num">每批用量(g/ml)</th><th class="num" style="{{costColStyle}}">單價</th><th class="num" style="{{costColStyle}}">成本</th><th></th></tr>
                 <sc-for list="{{bomRows}}" as="r" hint-placeholder-count="3">
-                  <tr><td style="font-weight:500">{{r.name}}</td>
+                  <tr><td class="{{r.nameCls}}" style="{{r.nameCellStyle}}" onClick="{{r.onDrill}}"><span style="font-weight:500">{{r.name}}</span><span class="tag3" style="{{r.semiTagStyle}}">自製半成品</span><span class="tag3" style="{{r.cycTagStyle}}">⚠ 循環</span><span style="{{r.noRecipeStyle}}"> · 尚無配方</span><span class="msi" style="{{r.chevStyle}}">chevron_right</span></td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.supTxt}}</td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.catTxt}}</td>
                     <td class="num"><input class="inp" style="width:76px;text-align:right" type="number" value="{{r.qtyVal}}" onChange="{{r.onQty}}"></td>
@@ -1110,6 +1124,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                     <td style="color:#66707f;cursor:pointer" onClick="{{r.onRemove}}">✕</td></tr>
                 </sc-for>
               </table>
+              <div style="{{bomEmptyStyle}}">{{bomEmptyTxt}}</div>
               <div style="padding:10px 16px;border-top:1px solid #e3e6eb;background:#f9fafb;display:flex;flex-direction:column;gap:5px">
                 <div style="display:flex;gap:8px;font-size:10.5px;color:#9aa1ab">
                   <span style="width:106px">篩選:廠商</span><span style="width:100px">篩選:分類</span><span style="flex:1">原料(廠商・分類)</span><span style="width:76px;text-align:right">用量 g/ml</span><span style="width:58px"></span>
@@ -1145,6 +1160,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
               <div style="{{routNoteStyle}}">{{routNote}}</div>
               <div style="padding:8px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">師傅只需維護工序與時間 — 「製作時程/跨日天數」由總工時自動計算(≤8 小時當日完成,之後每滿 24 小時 +1 天),排程逆推與甘特也直接用工序時間。工序時間與設備直接影響「每日排程」的逆推投料時間與甘特負載;點「跨日」標籤可切換</div>
             </div>
+          </div>
           </div>
         </div>
       </sc-if>
