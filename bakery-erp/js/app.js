@@ -67,6 +67,8 @@ class Component extends DCLogic {
       };
       // 單格衝突/無權/列已刪:db 已把該列刷新到最新(或回退樂觀變更),這裡只重繪 + 提示,不整表重載
       this.db.onCellConflict = info => { this.forceUpdate(); if (info && info.msg) this.notify(info.msg); };
+      // 背景版號輪詢合併後:db 已把有變動的表併回(且保留正在編輯的欄位)→ 這裡只重繪,不動焦點/caret、不提示(靜默)
+      this.db.onRefresh = () => this.forceUpdate();
       const c = this.db.cfg || {};
       this.setState({
         ready: true,
@@ -154,6 +156,7 @@ class Component extends DCLogic {
         }
         this.prunePlan();
         this.notify(missing.length ? '⚠ 已同步,但 Sheet 缺分頁:' + missing.join('、') + ' — 後端可能是舊版:重貼最新 apps-script → migrate → 部署新版本' : '✓ 已載入 Google Sheet 最新資料,每筆過帳將即時同步');
+        this.db.startRevPoll(); // 背景版號輪詢(後端有 'revs' 能力才真的輪詢;隱藏/離線/未登入自動暫停)
       })
       .catch(() => this.notify('✕ Sheet 同步失敗,先用本地快取(到「資料連線」檢查)'));
   }

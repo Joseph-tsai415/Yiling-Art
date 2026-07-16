@@ -94,7 +94,8 @@ var PRIMARY_KEY = {
 
 // 本後端支援的能力旗標:前端 pullAll 讀 listAll.caps / whoami.caps 來 feature-detect;
 // 缺 caps(舊後端未重新部署)→ 前端不送 updateCell/deleteRow,退回串行化整表 replace(見 db.js Task#1)。
-var CAPS = ['updateCell', 'deleteRow'];
+//   'revs' = 支援 action=revs 輕量輪詢(只回各表版號、無資料)+ 直接編輯 Sheet 的觸發器偵測;缺此旗標則前端不輪詢。
+var CAPS = ['updateCell', 'deleteRow', 'revs'];
 
 // COST_FIELDS = 成本敏感欄位正規清單。目前後端「無消費者」—— 保留待 IAM 階段的欄位級定價授權(edit.pricing 允許清單,見 #8)。
 // 今天刻意「無寫入閘」:寫入由 canWrite_/REPLACE_ACL + 地點範圍治理;成本「顯示」隱藏是前端較粗的 canCost/feature.cost,不是這份清單。
@@ -485,6 +486,38 @@ function login_(credential) {
 function rev_(sheet) { return Number(PropertiesService.getDocumentProperties().getProperty('rev:' + sheet) || '0'); }
 function bumpRev_(sheet) { var p = PropertiesService.getDocumentProperties(); var n = rev_(sheet) + 1; p.setProperty('rev:' + sheet, String(n)); return n; }
 
+// ── 直接編輯 Sheet 的偵測(可安裝觸發器)──
+// 平時 bumpRev_ 只由 doPost 的寫入處理器觸發,故「有人直接在 Google Sheet UI 改資料」(尤其 super_admin)版號不會前進、
+//   前端輪詢也偵測不到。以下兩個函式讓直接編輯也 bump 版號,搭配 action=revs 輪詢即可背景刷新。
+// ⚠ 必須以「可安裝觸發器」綁定(編輯器 → 觸發條件 → 新增:onEditInstalled=編輯時、onChangeInstalled=變更時);
+//    simple onEdit/onChange 權限受限,無法寫 PropertiesService。安裝一次即可、跨重新部署保留。
+// 註:程式化 setValue(updateCell/replace)不會觸發 onEdit/onChange,故 API 的值寫入不會重複計數;
+//    程式化 appendRow/deleteRow 可能另觸發 onChange(INSERT_ROW/REMOVE_ROW)多 +1 —— 無害,只是讓前端多做一次廉價刷新。
+function onEditInstalled(e) {
+  try { var sh = e && e.range && e.range.getSheet(); if (sh && SYNC_TABLES.indexOf(sh.getName()) >= 0) bumpRev_(sh.getName()); } catch (err) { }
+}
+function onChangeInstalled(e) {
+  // onChange 不帶可靠的受影響分頁 → 取「目前作用中分頁」(手動改列/刪列時即使用者所在分頁,對本案的 super_admin 手動編輯是可靠的)。
+  //   純格式變更略過;非 SYNC_TABLES(scratch/其他 tab)略過。API 的 append/deleteRow 已在 doPost 直接 bump 對應表,故不靠這裡。
+  try {
+    if (e && e.changeType === 'FORMAT') return;
+    var sh = SpreadsheetApp.getActiveSheet();
+    if (sh && SYNC_TABLES.indexOf(sh.getName()) >= 0) bumpRev_(sh.getName());
+  } catch (err) { }
+}
+// 一次性安裝上述可安裝觸發器。從 Apps Script 編輯器選此函式執行一次(授權 ScriptApp 範圍)即可,
+//   或由 setup()/migrate() 盡力自動確保。delete-then-create 防重複安裝。
+function installTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var fn = t.getHandlerFunction();
+    if (fn === 'onEditInstalled' || fn === 'onChangeInstalled') ScriptApp.deleteTrigger(t);
+  });
+  var ss = ss_();
+  ScriptApp.newTrigger('onEditInstalled').forSpreadsheet(ss).onEdit().create();
+  ScriptApp.newTrigger('onChangeInstalled').forSpreadsheet(ss).onChange().create();
+  return 'triggers installed: onEditInstalled(onEdit) + onChangeInstalled(onChange)';
+}
+
 // ── cell-level 正規化:必須與前端 db.js 的 norm() + String() 完全一致,否則逐格比對(updateCell)永遠假 conflict。──
 //   norm_():YYYY/M/D → YYYY-MM-DD(補零);ISO「…THH:MM…」→「YYYY-MM-DD HH:MM」(對齊前端 norm 的非-Z/非毫秒分支)。
 //   刻意不做前端 norm 的 new Date() 分支(Z/含毫秒):Sheet 存回的日期不是那種字串(純日期→Date 物件、日期時間→以 q() 存成文字),
@@ -553,6 +586,15 @@ function doGet(e) {
     if (!sess) return json_({ ok: false, error: 'unauthorized' });
   }
   if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role), caps: CAPS } : { ok: true, role: '', msg: '後端未啟用登入', caps: CAPS });
+  // 輕量版號輪詢:只回「主同步表(SYNC_TABLES)」各自 rev(整數),不讀任何資料 → 前端可低成本定期輪詢偵測「有人改過」
+  //   (含 super_admin 直接改 Sheet,靠安裝的觸發器 bump)。單一 property store 讀取;未寫過的表回 0(給前端完整可 diff 的 map)。
+  //   只含 SYNC_TABLES(略過 user_account/role_permission,那兩張前端另以 loadAccounts 處理)。整數版號無敏感資訊,故不做 scope/role 過濾(仍需有效 token)。
+  if (action === 'revs') {
+    var propsR = PropertiesService.getDocumentProperties().getProperties();
+    var revs = {};
+    SYNC_TABLES.forEach(function (t) { revs[t] = Number(propsR['rev:' + t] || '0'); });
+    return json_({ ok: true, revs: revs });
+  }
   if (action === 'setup') {
     if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     setup(); return json_({ ok: true, msg: 'setup 完成,已建立 ' + Object.keys(TABLES).length + ' 個分頁' });
@@ -755,6 +797,7 @@ function setup() {
     (SEED[name] || []).forEach(function (r) { sh.appendRow(r); });
     sh.setFrozenRows(1);
   });
+  try { installTriggers(); } catch (err) { } // 盡力自動確保直接編輯偵測觸發器(權限不足時靜默略過,改由編輯器手動跑 installTriggers)
 }
 
 // ─── 升級表頭(不清資料):缺分頁補建、舊欄位依名稱對映、新欄位補預設值 ───
@@ -799,6 +842,7 @@ function migrate() {
     defaultPermRows_().forEach(function (r) { rp.appendRow(r); });
     report.push('role_permission:種入預設權限矩陣');
   }
+  try { installTriggers(); } catch (err) { } // 盡力自動確保直接編輯偵測觸發器(權限不足時靜默略過,改由編輯器手動跑 installTriggers)
   Logger.log(report.join('\n') || '全部已是最新結構');
   return report;
 }

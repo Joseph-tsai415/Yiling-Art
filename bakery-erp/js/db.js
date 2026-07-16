@@ -191,6 +191,28 @@ const CELL_MAX_INFLIGHT = 5;
 // Sheet 會把日期時間字串轉成 1899 基準序號 → 寫入前對「日期+時間」與「純時間(15:30)」加前置單引號存成文字(日期單獨值不受影響)。
 // replace 與 updateCell 兩條寫入路徑共用此規則(勿各自複寫,避免漂移)。
 const quoteDT = v => typeof v === 'string' && (/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}/.test(v) || /^\d{1,2}:\d{2}$/.test(v)) ? "'" + v : v;
+// 背景版號輪詢間隔(30–60s 取中);tab 隱藏 / 離線 / 非雲端 / 未登入 / 後端無 'revs' 能力時暫停。
+const REV_POLL_MS = 45000;
+// Sheet 讀回值正規化:日期序列 / ISO 時戳 → 'YYYY-MM-DD'(或 'YYYY-MM-DD HH:MM');其餘原樣。
+// pullAll 與背景合併(_listObjects)共用同一份 → 兩條讀取路徑正規化一致,單格 CAS 的 old 比對不會漂移。
+const normCell = c => {
+  const s = String(c);
+  let m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(s);
+  if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
+    if (/Z$/.test(s) || /\.\d{3}/.test(s)) {
+      const d = new Date(s);
+      if (!isNaN(d)) {
+        const p = n => String(n).padStart(2, '0');
+        const ds = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+        const t = p(d.getHours()) + ':' + p(d.getMinutes());
+        return t === '00:00' ? ds : ds + ' ' + t;
+      }
+    }
+    return s.slice(0, 10) + ' ' + s.slice(11, 16);
+  }
+  return c;
+};
 // v2 結構需搭配 v2 版 apps-script.js(TABLES 含 location_id 與調撥表);
 // 既有 Sheet 升級:貼新腳本 → 執行 setup → 部署新版本(/exec 網址不變)。
 // 預設 /exec 網址由部署注入(window.BAKERY_CFG)或 google-config.local.js 提供;佔位符視為未設定。
@@ -303,6 +325,9 @@ export class DB {
     this._cellInflight = 0; // 目前進行中的 updateCell 數(併發上限用)
     this.caps = new Set(); // 後端能力集(pullAll 的 listAll 回傳 caps);含 'updateCell' 才走單格路徑,否則退回整表 replace
     this.onCellConflict = null; // (info) => void:單格衝突/列不存在/無權 — 只刷新該列/欄並提示,取代整表重載
+    this.onRefresh = null; // (changedSheets[]) => void:背景版號輪詢合併後通知上層重繪(合併已保留正在編輯的欄位)
+    this._revTimer = null; this._revStarted = false; // 背景輪詢:計時器 + 是否已啟動(見 startRevPoll/_pollRevs)
+    this._revWake = () => this._scheduleRevPoll(true); // visibilitychange(回前景)/online/offline → 重新評估;喚醒時立即補一輪
     this.lastPullError = null; // pullAll 失敗型態:'auth'(工作階段過期)/ 'network'(整趟都沒連上可運作後端)/ null(後端有回應);呼叫端據此決定是否 migrate
     this._batchUnsupported = false; // 能力快取:此後端已確認不支援 action=listAll → 之後直接逐表,不再探測
     // 頁面卸載/切到背景前,把還在防抖窗、尚未送出的整表覆寫立刻補送(否則重載後 pullAll 會用 Sheet 覆蓋本地 → 防抖窗內的最後編輯遺失)。
@@ -397,24 +422,7 @@ export class DB {
   async pullAll() {
     const names = Object.keys(SCHEMA);
     this.lastPullError = null; // 每次重置;呼叫端讀取以區分 auth / network(沒連上後端)/ 結構缺分頁(null)
-    const norm = c => {
-      const s = String(c);
-      let m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(s);
-      if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
-      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
-        if (/Z$/.test(s) || /\.\d{3}/.test(s)) {
-          const d = new Date(s);
-          if (!isNaN(d)) {
-            const p = n => String(n).padStart(2, '0');
-            const ds = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-            const t = p(d.getHours()) + ':' + p(d.getMinutes());
-            return t === '00:00' ? ds : ds + ' ' + t;
-          }
-        }
-        return s.slice(0, 10) + ' ' + s.slice(11, 16);
-      }
-      return c;
-    };
+    const norm = normCell; // 讀回值正規化(模組層單一定義,與背景合併共用)
     let results;
     if (this.cfg.kind === 'gapi') {
       results = await Promise.all(names.map(n => this.gapiList(n).catch(() => null)));
@@ -753,6 +761,64 @@ export class DB {
     if (!row) return;
     row[field] = val === undefined ? '' : String(val);
     this.raw[sheet] = this._csv(sheet); this.persist();
+  }
+  // ── 背景版號輪詢 + 外科式合併(Task #11)──────────────────────────────────────────
+  // 每 REV_POLL_MS 打 action=revs(只回各表版號),和本地 this.rev 逐表比對;落後的表逐表重拉並合併。
+  // 合併絕不覆蓋尚未結算的本地編輯:逐列走 _applyRow(保留該列仍在 _cellQ 的欄位),他人刪的列(本地也沒待送編輯)才移除。
+  // 暫停條件:tab 隱藏 / 離線 / 非雲端 / 未登入 / 後端無 'revs' 能力。由 app.js 於 startCloud 後呼叫 startRevPoll。
+  startRevPoll() {
+    if (this._revStarted) return;
+    this._revStarted = true;
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this._revWake);
+    if (typeof window !== 'undefined') { window.addEventListener('online', this._revWake); window.addEventListener('offline', this._revWake); }
+    this._scheduleRevPoll();
+  }
+  stopRevPoll() { this._revStarted = false; clearTimeout(this._revTimer); this._revTimer = null; }
+  _revEligible() {
+    return this.mode === 'cloud' && !!this.authToken() && this.caps.has('revs')
+      && (typeof document === 'undefined' || document.visibilityState !== 'hidden')
+      && (typeof navigator === 'undefined' || navigator.onLine !== false);
+  }
+  _scheduleRevPoll(soon) {
+    clearTimeout(this._revTimer); this._revTimer = null;
+    if (!this._revStarted || !this._revEligible()) return;
+    // soon=喚醒(切回前景/恢復連線)→ 短延遲立即補一輪(防抖連續事件);常態則間隔 + 抖動,避免多客戶端同步齊打後端。
+    const delay = soon ? 1200 : REV_POLL_MS - 8000 + Math.floor(Math.random() * 16000);
+    this._revTimer = setTimeout(() => this._pollRevs(), delay);
+  }
+  async _pollRevs() {
+    this._revTimer = null;
+    if (!this._revStarted || !this._revEligible()) return; // 條件消失(隱藏/離線/登出)→ 停;恢復時 _revWake 會重排
+    try {
+      const j = await this.api('action=revs');
+      const rv = j && j.ok && j.revs ? j.revs : null;
+      if (rv) {
+        const changed = [];
+        for (const n of Object.keys(SCHEMA)) {
+          if (BATCH_EXCLUDE.indexOf(n) >= 0) continue;                         // 無界帳本(stock_ledger/sales_line):背景不整表重拉(回應太大),手動重新同步時才對齊
+          if (rv[n] == null || Number(rv[n]) <= (this.rev[n] || 0)) continue;   // 後端版號未超前 → 略過
+          const rq = this._repQ[n]; if (rq && (rq.pending || rq.inflight)) continue; // 有待送整表覆寫 → 下輪再併(避免和自己的寫入互踩)
+          const lj = await this.api('action=list&sheet=' + n).catch(() => null);
+          if (lj && lj.ok && Array.isArray(lj.rows)) {
+            this._mergeSheet(n, this._listObjects(n, lj.rows));
+            this.rev[n] = lj.rev != null ? lj.rev : Number(rv[n]);
+            changed.push(n);
+          }
+        }
+        if (changed.length && this.onRefresh) this.onRefresh(changed); // 上層重繪(合併已保留正在編輯的欄位)
+      }
+    } catch (e) { /* 靜默:下輪再試 */ }
+    this._scheduleRevPoll();
+  }
+  // action=list 的原始 rows(陣列的陣列,第 0 列為表頭)→ 正規化後的列物件(與 this.t[name] 同型;與 pullAll 同一條正規化)。
+  _listObjects(name, rawRows) {
+    const csv = migrateCSV(name, rawRows.map(r => r.map(c => esc(normCell(c === null || c === undefined ? '' : String(c)))).join(',')).join('\n'));
+    return toObjects(parseCSV(csv));
+  }
+  // 背景合併(保守 v1):只 upsert 後端最新列,背景絕不刪列 -- _applyRow 逐欄保留仍在 _cellQ 的本地編輯,
+  // 未同步的本地新增列(append)也不會被誤刪。他人刪的列於手動「重新同步」或下次觸及該列(updateCell -> row_not_found)時對齊。
+  _mergeSheet(name, freshObjs) {
+    freshObjs.forEach(fr => this._applyRow(name, this._matchOf(name, fr), fr));
   }
   nextId(name, field, prefix, pad) {
     let mx = 0;
