@@ -39,6 +39,41 @@ export const TABLE_COLUMNS = {
   role_permission:    ['role_id', 'perm_key', 'allow']
 };
 
+// 每張表的主鍵欄(cell-level updateCell / deleteRow 用來定位列;複合鍵列多欄)。
+// 不變式(schema-guard 稽核):每個鍵欄都必須存在於該表的 TABLE_COLUMNS,且能唯一定位一列。
+// 前端(db.js 依此組 key)與後端(apps-script.js 的 <<gen:keys>> 由 gen:schema 產生)共用同一份 → 零漂移。
+// 注意:cell-level 是「選用」的 —— 只有前端選擇逐格編輯的表才會用到 updateCell;
+//   會被整表重寫的草稿表(plan_draft/po_draft)與 append-only 帳本(stock_ledger/sales_line/waste/…)
+//   仍走 append / replace,主鍵在此僅供 deleteRow 或未來使用。
+export const PRIMARY_KEY = {
+  location:           ['location_id'],
+  location_stock:     ['location_id', 'ingredient_id'],
+  ingredient:         ['ingredient_id'],
+  product:            ['product_id'],
+  supplier:           ['supplier_id'],
+  bom:                ['bom_id'],
+  routing:            ['routing_id'],
+  equipment:          ['equipment_id'],
+  category:           ['category_id'],
+  staff:              ['staff_id'],
+  line:               ['line_id'],
+  station:            ['station_id'],
+  assignment:         ['assign_id'],
+  purchase_line:      ['po_id', 'ingredient_id'], // 業務鍵(一張採購單一原料一列);若同單同料多列,前端該表改走 replace
+  production_order:   ['prod_id'],
+  plan_draft:         ['line_id'],
+  po_draft:           ['line_id'],
+  sales_line:         ['idempotency_key'], // so_id 非唯一;唯一鍵為冪等鍵(append-only,通常不逐格編輯)
+  waste:              ['waste_id'],
+  stocktake:          ['stocktake_id'],
+  transfer_order:     ['to_id'],
+  transfer_line:      ['tl_id'],
+  ingredient_request: ['req_id'],
+  stock_ledger:       ['ledger_id'],
+  user_account:       ['user_id'],
+  role_permission:    ['role_id', 'perm_key']
+};
+
 // 前端主同步(pullAll)拉取的表 = 全部表扣掉帳號/權限這兩張後端專用表.
 export const AUTH_TABLES = ['user_account', 'role_permission'];
 export const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => AUTH_TABLES.indexOf(t) < 0);
@@ -55,3 +90,13 @@ export const DEFAULT_PERMS = {
   store_kitchen: ['screen.production', 'screen.products'],
   store_front: ['screen.sales']
 };
+
+// COST_FIELDS = 成本敏感欄位的「正規清單」(欄名層級)。目前無任何程式消費者 —— 刻意保留為未來
+//   IAM 階段「欄位級定價授權」(edit.pricing 允許清單,見 #8 與權限模型筆記)的單一來源。
+// 澄清目前實情(勿誤解):
+//   • 今天「沒有」任何 feature.cost 寫入閘 —— 寫入一律由 sheet 級 ACL(canWrite_/REPLACE_ACL)+ 地點範圍治理。
+//   • 成本「顯示」隱藏走的是較粗的 canCost/feature.cost 閘(app.js),不是逐一比對這份欄名清單。
+//   • 切勿重加 feature.cost 寫入 DENY —— 會打斷 store_kitchen 的 finish() 與 store_admin 的原料設定
+//     (那些合法角色本就沒有 feature.cost;曾短暫加過後移除)。
+// 涵蓋:ingredient 的 latest_unit_cost/quote_price/quote_price_pre/tax_rate,以及任何 unit_cost 欄(帳本/明細)。
+export const COST_FIELDS = ['latest_unit_cost', 'quote_price', 'quote_price_pre', 'tax_rate', 'unit_cost'];

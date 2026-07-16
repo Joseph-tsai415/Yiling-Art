@@ -60,6 +60,49 @@ var TABLES = {
 };
 // <</gen:tables>>
 
+// 每張表主鍵欄(cell-level updateCell / deleteRow 以此定位列)— 由 gen:schema 依 js/schema.js 產生
+// <<gen:keys>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改主鍵請改 js/schema.js)
+var PRIMARY_KEY = {
+  location: ['location_id'],
+  location_stock: ['location_id', 'ingredient_id'],
+  ingredient: ['ingredient_id'],
+  product: ['product_id'],
+  supplier: ['supplier_id'],
+  bom: ['bom_id'],
+  routing: ['routing_id'],
+  equipment: ['equipment_id'],
+  category: ['category_id'],
+  staff: ['staff_id'],
+  line: ['line_id'],
+  station: ['station_id'],
+  assignment: ['assign_id'],
+  purchase_line: ['po_id', 'ingredient_id'],
+  production_order: ['prod_id'],
+  plan_draft: ['line_id'],
+  po_draft: ['line_id'],
+  sales_line: ['idempotency_key'],
+  waste: ['waste_id'],
+  stocktake: ['stocktake_id'],
+  transfer_order: ['to_id'],
+  transfer_line: ['tl_id'],
+  ingredient_request: ['req_id'],
+  stock_ledger: ['ledger_id'],
+  user_account: ['user_id'],
+  role_permission: ['role_id', 'perm_key']
+};
+// <</gen:keys>>
+
+// 本後端支援的能力旗標:前端 pullAll 讀 listAll.caps / whoami.caps 來 feature-detect;
+// 缺 caps(舊後端未重新部署)→ 前端不送 updateCell/deleteRow,退回串行化整表 replace(見 db.js Task#1)。
+var CAPS = ['updateCell', 'deleteRow'];
+
+// COST_FIELDS = 成本敏感欄位正規清單。目前後端「無消費者」—— 保留待 IAM 階段的欄位級定價授權(edit.pricing 允許清單,見 #8)。
+// 今天刻意「無寫入閘」:寫入由 canWrite_/REPLACE_ACL + 地點範圍治理;成本「顯示」隱藏是前端較粗的 canCost/feature.cost,不是這份清單。
+// 切勿重加 feature.cost 寫入 DENY(會打斷 store_kitchen finish() / store_admin 原料設定)。由 gen:schema 依 js/schema.js 產生
+// <<gen:costfields>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改成本欄請改 js/schema.js)
+var COST_FIELDS = ['latest_unit_cost', 'quote_price', 'quote_price_pre', 'tax_rate', 'unit_cost'];
+// <</gen:costfields>>
+
 // 前端主同步(pullAll)與 listAll 批次讀取的分頁清單 — 由 gen:schema 依 js/schema.js 產生
 // <<gen:synctables>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改結構請改 js/schema.js)
 var SYNC_TABLES = ['location', 'location_stock', 'ingredient', 'product', 'supplier', 'bom', 'routing', 'equipment', 'category', 'staff', 'line', 'station', 'assignment', 'purchase_line', 'production_order', 'plan_draft', 'po_draft', 'sales_line', 'waste', 'stocktake', 'transfer_order', 'transfer_line', 'ingredient_request', 'stock_ledger'];
@@ -442,6 +485,66 @@ function login_(credential) {
 function rev_(sheet) { return Number(PropertiesService.getDocumentProperties().getProperty('rev:' + sheet) || '0'); }
 function bumpRev_(sheet) { var p = PropertiesService.getDocumentProperties(); var n = rev_(sheet) + 1; p.setProperty('rev:' + sheet, String(n)); return n; }
 
+// ── cell-level 正規化:必須與前端 db.js 的 norm() + String() 完全一致,否則逐格比對(updateCell)永遠假 conflict。──
+//   norm_():YYYY/M/D → YYYY-MM-DD(補零);ISO「…THH:MM…」→「YYYY-MM-DD HH:MM」(對齊前端 norm 的非-Z/非毫秒分支)。
+//   刻意不做前端 norm 的 new Date() 分支(Z/含毫秒):Sheet 存回的日期不是那種字串(純日期→Date 物件、日期時間→以 q() 存成文字),
+//   且 new Date() 會用後端時區換算而與前端本地時區不一致 → 只留字串切片分支,兩端結果才一定相同。
+function norm_(s) {
+  s = String(s);
+  var m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(s);
+  if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return s.slice(0, 10) + ' ' + s.slice(11, 16);
+  return s;
+}
+// 儲存格現值 → 前端看到的同一個字串:Date 物件先照 list/listAll 一致地格式化成 yyyy-MM-dd(純日期會丟掉時間,前端讀取也一樣丟),
+//   其餘一律 String()(數字 38→"38"、12.5→"12.5"、空→""),再套 norm_。
+function cellStr_(v, tz) {
+  var s = (v instanceof Date) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(v);
+  return norm_(s);
+}
+// 整列 → {表頭:正規化字串} 物件(conflict 回應用,前端據此只刷新該列不整表重載)。
+function rowObj_(head, rowVals, tz) {
+  var o = {};
+  for (var i = 0; i < head.length; i++) o[head[i]] = cellStr_(rowVals[i], tz);
+  return o;
+}
+// 相等判定(cell-level 比對用):先字串比;若兩邊皆非空且都能轉數字,以「數值」比(1.5==1.50、12==12.0)。
+//   與 flow-spec §3.3 一致 —— Sheet 會把 "12" 轉成數字、丟掉尾隨零,若只做字串比會假 conflict。空字串不當 0(Number('')===0)。
+function cellEq_(a, b) {
+  if (a === b) return true;
+  if (a === '' || b === '') return false;
+  var na = Number(a), nb = Number(b);
+  if (!isNaN(na) && !isNaN(nb)) return na === nb;
+  return false;
+}
+// 以 match 物件 {欄名:值,…} 定位列:回傳 {rowNum(1-based), count}。0=找不到、>1=無法唯一定位(ambiguous,拒寫)。
+//   每個 match 欄都以 cellStr_ 正規化後、用 cellEq_ 比對(與現值/主鍵同一套規則,含數值容忍)。支援單一或複合鍵。
+function findRowByMatch_(sh, head, match, tz) {
+  var cols = match ? Object.keys(match) : [];
+  if (!cols.length) return { rowNum: -1, count: 0 };
+  var idxs = cols.map(function (c) { return head.indexOf(c); });
+  for (var k = 0; k < idxs.length; k++) if (idxs[k] < 0) return { rowNum: -1, count: 0 };
+  var last = sh.getLastRow();
+  if (last < 2) return { rowNum: -1, count: 0 };
+  var data = sh.getRange(2, 1, last - 1, head.length).getValues();
+  var found = -1, count = 0;
+  for (var r = 0; r < data.length; r++) {
+    var ok = true;
+    for (var j = 0; j < idxs.length; j++) {
+      if (!cellEq_(cellStr_(data[r][idxs[j]], tz), String(match[cols[j]] == null ? '' : match[cols[j]]))) { ok = false; break; }
+    }
+    if (ok) { count++; if (found < 0) found = r + 2; }
+  }
+  return { rowNum: found, count: count };
+}
+// match 至少要涵蓋該表主鍵欄(schema.js PRIMARY_KEY)→ 保證唯一定位。前端以 PRIMARY_KEY 組 match 故恆成立;此為防呆。
+function keyComplete_(sheet, match) {
+  var pk = PRIMARY_KEY[sheet];
+  if (!pk) return true; // 未定義主鍵的表不做此檢查(仍受 ambiguous_match 保護)
+  for (var i = 0; i < pk.length; i++) if (!match || match[pk[i]] === undefined || match[pk[i]] === null) return false;
+  return true;
+}
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'tables';
   var sess = null;
@@ -449,7 +552,7 @@ function doGet(e) {
     sess = resolveSess_(e && e.parameter && e.parameter.token);
     if (!sess) return json_({ ok: false, error: 'unauthorized' });
   }
-  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role) } : { ok: true, role: '', msg: '後端未啟用登入' });
+  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role), caps: CAPS } : { ok: true, role: '', msg: '後端未啟用登入', caps: CAPS });
   if (action === 'setup') {
     if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
     setup(); return json_({ ok: true, msg: 'setup 完成,已建立 ' + Object.keys(TABLES).length + ' 個分頁' });
@@ -481,7 +584,7 @@ function doGet(e) {
       });
       sheets[nameA] = { rows: filterRows_(nameA, rowsA, scopeA), rev: revA };
     }
-    return json_({ ok: true, sheets: sheets });
+    return json_({ ok: true, sheets: sheets, caps: CAPS }); // caps:前端 feature-detect cell-level;缺 caps=舊後端 → 退回串行化 replace
   }
   if (action === 'list') {
     if ((e.parameter.sheet === 'user_account' || e.parameter.sheet === 'role_permission') && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
@@ -546,6 +649,62 @@ function doPost(e) {
       shR.getRange(1, 1, data.length, headersR.length).setValues(data);
       shR.setFrozenRows(1);
       return json_({ ok: true, replaced: data.length - 1, rev: bumpRev_(body.sheet) });
+    }
+
+    // 逐格比對更新(cell-level compare-and-set):{"action":"updateCell","sheet","match":{欄:值,…},"field":欄名,"old":本地現值,"new":新值}
+    //   match 物件唯一定位一列(單一或複合鍵);欄名定位欄;現值正規化後 == old(含數值容忍)才寫 new,
+    //   否則回 conflict(附現值 current/value + 整列最新值 row,前端只刷該列不整表重載)。
+    //   權限:寫入授權一律走 canWrite_/REPLACE 級 ACL(哪個角色能寫該表)+ 地點範圍,與舊寫入路徑一致。
+    //   成本欄「寫入」不另擋:feature.cost 現為「顯示」權(前端以 canCost/feature.cost 粗粒度隱藏成本 UI,非依 COST_FIELDS 欄名清單),欄位級定價寫入授權待 IAM 設計定案再加 —
+    //   刻意保持後端與角色模型無關(IAM 仍 POC),避免把未定案的政策寫死。與 replace 共用 doPost 外層 ScriptLock → 讀-比-寫天生原子。
+    if (body.action === 'updateCell') {
+      if (!canWrite_(sess, body.sheet, 'updateCell')) return json_({ ok: false, error: 'forbidden' });
+      if (body.sheet === 'user_account' && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+      if (!keyComplete_(body.sheet, body.match)) return json_({ ok: false, error: 'incomplete_key' }); // match 未含主鍵欄 → 可能無法唯一定位,拒寫(前端以 PRIMARY_KEY 組 match,正常不會發生)
+      var shU = ss_().getSheetByName(body.sheet);
+      if (!shU) return json_({ ok: false, error: '找不到分頁:' + body.sheet + '(請先執行 setup)' });
+      var tzU = Session.getScriptTimeZone();
+      var headU = shU.getRange(1, 1, 1, shU.getLastColumn()).getValues()[0].map(String);
+      var fCol = headU.indexOf(body.field);
+      if (fCol < 0) return json_({ ok: false, error: 'unknown_field' });
+      var locU = findRowByMatch_(shU, headU, body.match, tzU);
+      if (locU.count === 0) return json_({ ok: false, error: 'row_not_found', rev: rev_(body.sheet) }); // 該列已被刪 / 尚未同步 → 前端丟掉或刷新該列,絕不自動新增
+      if (locU.count > 1) return json_({ ok: false, error: 'ambiguous_match', rev: rev_(body.sheet) }); // match 未唯一定位(資料完整性問題)→ 拒寫
+      var rowNumU = locU.rowNum;
+      var rowValsU = shU.getRange(rowNumU, 1, 1, headU.length).getValues()[0];
+      // 地點範圍:目標列須在範圍內;若改的正是地點欄,改後也須留在範圍內(防把別人的列搬進/搬出範圍)
+      if (scope) {
+        if (!rowInScope_(body.sheet, headU, rowValsU, scope)) return json_({ ok: false, error: 'forbidden_location' });
+        var afterU = rowValsU.slice(); afterU[fCol] = body.new;
+        if (!rowInScope_(body.sheet, headU, afterU, scope)) return json_({ ok: false, error: 'forbidden_location' });
+      }
+      var curU = cellStr_(rowValsU[fCol], tzU);
+      if (!cellEq_(curU, String(body.old == null ? '' : body.old))) { // 現值已與前端所見不同 → 有人先改過同一格
+        return json_({ ok: false, error: 'conflict', field: body.field, current: curU, value: curU, row: rowObj_(headU, rowValsU, tzU), rev: rev_(body.sheet) });
+      }
+      shU.getRange(rowNumU, fCol + 1).setValue(body.new); // new 已由前端套 q()(日期/時間加引號存文字);與 replace 一致
+      var writtenU = cellStr_(shU.getRange(rowNumU, fCol + 1).getValue(), tzU); // 讀回實際落盤值(Sheet 可能把 "12" 轉數字)→ 正規化回傳給前端 rebase old
+      return json_({ ok: true, rev: bumpRev_(body.sheet), value: writtenU }); // 版號 +1 → 讓別人未送出的整表 replace 變 stale(cell 之間互不 conflict,靠逐格比對)
+    }
+
+    // 逐列刪除(structural delete):{"action":"deleteRow","sheet","match":{欄:值,…}}。以 match 定位並刪整列;找不到 = 已被刪 → 冪等回 ok。
+    if (body.action === 'deleteRow') {
+      if (!canWrite_(sess, body.sheet, 'deleteRow')) return json_({ ok: false, error: 'forbidden' });
+      if (body.sheet === 'user_account' && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
+      if (!keyComplete_(body.sheet, body.match)) return json_({ ok: false, error: 'incomplete_key' });
+      var shD = ss_().getSheetByName(body.sheet);
+      if (!shD) return json_({ ok: false, error: '找不到分頁:' + body.sheet + '(請先執行 setup)' });
+      var tzD = Session.getScriptTimeZone();
+      var headD = shD.getRange(1, 1, 1, shD.getLastColumn()).getValues()[0].map(String);
+      var locD = findRowByMatch_(shD, headD, body.match, tzD);
+      if (locD.count === 0) return json_({ ok: true, deleted: 0, rev: rev_(body.sheet) }); // 已不存在 → 冪等成功(重送安全)
+      if (locD.count > 1) return json_({ ok: false, error: 'ambiguous_match', rev: rev_(body.sheet) });
+      if (scope) {
+        var rowValsD = shD.getRange(locD.rowNum, 1, 1, headD.length).getValues()[0];
+        if (!rowInScope_(body.sheet, headD, rowValsD, scope)) return json_({ ok: false, error: 'forbidden_location' });
+      }
+      shD.deleteRow(locD.rowNum);
+      return json_({ ok: true, deleted: 1, rev: bumpRev_(body.sheet) });
     }
 
     // append 角色 ACL — 與 replace 同為 deny-by-default(未列 sheet / 名單不含此角色 → 只有 super_admin)。

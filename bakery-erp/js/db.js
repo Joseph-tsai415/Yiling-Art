@@ -7,7 +7,7 @@
 //  3) 舊資料(真實快照/本地快取)載入時自動補 location_id=LOC-A(歷史異動皆屬本店)
 //  4) 獨立 localStorage 鍵與連線設定;預設「本地模式」,避免把 v2 新結構誤寫進 v1 的 Sheet
 import { SEED_OVERRIDE } from './seed-data.js'; // 真實資料庫快照(門市A 歷史資料)
-import { TABLE_COLUMNS, SYNC_TABLES, BATCH_EXCLUDE } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js);BATCH_EXCLUDE=不併入 listAll 的無界帳本
+import { TABLE_COLUMNS, SYNC_TABLES, BATCH_EXCLUDE, PRIMARY_KEY } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js);BATCH_EXCLUDE=不併入 listAll 的無界帳本;PRIMARY_KEY=各表主鍵欄(單格寫入定位列)
 
 // SCHEMA = 主同步表(結構單一來源見 ./schema.js);帳號/權限表為後端專用,不在主同步.
 export const SCHEMA = Object.fromEntries(SYNC_TABLES.map(t => [t, TABLE_COLUMNS[t]]));
@@ -182,6 +182,15 @@ const CFG_KEY = 'bakery_remote_cfg_v2';
 const MODE_KEY = 'bakery_api_mode_v2';
 const AUTH_KEY = 'bakery_auth_v1'; // {token, name, email, role} — GAS 後端核發的工作階段;存 sessionStorage:同分頁重新整理免重登(仍會 whoami 重驗),關閉分頁即需重新登入
 const GBASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+// 整表覆寫(replace)遠端寫入的防抖窗:連打時多次 keystroke 併成一次寫入(本地 this.t 仍每鍵即時更新,輸入不受影響)。
+// 與 app.js 既有的 plan/po/帳號防抖(800ms)同節奏;真正杜絕「自我 conflict」的是串行化(每表最多一個 in-flight),防抖只是減少寫入次數。
+const REPLACE_DEBOUNCE = 600;
+// 單格寫入(cell-level CAS)參數:每格連打防抖 500ms;全域併發上限(不同格可並行,防洪泛)。
+const CELL_DEBOUNCE = 500;
+const CELL_MAX_INFLIGHT = 5;
+// Sheet 會把日期時間字串轉成 1899 基準序號 → 寫入前對「日期+時間」與「純時間(15:30)」加前置單引號存成文字(日期單獨值不受影響)。
+// replace 與 updateCell 兩條寫入路徑共用此規則(勿各自複寫,避免漂移)。
+const quoteDT = v => typeof v === 'string' && (/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}/.test(v) || /^\d{1,2}:\d{2}$/.test(v)) ? "'" + v : v;
 // v2 結構需搭配 v2 版 apps-script.js(TABLES 含 location_id 與調撥表);
 // 既有 Sheet 升級:貼新腳本 → 執行 setup → 部署新版本(/exec 網址不變)。
 // 預設 /exec 網址由部署注入(window.BAKERY_CFG)或 google-config.local.js 提供;佔位符視為未設定。
@@ -288,9 +297,21 @@ export class DB {
     this.pending = 0;
     this.onRemote = null; // (ok, msg) => void
     this.rev = {};        // 每張表的樂觀鎖版本號(list 讀入 / 寫入回應更新);replace 帶 baseRev 給後端比對
+    this._repQ = {};      // 每張表整表覆寫的串行化佇列:{payload, pending, inflight, timer} — 見 _enqueueReplace/_drainReplace
     this.onConflict = null; // (sheet) => void:整表覆寫因他人先改而被拒(conflict)時通知上層重載
+    this._cellQ = {};      // 單格寫入佇列:cellId -> {sheet,key,field,base,latest,sent,inflight,dirty,timer} — 見 _enqueueCell/_drainCell
+    this._cellInflight = 0; // 目前進行中的 updateCell 數(併發上限用)
+    this.caps = new Set(); // 後端能力集(pullAll 的 listAll 回傳 caps);含 'updateCell' 才走單格路徑,否則退回整表 replace
+    this.onCellConflict = null; // (info) => void:單格衝突/列不存在/無權 — 只刷新該列/欄並提示,取代整表重載
     this.lastPullError = null; // pullAll 失敗型態:'auth'(工作階段過期)/ 'network'(整趟都沒連上可運作後端)/ null(後端有回應);呼叫端據此決定是否 migrate
     this._batchUnsupported = false; // 能力快取:此後端已確認不支援 action=listAll → 之後直接逐表,不再探測
+    // 頁面卸載/切到背景前,把還在防抖窗、尚未送出的整表覆寫立刻補送(否則重載後 pullAll 會用 Sheet 覆蓋本地 → 防抖窗內的最後編輯遺失)。
+    // 用 pagehide + visibilitychange(hidden)—— 較 beforeunload 可靠且不破壞 bfcache;keepalive 讓請求能存活到卸載後。
+    if (typeof window !== 'undefined') {
+      const flush = () => this.flushWrites();
+      window.addEventListener('pagehide', flush);
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+    }
     this.load();
   }
 
@@ -309,7 +330,7 @@ export class DB {
     const r = await fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'login', credential }) });
     return await r.json();
   }
-  whoami() { return this.api('action=whoami'); }
+  async whoami() { const j = await this.api('action=whoami'); if (j && Array.isArray(j.caps)) this.caps = new Set(j.caps); return j; } // caps 也可能來自 whoami(與 listAll 一致)
 
   // ── 方案 B:Apps Script ──
   async api(params) {
@@ -412,6 +433,7 @@ export class DB {
       if (batch && batch.ok && batch.sheets && !Array.isArray(batch.sheets)) {
         // 新後端:一次拿到所有分頁 {sheet:{rows,rev}};缺的分頁(後端略過)→ null → 列為 missing
         reached = true;
+        if (Array.isArray(batch.caps)) this.caps = new Set(batch.caps); // 後端能力:含 updateCell/deleteRow 才走單格路徑(否則 setField 退回整表 replace)
         results = names.map(n => {
           const t = batch.sheets[n];
           if (!t) return null;
@@ -452,13 +474,63 @@ export class DB {
     this.parseAll(); this.ensureCentral(); this.persist();
     return missing;
   }
+  // 遠端寫入入口:整表覆寫(replace)走串行化 + 合併佇列(見 _enqueueReplace),杜絕連打時多個 replace 帶同一
+  // baseRev 併發送出 → 後端只收第一個、其餘全 conflict → 前端重載把使用者正在編輯的值打回 Sheet 版本(本 bug 根因)。
+  // append 逐列即時送(順序重要,不併);非雲端一律略過(_send 亦再自保一次)。
   sendRemote(payload) {
     if (this.mode !== 'cloud') return;
-    const q = v => typeof v === 'string' && (/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}/.test(v) || /^\d{1,2}:\d{2}$/.test(v)) ? "'" + v : v; // 日期時間與純時間(15:30)都加引號存文字,防 Sheet 轉成 1899 基準日期
+    if (payload.action === 'replace' && payload.sheet) { this._enqueueReplace(payload); return; }
+    this._send(payload);
+  }
+  // 每張表同時最多一個 in-flight 的整表覆寫;進行中就只記「還要再送」+ 保留最新 payload,回應返回後才送下一個
+  // (帶當下最新的 this.rev[sheet])→ 使用者自己的快速編輯不再互撞成假 conflict。連打在防抖窗(REPLACE_DEBOUNCE)內併成最後狀態。
+  _enqueueReplace(payload) {
+    const s = payload.sheet;
+    const st = this._repQ[s] || (this._repQ[s] = { payload: null, pending: false, inflight: false, timer: null });
+    st.payload = payload; st.pending = true; // 只留最新 payload(帳號/權限等非 SCHEMA 表用它帶來的 rows)
+    if (st.inflight) return;                 // 進行中 → 回應後自動 drain 最新,不另起計時
+    clearTimeout(st.timer);
+    st.timer = setTimeout(() => this._drainReplace(s), REPLACE_DEBOUNCE);
+  }
+  _drainReplace(s, keepalive) {
+    const st = this._repQ[s];
+    if (!st || st.inflight || !st.pending) return;
+    st.inflight = true; st.pending = false;
+    const payload = st.payload; st.payload = null;
+    // SCHEMA 表在「送出當下」用最新本地狀態重建 rows:併掉這段期間的 append/連續編輯,
+    // 避免被防抖延後的覆寫用過期 rows 蓋掉剛 append 進去的列(append 會即時送並讓 this.rev 追上)。
+    if (SCHEMA[s]) payload.rows = this.t[s].map(r => SCHEMA[s].map(h => r[h] === undefined ? '' : r[h]));
+    this._send(payload, (ok, msg, conflict) => {
+      st.inflight = false; // 送出完成(成功/失敗/衝突皆算)
+      // 真.他人衝突 → 交給 onConflict 重載最新版,清掉待送佇列,別用舊本地狀態回沖蓋掉別人的變更。
+      // 一般網路失敗則保留待送:this.t 仍是最新,還在打字就再排一次,否則下次編輯自然帶出補送。
+      if (conflict) { st.pending = false; st.payload = null; return; }
+      if (st.pending) { clearTimeout(st.timer); st.timer = setTimeout(() => this._drainReplace(s), REPLACE_DEBOUNCE); }
+    }, keepalive);
+  }
+  // 卸載/切背景前的補送:把每張表「已排隊但尚未送出(pending 且非 in-flight)」的整表覆寫立刻以 keepalive 送出。
+  // in-flight 的請求位元多半已送達後端,不需補;pending 才是只存在本地、重載會被 pullAll 覆蓋掉的風險點。
+  flushWrites() {
+    if (this.mode !== 'cloud') return;
+    Object.keys(this._repQ).forEach(s => {
+      const st = this._repQ[s];
+      if (st && st.pending && !st.inflight) { clearTimeout(st.timer); this._drainReplace(s, true); }
+    });
+    // 單格佇列:把還沒送出(非 in-flight、仍有淨變化)的也以 keepalive 補送
+    Object.keys(this._cellQ).forEach(id => {
+      const e = this._cellQ[id];
+      if (e && !e.inflight && e.base !== e.latest) { clearTimeout(e.timer); this._drainCell(id, true); }
+    });
+  }
+  // 實際送出一次遠端寫入;after(ok,msg) 於回應返回(或提早失敗)後呼叫,供覆寫佇列釋放 in-flight。
+  // keepalive=true(卸載補送)讓請求能存活到頁面卸載後(URL 模式;body 上限 64KB,主資料表足夠)。
+  _send(payload, after, keepalive) {
+    if (this.mode !== 'cloud') { if (after) after(false, ''); return; }
+    const q = quoteDT; // 日期時間加引號規則(模組層單一定義,與 updateCell 路徑共用)
     if (payload.row) { const r = {}; Object.keys(payload.row).forEach(k => r[k] = q(payload.row[k])); payload = Object.assign({}, payload, { row: r }); }
     if (payload.rows) payload = Object.assign({}, payload, { rows: payload.rows.map(row => Array.isArray(row) ? row.map(q) : row) });
     this.pending++;
-    const done = (ok, msg) => { this.pending--; if (this.onRemote) this.onRemote(ok, msg || ''); };
+    const done = (ok, msg, conflict) => { this.pending--; if (this.onRemote) this.onRemote(ok, msg || ''); if (after) after(ok, msg, !!conflict); };
     if (this.cfg.kind === 'gapi') {
       (async () => {
         await this.ensureToken();
@@ -472,18 +544,18 @@ export class DB {
       })().then(() => done(true)).catch(err => done(false, 'Sheet 寫入失敗(' + payload.sheet + '):' + err));
       return;
     }
-    if (!this.cfg.url) { this.pending--; return; }
+    if (!this.cfg.url) { this.pending--; if (after) after(false, ''); return; }
     const tok = this.authToken();
     const sheet = payload.sheet;
     // 樂觀鎖:整表覆寫帶上本地版號給後端比對(舊後端沒這功能會忽略,行為不變)
     if (payload.action === 'replace' && this.rev[sheet] != null) payload = Object.assign({}, payload, { baseRev: this.rev[sheet] });
     if (tok) payload = Object.assign({}, payload, { token: tok });
-    fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
+    fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), keepalive: !!keepalive })
       .then(r => r.json())
       .then(j => {
         if (j && j.error === 'unauthorized' && this.onAuthFail) this.onAuthFail();
         if (j && j.rev != null && sheet) this.rev[sheet] = j.rev; // 追上最新版號(成功寫入或 conflict 都會回傳目前版號)
-        if (j && j.error === 'conflict') { done(false, '⚠ 資料已被他人更新,正在載入最新版 — 請重做剛才的變更'); if (this.onConflict) this.onConflict(sheet); return; }
+        if (j && j.error === 'conflict') { done(false, '⚠ 資料已被他人更新,正在載入最新版 — 請重做剛才的變更', true); if (this.onConflict) this.onConflict(sheet); return; }
         done(!!j.ok, j.ok ? '' : 'Sheet 寫入失敗:' + (j.error || '未知錯誤'));
       })
       .catch(err => done(false, 'Sheet 連線失敗,本次異動僅存本地:' + err));
@@ -534,6 +606,153 @@ export class DB {
     this.t[name] = objs.map(o => { const x = {}; SCHEMA[name].forEach(h => x[h] = o[h] === undefined ? '' : String(o[h])); return x; });
     this.persist();
     this.sendRemote({ action: 'replace', sheet: name, headers: SCHEMA[name], rows: this.t[name].map(r => SCHEMA[name].map(h => r[h] === undefined ? '' : r[h])) });
+  }
+  // ── 單格寫入(cell-level compare-and-set)─────────────────────────────────────────
+  // 後端支援(caps 含 updateCell)時,主資料「單欄編輯」改走只改一格的 CAS 寫入:不同格並行、同格連打合併,
+  // 徹底避免整表覆寫互相打架;後端未部署(caps 缺)時 setField 自動退回 Task #1 的整表 replace,行為與現況一致。
+  // 呼叫端一律用 setField / deleteRow;線路 payload 僅集中在 _sendCell / _sendDelete(改欄名只動這裡)。key 依 schema.js 的 PRIMARY_KEY 組。
+  _pk(sheet) { return PRIMARY_KEY[sheet] || [SCHEMA[sheet][0]]; } // 各表主鍵欄(單一來源;無登錄則退回首欄慣例)
+  // match = {主鍵欄:值,…}(依 schema.js PRIMARY_KEY)。接受:列物件(取主鍵欄)/ match 物件 / 純值(單鍵)/ 陣列(複合,依序)。
+  _matchOf(sheet, keyish) {
+    const pks = this._pk(sheet), m = {};
+    if (keyish && typeof keyish === 'object' && !Array.isArray(keyish)) pks.forEach(h => m[h] = keyish[h] === undefined ? '' : String(keyish[h]));
+    else { const kv = Array.isArray(keyish) ? keyish : [keyish]; pks.forEach((h, i) => m[h] = kv[i] === undefined ? '' : String(kv[i])); }
+    return m;
+  }
+  _rowByMatch(sheet, match) { return (this.t[sheet] || []).find(r => Object.keys(match).every(h => String(r[h]) === String(match[h]))); }
+  _csv(name) { return [SCHEMA[name].join(',')].concat((this.t[name] || []).map(o => SCHEMA[name].map(h => esc(o[h])).join(','))).join('\n'); }
+  _cellId(sheet, match, field) { return JSON.stringify([sheet].concat(this._pk(sheet).map(h => match[h]), field)); } // 內部佇列鍵:JSON 化,值含分隔字元也不會碰撞
+
+  // 主資料單欄編輯的統一入口(取代呼叫端的 db.replace(sheet, wholeTableMapped)):
+  // keyish = 列物件 / match 物件 / 主鍵值(單鍵表)。本地即時更新 this.t 讓輸入即時反應,
+  // 再依能力送單格 CAS(不同格並行、同格合併)或整表後備。
+  setField(sheet, keyish, field, newVal) {
+    const match = this._matchOf(sheet, keyish);
+    const row = this._rowByMatch(sheet, match);
+    if (!row) return;
+    const before = row[field] === undefined ? '' : String(row[field]);
+    const next = newVal === undefined ? '' : String(newVal);
+    if (before === next) return;
+    row[field] = next; // 本地同步更新(this.t),輸入即時反應
+    if (this.mode === 'cloud' && this.caps.has('updateCell')) {
+      this.raw[sheet] = this._csv(sheet); this.persist();
+      this._enqueueCell(sheet, match, field, before, next);
+    } else {
+      this.replace(sheet, this.t[sheet]); // 後備:整表覆寫(Task #1 的串行化/防抖/flush 全數沿用);this.t 已改,replace 依它重建
+    }
+  }
+  // 多欄一次編輯(如原料編輯表單存檔):逐欄各自 CAS(不同格互不阻塞、可並行)。patch = {欄位:值,…}
+  setFields(sheet, keyish, patch) { Object.keys(patch || {}).forEach(f => this.setField(sheet, keyish, f, patch[f])); }
+  _enqueueCell(sheet, match, field, before, next) {
+    const id = this._cellId(sheet, match, field);
+    let e = this._cellQ[id];
+    if (!e) e = this._cellQ[id] = { sheet, match, field, base: before, latest: next, sent: null, inflight: false, dirty: false, timer: null };
+    else { e.latest = next; e.dirty = true; } // 連打:保留 burst 起點 base,只更新最新值(合併)
+    if (e.inflight) return;                    // 進行中 → 回應後用剛確認的 base 再送
+    clearTimeout(e.timer);
+    e.timer = setTimeout(() => this._drainCell(id), CELL_DEBOUNCE);
+  }
+  _drainCell(id, keepalive) {
+    const e = this._cellQ[id];
+    if (!e || e.inflight) return;
+    if (e.base === e.latest) { delete this._cellQ[id]; return; }                 // 淨變化為零(改回原值)→ 不送
+    if (this._cellInflight >= CELL_MAX_INFLIGHT) { clearTimeout(e.timer); e.timer = setTimeout(() => this._drainCell(id), 80); return; } // 併發上限 → 稍後
+    e.inflight = true; e.dirty = false; e.sent = e.latest;
+    this._cellInflight++;
+    this._sendCell(e, keepalive);
+  }
+  _sendCell(e, keepalive) {
+    const id = this._cellId(e.sheet, e.match, e.field);
+    const done = () => { this.pending--; this._cellInflight--; e.inflight = false; };
+    const tok = this.authToken();
+    const payload = { action: 'updateCell', sheet: e.sheet, match: e.match, field: e.field, old: e.base, new: quoteDT(e.sent) };
+    if (tok) payload.token = tok;
+    this.pending++;
+    fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), keepalive: !!keepalive })
+      .then(r => r.json())
+      .then(j => {
+        done();
+        if (j && j.error === 'unauthorized' && this.onAuthFail) { if (this._cellQ[id] === e) delete this._cellQ[id]; this.onAuthFail(); return; }
+        if (j && j.rev != null) this.rev[e.sheet] = j.rev;
+        if (j && j.ok) {
+          e.base = (j.value != null ? String(j.value) : e.sent);       // 以後端實際寫入(正規化)值做新基線 → 下一送的 old
+          // 期間又有新編輯(dirty)才再送;否則收斂。用 dirty 而非 base!==latest,避免後端數字正規化(1.50→1.5)造成無限回送。
+          if (e.dirty) { clearTimeout(e.timer); e.timer = setTimeout(() => this._drainCell(id), CELL_DEBOUNCE); }
+          else if (this._cellQ[id] === e) delete this._cellQ[id];
+          return;
+        }
+        if (this._cellQ[id] === e) delete this._cellQ[id];             // 失敗 → 移出佇列,交由上層只刷新該格
+        const err = (j && j.error) || 'unknown';
+        // 重送競態:值其實已寫入(後端 current === 我剛送的)→ 視為已套用,靜默對齊,不打擾使用者
+        if (err === 'conflict' && j && j.current != null && String(j.current) === String(e.sent)) { this._setCellLocal(e.sheet, e.match, e.field, j.current); return; }
+        if (err === 'conflict') {
+          if (j.row) this._applyRow(e.sheet, e.match, j.row);          // 他人先改 → 套用後端最新整列(只動此列)
+          else this._setCellLocal(e.sheet, e.match, e.field, j.current != null ? j.current : e.base);
+        } else if (err === 'row_not_found' || err === 'not_found') {
+          this._dropRow(e.sheet, e.match);                             // 列已被他人刪除 → 本地移除
+        } else if (err === 'forbidden' || err === 'forbidden_location' || err === 'forbidden_field') {
+          this._setCellLocal(e.sheet, e.match, e.field, e.base);       // 無權 → 回退本地樂觀變更
+        } // ambiguous_match / incomplete_key / unknown_field:資料/設定 bug — 保留本地,交由通知呈現
+        if (this.onCellConflict) this.onCellConflict({ sheet: e.sheet, match: e.match, field: e.field, error: err, current: j && j.current, row: j && j.row, msg: this._cellErrMsg(err) });
+        else if (this.onRemote) this.onRemote(false, this._cellErrMsg(err));
+      })
+      .catch(err => {
+        done();
+        e.dirty = true; // 網路失敗:值仍在本地;保留佇列讓下次編輯/flush 補送,不自動重試以免風暴
+        if (this.onRemote) this.onRemote(false, 'Sheet 連線失敗,本次異動僅存本地:' + err);
+      });
+  }
+  _cellErrMsg(err) {
+    return err === 'conflict' ? '⚠ 此欄已被他人更新 — 已載入最新值,請確認後重試'
+      : (err === 'row_not_found' || err === 'not_found') ? '⚠ 此列已不存在(可能已被刪除)'
+      : err === 'forbidden_field' ? '⚠ 無權編輯此欄位'
+      : (err === 'forbidden' || err === 'forbidden_location') ? '⚠ 無權編輯此列'
+      : err === 'ambiguous_match' ? '✕ 資料異常:主鍵對應到多列,請聯絡管理員'
+      : 'Sheet 寫入失敗:' + err;
+  }
+  // 刪除一列(結構性):後端支援 deleteRow 就走它,否則整表覆寫後備。
+  deleteRow(sheet, keyish) {
+    const match = this._matchOf(sheet, keyish);
+    this._dropRow(sheet, match); // 本地即時移除
+    if (this.mode !== 'cloud') return;
+    if (this.caps.has('deleteRow')) {
+      const tok = this.authToken();
+      const payload = { action: 'deleteRow', sheet, match };
+      if (tok) payload.token = tok;
+      this.pending++;
+      fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
+        .then(r => r.json())
+        .then(j => { this.pending--; if (j && j.rev != null) this.rev[sheet] = j.rev; if (this.onRemote && j && !j.ok) this.onRemote(false, '刪除失敗:' + (j.error || '')); })
+        .catch(err => { this.pending--; if (this.onRemote) this.onRemote(false, 'Sheet 連線失敗:' + err); });
+    } else {
+      this.replace(sheet, this.t[sheet] || []); // 後備:整表覆寫(已移除該列)
+    }
+  }
+  _applyRow(sheet, match, rowObj) {
+    const arr = this.t[sheet] || (this.t[sheet] = []);
+    const i = arr.findIndex(r => Object.keys(match).every(h => String(r[h]) === String(match[h])));
+    const cur = i >= 0 ? arr[i] : null;
+    const norm = {};
+    SCHEMA[sheet].forEach(h => {
+      // 該格仍有未結算的單格編輯(in-flight / 待送)→ 保留本地樂觀值,別讓「相鄰欄的衝突」把它蓋回後端舊值
+      //(那筆自己的 updateCell 會負責對齊;否則本地顯示舊值、Sheet 卻是新值,直到下次 pullAll)。
+      const e = cur && this._cellQ[this._cellId(sheet, match, h)];
+      norm[h] = (e && (e.inflight || e.base !== e.latest)) ? (cur[h] === undefined ? '' : String(cur[h]))
+        : (rowObj[h] === undefined ? '' : String(rowObj[h]));
+    });
+    if (i >= 0) arr[i] = norm; else arr.push(norm);
+    this.raw[sheet] = this._csv(sheet); this.persist();
+  }
+  _dropRow(sheet, match) {
+    if (!this.t[sheet]) return;
+    this.t[sheet] = this.t[sheet].filter(r => !Object.keys(match).every(h => String(r[h]) === String(match[h])));
+    this.raw[sheet] = this._csv(sheet); this.persist();
+  }
+  _setCellLocal(sheet, match, field, val) {
+    const row = this._rowByMatch(sheet, match);
+    if (!row) return;
+    row[field] = val === undefined ? '' : String(val);
+    this.raw[sheet] = this._csv(sheet); this.persist();
   }
   nextId(name, field, prefix, pad) {
     let mx = 0;

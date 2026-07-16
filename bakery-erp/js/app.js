@@ -65,6 +65,8 @@ class Component extends DCLogic {
         if (sheet === 'user_account' || sheet === 'role_permission') this.loadAccounts(true);
         else this.startCloud();
       };
+      // 單格衝突/無權/列已刪:db 已把該列刷新到最新(或回退樂觀變更),這裡只重繪 + 提示,不整表重載
+      this.db.onCellConflict = info => { this.forceUpdate(); if (info && info.msg) this.notify(info.msg); };
       const c = this.db.cfg || {};
       this.setState({
         ready: true,
@@ -818,9 +820,13 @@ class Component extends DCLogic {
   stocksAt(loc, iid) { return !!this.locRow(loc, iid); }
   safetyAt(loc, iid) { const r = this.locRow(loc, iid); return r ? this.n(r.safety_stock) : 0; }
   setLocStock(loc, iid, on, safety) {
-    let rows = this.t('location_stock').filter(r => !(r.location_id === loc && r.ingredient_id === iid));
-    if (on) rows = rows.concat([{ location_id: loc, ingredient_id: iid, safety_stock: String(this.n(safety)) }]);
-    this.db.replace('location_stock', rows);
+    // 備料開關 + 安全庫存 → 單格化:關閉=刪列;開啟且已存在=改 safety_stock(逐格 CAS,各店/各料獨立並行);開啟且不存在=新增列。
+    // 複合主鍵 {location_id, ingredient_id};caps 缺時 setField/deleteRow 自動退回整表 replace(append 一律可用)。
+    const match = { location_id: loc, ingredient_id: iid };
+    const exists = this.locRow(loc, iid);
+    if (!on) { if (exists) this.db.deleteRow('location_stock', match); }
+    else if (exists) this.db.setField('location_stock', match, 'safety_stock', String(this.n(safety)));
+    else this.db.append('location_stock', { location_id: loc, ingredient_id: iid, safety_stock: String(this.n(safety)) });
     this.forceUpdate();
   }
   // 調撥以包裝為單位:外購原料整包(袋/箱/瓶)進出,不走散裝;自製半成品維持 g。
@@ -1932,15 +1938,15 @@ class Component extends DCLogic {
       doFinish: () => this.finish(o)
     }));
     // 流水線設定
-    const setSta = (id, k) => e => { db.replace('station', this.t('station').map(x => x.station_id === id ? Object.assign({}, x, { [k]: e.target.value }) : x)); this.forceUpdate(); };
+    const setSta = (id, k) => e => { db.setField('station', id, k, e.target.value); this.forceUpdate(); };
     const stfOpts2 = [{ id: '', name: '— 未指派' }].concat(this.t('staff').filter(s => s.active !== 'FALSE').map(s => ({ id: s.staff_id, name: s.name })));
     const stCfgRows = lineStations.map(x => ({
       seqVal: x.seq, onSeq: setSta(x.station_id, 'seq'),
       nameVal: x.name, onName: setSta(x.station_id, 'name'),
       matchVal: x.match, onMatch: setSta(x.station_id, 'match'),
       staffVal: x.staff_id || '', onStaff: setSta(x.station_id, 'staff_id'),
-      staffBtn: this.ddBtn(stfOpts2, x.staff_id || '', v => { db.replace('station', this.t('station').map(y => y.station_id === x.station_id ? Object.assign({}, y, { staff_id: v }) : y)); this.forceUpdate(); }),
-      onDel: () => { db.replace('station', this.t('station').filter(y => y.station_id !== x.station_id)); this.forceUpdate(); }
+      staffBtn: this.ddBtn(stfOpts2, x.staff_id || '', v => { db.setField('station', x.station_id, 'staff_id', v); this.forceUpdate(); }),
+      onDel: () => { db.deleteRow('station', x.station_id); this.forceUpdate(); }
     }));
     const lineVals = {
       lineSel, stationSel, stCfgRows, matHead, matRows, termOps, termDrafts, termFin, stfOpts2,
@@ -1954,9 +1960,9 @@ class Component extends DCLogic {
       toggleLineCfg: () => this.setState({ lineCfg: !S.lineCfg }),
       lineCfgTxt: S.lineCfg ? '收合設定' : '⚙ 設定流水線',
       lineNameVal: (lines.find(l => l.line_id === lineSel) || {}).name || '',
-      onLineName: e => { db.replace('line', lines.map(l => l.line_id === lineSel ? Object.assign({}, l, { name: e.target.value }) : l)); this.forceUpdate(); },
+      onLineName: e => { db.setField('line', lineSel, 'name', e.target.value); this.forceUpdate(); },
       addLine: () => { const id = db.nextId('line', 'line_id', 'LINE-', 2); db.replace('line', lines.concat([{ line_id: id, name: '新流水線' }])); this.setState({ lineSel: id, stationSel: 'all', lineCfg: true }); },
-      delLine: () => { if (lineStations.length) { this.notify('✕ 請先刪除此線的全部工位'); return; } db.replace('line', lines.filter(l => l.line_id !== lineSel)); this.setState({ lineSel: '' }); },
+      delLine: () => { if (lineStations.length) { this.notify('✕ 請先刪除此線的全部工位'); return; } db.deleteRow('line', lineSel); this.setState({ lineSel: '' }); },
       addStation: () => { db.replace('station', this.t('station').concat([{ station_id: db.nextId('station', 'station_id', 'ST-', 2), line_id: lineSel, seq: String(lineStations.length + 1), name: '新工位', match: '', staff_id: '' }])); this.forceUpdate(); },
       lineMatrixOn: stationSel === 'all', lineTermOn: !!termStation, lineFinOn: stationSel === '_fin',
       termTitle: termStation ? '工位終端 — ' + termStation.name + ' · 值班:' + (this.staffName(termStation.staff_id) || '未指派') : '',
@@ -2353,8 +2359,8 @@ class Component extends DCLogic {
       const inSel = (this.prod(S.selProd) && this.prodAtStore(this.prod(S.selProd), prodScope)) || this.isIngId(S.selProd);
       if (!inSel) { const first = ((this.t('product').filter(inProdScope)[0] || {}).product_id) || ((selfIngs[0] || {}).ingredient_id); if (first && first !== S.selProd) setTimeout(() => this.setState({ selProd: first, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }), 0); }
     }
-    const setP = k => e => db.replace('product', this.t('product').map(p => p.product_id === S.selProd ? Object.assign({}, p, { [k]: e.target.value }) : p)) || this.forceUpdate();
-    const setR = (rid, k) => e => { db.replace('routing', this.t('routing').map(r => r.routing_id === rid ? Object.assign({}, r, { [k]: e.target.value }) : r)); this.forceUpdate(); };
+    const setP = k => e => { db.setField('product', S.selProd, k, e.target.value); this.forceUpdate(); };
+    const setR = (rid, k) => e => { db.setField('routing', rid, k, e.target.value); this.forceUpdate(); };
     const trail = S.bomTrail || [];
     const bomRows = this.bomOf(S.selProd).map(b => {
       const g = this.ing(b.ingredient_id) || {};
@@ -2378,10 +2384,10 @@ class Component extends DCLogic {
         } : null,
         supTxt: (this.t('supplier').find(s2 => s2.supplier_id === g.default_supplier_id) || {}).name || (g.purchase_unit === '自製' ? '自製' : '—'),
         catTxt: this.gcat(g) || '—',
-        onQty: e => { db.replace('bom', this.t('bom').map(x => x.bom_id === b.bom_id ? Object.assign({}, x, { qty_per_yield: e.target.value }) : x)); this.forceUpdate(); },
+        onQty: e => { db.setField('bom', b.bom_id, 'qty_per_yield', e.target.value); this.forceUpdate(); },
         price: this.n(g.latest_unit_cost).toFixed(3),
         cost: this.fmt(this.n(b.qty_per_yield) * this.n(g.latest_unit_cost), 1),
-        onRemove: () => { db.replace('bom', this.t('bom').filter(x => x.bom_id !== b.bom_id)); this.forceUpdate(); }
+        onRemove: () => { db.deleteRow('bom', b.bom_id); this.forceUpdate(); }
       };
     });
     // 麵包屑：祖先鏈只存 id，name 永遠即時查（改名後不顯示舊字）；末段為目前主體，不可點
@@ -2407,15 +2413,15 @@ class Component extends DCLogic {
       nameVal: r.step_name, onName: setR(r.routing_id, 'step_name'),
       durVal: r.duration_min, onDur: setR(r.routing_id, 'duration_min'),
       eqVal: r.equipment_id || '', onEq: setR(r.routing_id, 'equipment_id'),
-      eqBtn: this.ddBtn(eqOptions, r.equipment_id || '', v => { db.replace('routing', this.t('routing').map(x => x.routing_id === r.routing_id ? Object.assign({}, x, { equipment_id: v }) : x)); this.forceUpdate(); }),
+      eqBtn: this.ddBtn(eqOptions, r.equipment_id || '', v => { db.setField('routing', r.routing_id, 'equipment_id', v); this.forceUpdate(); }),
       cdTxt: '跨日', cdStyle: (r.cross_day === 'TRUE' ? this.tag(C.amb) : 'color:#9aa2ae;border-color:#e3e6eb') + ';cursor:pointer;user-select:none',
-      onCd: () => { db.replace('routing', this.t('routing').map(x => x.routing_id === r.routing_id ? Object.assign({}, x, { cross_day: x.cross_day === 'TRUE' ? 'FALSE' : 'TRUE' }) : x)); this.forceUpdate(); },
-      onRemove: () => { db.replace('routing', this.t('routing').filter(x => x.routing_id !== r.routing_id)); this.forceUpdate(); }
+      onCd: () => { db.setField('routing', r.routing_id, 'cross_day', r.cross_day === 'TRUE' ? 'FALSE' : 'TRUE'); this.forceUpdate(); },
+      onRemove: () => { db.deleteRow('routing', r.routing_id); this.forceUpdate(); }
     }));
     const ingOptions = this.t('ingredient').map(g => ({ id: g.ingredient_id, name: g.name }));
 
     // ── suppliers / equipment(可增改刪)──
-    const setSup = (id, k) => e => { db.replace('supplier', this.t('supplier').map(s => s.supplier_id === id ? Object.assign({}, s, { [k]: e.target.value }) : s)); this.forceUpdate(); };
+    const setSup = (id, k) => e => { db.setField('supplier', id, k, e.target.value); this.forceUpdate(); };
     // 供應商清單:欄頭可排序(名稱/聯絡/付款/供應數,點三下還原);列收合,點擊展開編輯
     const supCnt = {}; for (const g of this.t('ingredient')) if (g.default_supplier_id) supCnt[g.default_supplier_id] = (supCnt[g.default_supplier_id] || 0) + 1;
     const sSort = S.supSort || null;
@@ -2445,24 +2451,24 @@ class Component extends DCLogic {
         if (e && e.stopPropagation) e.stopPropagation(); // ✕ 在可點擊列內,別觸發展開
         const used = this.t('ingredient').filter(g => g.default_supplier_id === s.supplier_id).length;
         if (used) { this.notify('✕ 無法刪除「' + s.name + '」:仍是 ' + used + ' 項原料的預設供應商'); return; }
-        db.replace('supplier', this.t('supplier').filter(x => x.supplier_id !== s.supplier_id)); this.forceUpdate();
+        db.deleteRow('supplier', s.supplier_id); this.forceUpdate();
       }
     }));
     const EQT = ['mixer', 'proofer', 'oven'];
     const eqTypeOptions = EQT.concat(this.t('equipment').map(e => e.type).filter(t => t && EQT.indexOf(t) < 0)).map(t => ({ id: t, name: t }));
-    const setEq = (id, k) => e => { db.replace('equipment', this.t('equipment').map(x => x.equipment_id === id ? Object.assign({}, x, { [k]: e.target.value }) : x)); this.forceUpdate(); };
+    const setEq = (id, k) => e => { db.setField('equipment', id, k, e.target.value); this.forceUpdate(); };
     const eqRows = this.t('equipment').map(e => ({
       id: e.equipment_id,
       nameVal: e.name, onName: setEq(e.equipment_id, 'name'),
       typeVal: e.type, onType: setEq(e.equipment_id, 'type'),
-      typeBtn: this.ddBtn(eqTypeOptions, e.type, v => { db.replace('equipment', this.t('equipment').map(x => x.equipment_id === e.equipment_id ? Object.assign({}, x, { type: v }) : x)); this.forceUpdate(); }),
+      typeBtn: this.ddBtn(eqTypeOptions, e.type, v => { db.setField('equipment', e.equipment_id, 'type', v); this.forceUpdate(); }),
       cntVal: e.count, onCnt: setEq(e.equipment_id, 'count'),
       capVal: e.capacity_per_batch, onCap: setEq(e.equipment_id, 'capacity_per_batch'),
       minVal: e.batch_minutes, onMin: setEq(e.equipment_id, 'batch_minutes'),
       onDel: () => {
         const used = this.t('routing').filter(r => r.equipment_id === e.equipment_id).length;
         if (used) { this.notify('✕ 無法刪除「' + e.name + '」:仍被 ' + used + ' 道工序使用(產品與配方 → 製程工序)'); return; }
-        db.replace('equipment', this.t('equipment').filter(x => x.equipment_id !== e.equipment_id)); this.forceUpdate();
+        db.deleteRow('equipment', e.equipment_id); this.forceUpdate();
       }
     }));
     const addSup = () => { const id = db.nextId('supplier', 'supplier_id', 'SUP-', 2); db.replace('supplier', this.t('supplier').concat([{ supplier_id: id, name: '新供應商', contact_person: '', phone: '', email: '', address: '', payment_terms: '' }])); this.setState({ supOpen: id }); this.notify('✓ 已新增 ' + id + ',已展開編輯'); };
@@ -2758,7 +2764,7 @@ class Component extends DCLogic {
     const traceStyle = traceOrd ? '' : 'display:none';
     const traceTitle = traceOrd ? S.traceId + ' ' + this.nameOf(traceOrd.product_id) : '';
     const traceClose = () => this.setState({ traceId: '' });
-    const setStf = (id, k) => e => { db.replace('staff', this.t('staff').map(s => s.staff_id === id ? Object.assign({}, s, { [k]: e.target.value }) : s)); this.forceUpdate(); };
+    const setStf = (id, k) => e => { db.setField('staff', id, k, e.target.value); this.forceUpdate(); };
     const staffRows = this.t('staff').map(s => ({
       id: s.staff_id,
       nameVal: s.name, onName: setStf(s.staff_id, 'name'),
@@ -2766,11 +2772,11 @@ class Component extends DCLogic {
       todayCnt: this.t('assignment').filter(a => a.staff_id === s.staff_id && this.day(a.ts) === this.TODAY).length,
       actTxt: s.active === 'FALSE' ? '停用' : '在職',
       actStyle: this.tag(s.active === 'FALSE' ? C.mut : C.grn) + ';cursor:pointer',
-      onToggle: () => { db.replace('staff', this.t('staff').map(x => x.staff_id === s.staff_id ? Object.assign({}, x, { active: x.active === 'FALSE' ? 'TRUE' : 'FALSE' }) : x)); this.forceUpdate(); },
+      onToggle: () => { db.setField('staff', s.staff_id, 'active', s.active === 'FALSE' ? 'TRUE' : 'FALSE'); this.forceUpdate(); },
       onDel: () => {
         const used = this.t('assignment').filter(a => a.staff_id === s.staff_id).length;
         if (used) { this.notify('✕ 「' + s.name + '」有 ' + used + ' 筆經手紀錄,不可刪除 — 請改停用'); return; }
-        db.replace('staff', this.t('staff').filter(x => x.staff_id !== s.staff_id)); this.forceUpdate();
+        db.deleteRow('staff', s.staff_id); this.forceUpdate();
       }
     }));
     const addStaff = () => { const id = db.nextId('staff', 'staff_id', 'EMP-', 2); db.replace('staff', this.t('staff').concat([{ staff_id: id, name: '新人員', role: '', active: 'TRUE' }])); this.forceUpdate(); this.notify('✓ 已新增 ' + id + ',直接在表格內修改'); };
@@ -3193,8 +3199,8 @@ class Component extends DCLogic {
         const shared = this.prodShared(selP);
         const cur = this.prodLocList(selP); // 只用明確指定的門市(共用時為空)→ 各店 chip 獨立開關
         const chip = (active, extra) => 'padding:3px 10px;border-radius:7px;cursor:pointer;font-size:11.5px;user-select:none;white-space:nowrap' + (active ? ';background:#0e7490;color:#fff;font-weight:600' : ';background:#fff;color:#66707f;border:1px solid #dfe3e8') + (extra || '');
-        const write = ids => { const uniq = stores.map(x => x.location_id).filter(id => ids.indexOf(id) >= 0); const nv = uniq.length ? uniq.join('|') : ''; db.replace('product', this.t('product').map(p => p.product_id === S.selProd ? Object.assign({}, p, { location_id: nv }) : p)); this.forceUpdate(); this.notify('✓ 已改門市：' + (selP.name || '') + ' → ' + (nv ? uniq.map(x => this.locName(x)).join('、') : '共用(全門市)')); };
-        const setShared = () => { db.replace('product', this.t('product').map(p => p.product_id === S.selProd ? Object.assign({}, p, { location_id: '' }) : p)); this.forceUpdate(); this.notify('✓ 已改門市：' + (selP.name || '') + ' → 共用(全門市)'); };
+        const write = ids => { const uniq = stores.map(x => x.location_id).filter(id => ids.indexOf(id) >= 0); const nv = uniq.length ? uniq.join('|') : ''; db.setField('product', S.selProd, 'location_id', nv); this.forceUpdate(); this.notify('✓ 已改門市：' + (selP.name || '') + ' → ' + (nv ? uniq.map(x => this.locName(x)).join('、') : '共用(全門市)')); };
+        const setShared = () => { db.setField('product', S.selProd, 'location_id', ''); this.forceUpdate(); this.notify('✓ 已改門市：' + (selP.name || '') + ' → 共用(全門市)'); };
         const chips = [{ name: '共用', style: chip(shared, ';margin-right:2px'), toggle: setShared }];
         stores.forEach(st => { const on = cur.indexOf(st.location_id) >= 0; chips.push({ name: st.name, style: chip(on), toggle: () => { const set = new Set(cur); if (set.has(st.location_id)) set.delete(st.location_id); else set.add(st.location_id); write([...set]); } }); });
         return chips;
@@ -3205,7 +3211,7 @@ class Component extends DCLogic {
       pIngTagStyle: isIngSel ? this.tag(C.amb) : 'display:none',
       pIngYieldStyle: isIngSel ? 'margin-left:auto;display:flex;gap:6px;font-size:12.5px;font-weight:400;align-items:center' : 'display:none',
       pIngYield: selfG.batch_yield || '',
-      onPIngYield: e => { const v = e.target.value; db.replace('ingredient', this.t('ingredient').map(x => x.ingredient_id === S.selProd ? Object.assign({}, x, { batch_yield: v }) : x)); this.forceUpdate(); },
+      onPIngYield: e => { db.setField('ingredient', S.selProd, 'batch_yield', e.target.value); this.forceUpdate(); },
       routPanelStyle: '', // 自製半成品也有工序(菌種續養/熬煮/冷藏等),供逆推排程與製作天數
       routNote: isIngSel ? '自製半成品工序:攪拌/熬煮/發酵/冷藏等;工時 >8 小時自動 +1 天(排入生產時反映在完成日)' : '',
       routNoteStyle: isIngSel ? 'padding:8px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3' : 'display:none',
@@ -3269,7 +3275,7 @@ class Component extends DCLogic {
         if (m >= 100) { this.notify('毛利率需小於 100%'); this.forceUpdate(); return; }
         if (!(uCost > 0)) { this.notify('此產品尚無配方成本 — 先建 BOM(批成本 > 0)才能由毛利率反推售價'); this.forceUpdate(); return; }
         const price = Math.round(uCost / (1 - m / 100));
-        db.replace('product', this.t('product').map(x => x.product_id === S.selProd ? Object.assign({}, x, { sale_price: String(price) }) : x));
+        db.setField('product', S.selProd, 'sale_price', String(price));
         this.forceUpdate();
         this.notify('✓ 毛利率 ' + m + '% → 售價 NT$' + price + '(單位成本 NT$' + uCost.toFixed(1) + ');標準產出不變');
       },

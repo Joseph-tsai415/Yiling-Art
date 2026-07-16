@@ -11,11 +11,22 @@ const APP_URL = new URL('../apps-script.js', import.meta.url);
 // schema.js 是瀏覽器 ESM;node 預設把 .js 當 CJS,所以用文字擷取 + 安全 eval 物件字面值(不動模組語意).
 const schemaSrc = readFileSync(SCHEMA_URL, 'utf8');
 const TABLE_COLUMNS = extract('TABLE_COLUMNS');
+const PRIMARY_KEY = extract('PRIMARY_KEY');
 const DEFAULT_PERMS = extract('DEFAULT_PERMS');
 const AUTH_TABLES = extractArray('AUTH_TABLES');
 const BATCH_EXCLUDE = extractArray('BATCH_EXCLUDE');
+const COST_FIELDS = extractArray('COST_FIELDS');
 // 主同步表 = 全部表扣掉帳號/權限表(與 js/schema.js 的 SYNC_TABLES 同一算式,零漂移)
 const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => !AUTH_TABLES.includes(t));
+
+// 不變式(schema-guard 要求):每張表都要有「非空」PRIMARY_KEY,且其每個鍵欄都存在於該表 TABLE_COLUMNS。
+// check:schema 原本只擋區塊過期,擋不到「主鍵漏設 / 打錯欄名 / 指到不存在的欄」;在此提前 fail,
+// 避免產出一份 cell-level 定位不到列(或永遠 ambiguous)的後端。gen 與 --check 兩種模式都會跑到。
+for (const t of Object.keys(TABLE_COLUMNS)) {
+  const pk = PRIMARY_KEY[t];
+  if (!Array.isArray(pk) || pk.length === 0) fail(`js/schema.js 的 PRIMARY_KEY 缺少 ${t}(或不是非空陣列)`);
+  for (const c of pk) if (!TABLE_COLUMNS[t].includes(c)) fail(`js/schema.js 的 PRIMARY_KEY.${t} 含非該表欄位:'${c}'`);
+}
 
 const src = readFileSync(APP_URL, 'utf8');
 const eol = src.includes('\r\n') ? '\r\n' : '\n'; // 依檔案現有行尾(Windows 常是 CRLF)產生,避免混行尾讓 --check 誤判過期
@@ -26,6 +37,13 @@ let next = replaceBlock(src, 'gen:tables', [
   Object.entries(TABLE_COLUMNS).map(([t, cols]) => `  ${t}: [${cols.map(c => `'${c}'`).join(', ')}]`).join(',' + eol),
   '};'
 ], '(改結構請改 js/schema.js)');
+
+// <<gen:keys>>:每張表主鍵欄(cell-level updateCell / deleteRow 定位列用;與前端同一份)
+next = replaceBlock(next, 'gen:keys', [
+  'var PRIMARY_KEY = {',
+  Object.entries(PRIMARY_KEY).map(([t, cols]) => `  ${t}: [${cols.map(c => `'${c}'`).join(', ')}]`).join(',' + eol),
+  '};'
+], '(改主鍵請改 js/schema.js)');
 
 // <<gen:perms>>:角色權限預設矩陣(與前端同一份;見 doc/PERMISSION_ROLE_MAP.md)
 next = replaceBlock(next, 'gen:perms', [
@@ -43,6 +61,11 @@ next = replaceBlock(next, 'gen:synctables', [
 next = replaceBlock(next, 'gen:batchexclude', [
   'var BATCH_EXCLUDE = [' + BATCH_EXCLUDE.map(t => `'${t}'`).join(', ') + '];'
 ], '(改結構請改 js/schema.js)');
+
+// <<gen:costfields>>:成本敏感欄位(欄名層級);後端 updateCell 對缺 feature.cost 的工作階段回 forbidden_field(與前端 canCost 同一份)
+next = replaceBlock(next, 'gen:costfields', [
+  'var COST_FIELDS = [' + COST_FIELDS.map(t => `'${t}'`).join(', ') + '];'
+], '(改成本欄請改 js/schema.js)');
 
 function extract(name) {
   const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\{[\\s\\S]*?\\n\\});'));
