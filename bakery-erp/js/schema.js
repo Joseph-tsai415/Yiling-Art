@@ -39,7 +39,12 @@ export const TABLE_COLUMNS = {
   role_permission:    ['role_id', 'perm_key', 'allow'],
 
   // ── 稽核日誌(後端專用:登入/登出;不在主同步、前端不讀不顯示;append-only)──
-  audit_log:          ['log_id', 'ts', 'user_id', 'email', 'action', 'session_id', 'duration_min']
+  audit_log:          ['log_id', 'ts', 'user_id', 'email', 'action', 'session_id', 'duration_min'],
+
+  // ── 工作階段(後端專用:每個 session 一列 upsert;不在主同步、前端不讀不顯示)──
+  //   線上時間 = (logout_ts || last_seen) − login_ts。last_seen 由 revs 輪詢節流更新(見 apps-script.js),
+  //   故即使沒有顯式登出(關分頁/斷線),仍能算出到「最後一次輪詢」為止的線上時間。
+  session:            ['session_id', 'user_id', 'email', 'login_ts', 'last_seen', 'logout_ts', 'duration_min', 'active']
 };
 
 // 結構指紋:TABLE_COLUMNS 任一表/欄新增或改動即改變。前後端比對此值偵測版本偏移(見前端 staleness guard)。
@@ -79,11 +84,12 @@ export const PRIMARY_KEY = {
   stock_ledger:       ['ledger_id'],
   user_account:       ['user_id'],
   role_permission:    ['role_id', 'perm_key'],
-  audit_log:          ['log_id']
+  audit_log:          ['log_id'],
+  session:            ['session_id']
 };
 
 // 前端主同步(pullAll)拉取的表 = 全部表扣掉帳號/權限這兩張後端專用表.
-export const AUTH_TABLES = ['user_account', 'role_permission', 'audit_log'];
+export const AUTH_TABLES = ['user_account', 'role_permission', 'audit_log', 'session'];
 export const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => AUTH_TABLES.indexOf(t) < 0);
 
 // 無界帳本:刻意不併入 listAll 批次回應(避免撐爆),前端改逐表補拉(見 db.js)。

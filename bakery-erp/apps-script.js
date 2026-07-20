@@ -57,7 +57,8 @@ var TABLES = {
   stock_ledger: ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
   user_account: ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'],
   role_permission: ['role_id', 'perm_key', 'allow'],
-  audit_log: ['log_id', 'ts', 'user_id', 'email', 'action', 'session_id', 'duration_min']
+  audit_log: ['log_id', 'ts', 'user_id', 'email', 'action', 'session_id', 'duration_min'],
+  session: ['session_id', 'user_id', 'email', 'login_ts', 'last_seen', 'logout_ts', 'duration_min', 'active']
 };
 // <</gen:tables>>
 
@@ -90,7 +91,8 @@ var PRIMARY_KEY = {
   stock_ledger: ['ledger_id'],
   user_account: ['user_id'],
   role_permission: ['role_id', 'perm_key'],
-  audit_log: ['log_id']
+  audit_log: ['log_id'],
+  session: ['session_id']
 };
 // <</gen:keys>>
 
@@ -108,7 +110,7 @@ var COST_FIELDS = ['latest_unit_cost', 'quote_price', 'quote_price_pre', 'tax_ra
 
 // 結構指紋:前後端比對偵測版本偏移(舊快取前端 × 新後端 → replace 依 client headers 重寫會掉欄)。由 gen:schema 依 js/schema.js 產生
 // <<gen:sig>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(此值由 js/schema.js 的 SCHEMA_SIG 產生)
-var SCHEMA_SIG = '1yd96fn';
+var SCHEMA_SIG = '14vg3vg';
 // <</gen:sig>>
 
 // 前端主同步(pullAll)與 listAll 批次讀取的分頁清單 — 由 gen:schema 依 js/schema.js 產生
@@ -462,6 +464,97 @@ function appendAudit_(action, userId, email, sessionId, durationMin) {
     auditSheet_().appendRow(TABLES.audit_log.map(function (h) { return row[h] === undefined ? '' : row[h]; }));
   } catch (err) { }
 }
+
+// ─── 工作階段線上時間(session 分頁,後端專用、每 session 一列 upsert;不在主同步、前端不讀)───
+// 問題:logout 只在按登出鈕/pagehide beacon 觸發,關分頁/導頁/當機時常沒送達 → audit_log 只有 login、算不出線上時間。
+// 解法:每個 session 維護一列 {login_ts, last_seen};last_seen 由既有的 revs 輪詢節流更新(見 doGet)。
+//   線上時間 = (logout_ts || last_seen) − login_ts,所以即使沒有顯式登出,仍能取到「到最後一次輪詢為止」的時間(誤差 ≤ 輪詢間隔)。
+var SESSION_FLUSH_MS = 3 * 60 * 1000; // last_seen 寫回節流:同一 session 每 3 分鐘最多寫 sheet 一次(N 使用者 → 至多 N/3 次寫入/分鐘)。
+function sessionSheet_() {
+  var sh = ss_().getSheetByName('session');
+  if (!sh) { sh = ss_().insertSheet('session'); sh.appendRow(TABLES.session); sh.setFrozenRows(1); } // 缺分頁就地補建(migrate 也會建;兜底避免早期登入漏記)
+  return sh;
+}
+function tsText_(d) { return Utilities.formatDate(d || new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss'); }
+// 時間欄一律以「文字」寫入(setNumberFormat('@') 先於 setValue),避免 Sheets 自動把 dd/MM/yyyy HH:mm:ss 轉成 Date 後時間遺失(last_login 舊教訓)。
+function setSessCell_(sh, row, colName, value, asText) {
+  var c = sh.getRange(row, TABLES.session.indexOf(colName) + 1);
+  if (asText) c.setNumberFormat('@');
+  c.setValue(value);
+}
+// 依 session_id 找列(只讀 session_id 單欄,便宜);找不到回 0。
+function sessRowOf_(sh, sid) {
+  var last = sh.getLastRow();
+  if (last < 2 || !sid) return 0;
+  var iCol = TABLES.session.indexOf('session_id') + 1;
+  var col = sh.getRange(2, iCol, last - 1, 1).getValues();
+  for (var i = 0; i < col.length; i++) if (String(col[i][0]) === sid) return i + 2;
+  return 0;
+}
+// 登入時:先把該使用者「還 active、沒登出」的殘留 session 用其 last_seen 收尾(避免一直掛著),再開一筆新 session。
+//   在 doPost login(ScriptLock 下)呼叫 → append 不會與 revs 的 touch 併發。
+function sessionStart_(sid, userId, email, nowMs) {
+  try {
+    var sh = sessionSheet_();
+    sessionFinalizeStale_(sh, String(userId || ''), String(email || ''));
+    var ts = tsText_(new Date(nowMs));
+    // login_ts = last_seen = 現在;logout_ts 空;duration_min = 0;active = TRUE。
+    sh.appendRow(TABLES.session.map(function (h) {
+      if (h === 'session_id') return sid;
+      if (h === 'user_id') return userId || '';
+      if (h === 'email') return email || '';
+      if (h === 'login_ts' || h === 'last_seen') return ts;
+      if (h === 'duration_min') return 0;
+      if (h === 'active') return 'TRUE';
+      return '';
+    }));
+    // append 後把時間欄補成文字格式(appendRow 會先讓 Sheets 依內容自動判型 → 需覆寫成 '@' 才不會被裁成 Date)。
+    var r = sh.getLastRow();
+    setSessCell_(sh, r, 'login_ts', ts, true);
+    setSessCell_(sh, r, 'last_seen', ts, true);
+  } catch (err) { }
+}
+// revs 輪詢節流更新 last_seen + duration_min(login_ts epoch 來自 token 快取);best-effort,失敗不影響輪詢。
+function sessionTouch_(sid, loginTsMs, nowMs) {
+  try {
+    var sh = sessionSheet_();
+    var r = sessRowOf_(sh, sid);
+    if (!r) return; // 沒有對應列(如部署前既有 session)→ 略過,下次登入才會建列
+    setSessCell_(sh, r, 'last_seen', tsText_(new Date(nowMs)), true);
+    if (loginTsMs) setSessCell_(sh, r, 'duration_min', Math.round((nowMs - loginTsMs) / 60000), false);
+  } catch (err) { }
+}
+// 顯式登出:收尾 logout_ts + duration(以 now 為準,較 last_seen 精準)+ active=FALSE。
+function sessionEnd_(sid, endMs, loginTsMs) {
+  try {
+    var sh = sessionSheet_();
+    var r = sessRowOf_(sh, sid);
+    if (!r) return;
+    setSessCell_(sh, r, 'logout_ts', tsText_(new Date(endMs)), true);
+    if (loginTsMs) setSessCell_(sh, r, 'duration_min', Math.round((endMs - loginTsMs) / 60000), false);
+    setSessCell_(sh, r, 'active', 'FALSE', false);
+  } catch (err) { }
+}
+// 收尾殘留 active session(沒登出就被新登入取代):以其 last_seen 當最佳結束時間;duration_min 已由最後一次 touch 維護,故沿用。
+function sessionFinalizeStale_(sh, userId, email) {
+  try {
+    var last = sh.getLastRow();
+    if (last < 2) return;
+    var head = TABLES.session;
+    var iU = head.indexOf('user_id'), iE = head.indexOf('email'), iA = head.indexOf('active'), iL = head.indexOf('last_seen'), iO = head.indexOf('logout_ts');
+    var data = sh.getRange(2, 1, last - 1, head.length).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var row = data[i];
+      if (String(row[iA]).toUpperCase() !== 'TRUE') continue;
+      var sameUser = (userId && String(row[iU]) === userId) || (email && String(row[iE]).toLowerCase() === email.toLowerCase());
+      if (!sameUser) continue;
+      var r = i + 2;
+      setSessCell_(sh, r, 'logout_ts', String(row[iL] || ''), true); // last_seen 已是文字;直接沿用當作結束時間
+      setSessCell_(sh, r, 'active', 'FALSE', false);
+    }
+  } catch (err) { }
+}
+
 function findAccount_(email) {
   var data = accountsSheet_().getDataRange().getValues();
   if (data.length < 2) return null;
@@ -497,9 +590,13 @@ function login_(credential) {
   }
   if (!acc || String(acc.active).toUpperCase() !== 'TRUE') return { ok: false, error: 'not_on_list', email: email };
   var token = Utilities.getUuid();
-  // 快取存 email + login_ts(epoch ms)— 角色/地點/停用每個請求重新解析(resolveSess_),名單變更即時生效;
-  //   login_ts 供 logout 計算 duration_min。
-  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email, login_ts: (new Date()).getTime() }), 21600);
+  var sid = Utilities.getUuid();       // session_id(與 token 分開:不把可用來認證的 live token 寫進 sheet)
+  var nowMs = (new Date()).getTime();
+  // 快取存 email + login_ts(epoch ms)+ sid + seen(last_seen 最後寫回 sheet 的 epoch,供 revs 節流)—
+  //   角色/地點/停用每個請求重新解析(resolveSess_),名單變更即時生效;login_ts 供 logout/revs 計算 duration_min。
+  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email, login_ts: nowMs, sid: sid, seen: nowMs }), 21600);
+  // session 分頁:此使用者殘留的 active session 先收尾,再開一筆新 session(login 在 doPost ScriptLock 下 → append 不與 revs touch 併發)。
+  sessionStart_(sid, String(acc.user_id || ''), email, nowMs);
   // last_login 以「文字」寫入 dd/MM/yyyy HH:mm:ss:設 setNumberFormat('@') 防 Sheets 轉 Date,
   // 否則 list 讀取的 (v instanceof Date) 分支會把它裁成 yyyy-MM-dd、時間遺失,super_admin 檢視/存回帳號時就被覆寫。
   try { var llc = accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1); llc.setNumberFormat('@'); llc.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss')); } catch (err) { }
@@ -618,6 +715,23 @@ function doGet(e) {
   //   (含 super_admin 直接改 Sheet,靠安裝的觸發器 bump)。單一 property store 讀取;未寫過的表回 0(給前端完整可 diff 的 map)。
   //   只含 SYNC_TABLES(略過 user_account/role_permission,那兩張前端另以 loadAccounts 處理)。整數版號無敏感資訊,故不做 scope/role 過濾(仍需有效 token)。
   if (action === 'revs') {
+    // 線上時間:把 last_seen 疊在既有輪詢上更新(前端不需新增請求)。節流 → 同一 session 每 SESSION_FLUSH_MS 才寫一次 sheet。
+    //   revs 是 doGet(非 doPost 的 ScriptLock),故 flush 以 tryLock 短鎖保護、搶不到就跳過(下次輪詢再補;best-effort)。
+    try {
+      var tokR = e && e.parameter && e.parameter.token;
+      var cacheR = session_(tokR);
+      if (cacheR && cacheR.sid && ((new Date()).getTime() - (cacheR.seen || 0) >= SESSION_FLUSH_MS)) {
+        var lockR = LockService.getScriptLock();
+        if (lockR.tryLock(2000)) {
+          try {
+            var tR = (new Date()).getTime();
+            sessionTouch_(cacheR.sid, cacheR.login_ts, tR);
+            cacheR.seen = tR; // 重寫快取的 seen(節流基準);同時把 TTL 續為 21600 → 活躍分頁不會中途過期(合理)
+            CacheService.getScriptCache().put('tok:' + tokR, JSON.stringify(cacheR), 21600);
+          } finally { lockR.releaseLock(); }
+        }
+      }
+    } catch (errR) { }
     var propsR = PropertiesService.getDocumentProperties().getProperties();
     var revs = {};
     SYNC_TABLES.forEach(function (t) { revs[t] = Number(propsR['rev:' + t] || '0'); });
@@ -687,8 +801,10 @@ function doPost(e) {
         var ltCache = session_(body.token);          // 快取內容(email + login_ts)
         var sessL = resolveSess_(body.token);         // 盡力取帳號(user_id);解析失敗仍照常記錄/清除
         if (ltCache) {
-          var dur = ltCache.login_ts ? Math.round(((new Date()).getTime() - ltCache.login_ts) / 60000) : '';
+          var nowL = (new Date()).getTime();
+          var dur = ltCache.login_ts ? Math.round((nowL - ltCache.login_ts) / 60000) : '';
           appendAudit_('logout', sessL ? sessL.user_id : '', (sessL && sessL.email) || ltCache.email || '', body.token, dur);
+          if (ltCache.sid) sessionEnd_(ltCache.sid, nowL, ltCache.login_ts); // session 分頁:收尾 logout_ts + duration + active=FALSE(doPost ScriptLock 下)
         }
         CacheService.getScriptCache().remove('tok:' + body.token);
       } catch (err) { }

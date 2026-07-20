@@ -2363,8 +2363,14 @@ class Component extends DCLogic {
       });
     });
     const supNmI = {}; for (const s2 of this.t('supplier')) supNmI[s2.supplier_id] = s2.name;
+    // 廠商篩選:top-bar 下拉(比照配方 bomSupBtn)。'' = 全部廠商、'__self' = 自製半成品、其餘 = supplier_id。與分類 pills 疊加(list = 選中分類 AND 選中廠商)。
+    const supF = S.ingSupFilter || '';
+    const ingSupBtn = this.ddBtn([{ id: '', name: '全部廠商' }, { id: '__self', name: '自製半成品' }].concat(this.t('supplier').map(s2 => ({ id: s2.supplier_id, name: s2.name, meta: s2.supplier_id }))), supF, v => this.setState({ ingSupFilter: v }));
     const ingSortV = { id: g => g.ingredient_id, name: g => g.name || '', cat: g => this.gcat(g), quote: g => this.n(g.quote_price) > 0 ? this.n(g.quote_price) : this.n(g.quote_price_pre) * (this.n(g.tax_rate) || 1), cost: g => this.n(g.latest_unit_cost), sup: g => supNmI[g.default_supplier_id] || '' };
-    const ingRows = this.lsort('lsIng', this.lfilter('lsIng', this.t('ingredient').filter(g => catFilter === '全部' || this.gcat(g) === catFilter), ['ingredient_id', 'name', g => this.gcat(g), g => supNmI[g.default_supplier_id]]), ingSortV).map(g => ({
+    const ingBase = this.t('ingredient').filter(g =>
+      (catFilter === '全部' || this.gcat(g) === catFilter) &&
+      (!supF || (supF === '__self' ? g.purchase_unit === '自製' : g.default_supplier_id === supF)));
+    const ingRows = this.lsort('lsIng', this.lfilter('lsIng', ingBase, ['ingredient_id', 'name', g => this.gcat(g), g => supNmI[g.default_supplier_id]]), ingSortV).map(g => ({
       id: g.ingredient_id, name: g.name, cat: this.gcat(g), base: g.base_unit,
       convTxt: '1 ' + (g.purchase_unit || '—') + ' = ' + this.fmt(this.n(g.conversion_rate)) + ' ' + g.base_unit,
       safeTxt: this.t('location').filter(l => this.stocksAt(l.location_id, g.ingredient_id)).map(l => l.name.replace(/店$/, '')).join('・') || '—',
@@ -3304,7 +3310,7 @@ class Component extends DCLogic {
           onSafe: e => this.setLocStock(l.location_id, S.selIng, true, e.target.value)
         };
       }),
-      ingRows, ingCatTabs, dName: d.name, onDName: setD('name'),
+      ingRows, ingCatTabs, ingSupBtn, dName: d.name, onDName: setD('name'),
       dCat: this.catName(d.category), onDCat: setD('category'), dBase: d.base_unit, onDBase: setD('base_unit'),
       dCatBtn: this.ddBtn(this.t('category').map(c => ({ id: c.category_id, name: c.name })), this.catIdOf(this.catName(d.category)), v => this.setState({ draft: Object.assign({}, d, { category: v }) })),
       dSafety: d.safety_stock, onDSafety: setD('safety_stock'),
