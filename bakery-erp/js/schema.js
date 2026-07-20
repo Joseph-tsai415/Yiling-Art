@@ -36,8 +36,15 @@ export const TABLE_COLUMNS = {
 
   // ── 帳號 / 權限(super_admin 專用;不在主同步,前端以 loadAccounts 另外讀取)──
   user_account:       ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'],
-  role_permission:    ['role_id', 'perm_key', 'allow']
+  role_permission:    ['role_id', 'perm_key', 'allow'],
+
+  // ── 稽核日誌(後端專用:登入/登出;不在主同步、前端不讀不顯示;append-only)──
+  audit_log:          ['log_id', 'ts', 'user_id', 'email', 'action', 'session_id', 'duration_min']
 };
+
+// 結構指紋:TABLE_COLUMNS 任一表/欄新增或改動即改變。前後端比對此值偵測版本偏移(見前端 staleness guard)。
+function _schemaSig(o){ const s = JSON.stringify(Object.keys(o).sort().map(k => [k, o[k]])); let h = 5381; for (let i=0;i<s.length;i++){ h = (h*33 + s.charCodeAt(i)) | 0; } return (h>>>0).toString(36); }
+export const SCHEMA_SIG = _schemaSig(TABLE_COLUMNS);
 
 // 每張表的主鍵欄(cell-level updateCell / deleteRow 用來定位列;複合鍵列多欄)。
 // 不變式(schema-guard 稽核):每個鍵欄都必須存在於該表的 TABLE_COLUMNS,且能唯一定位一列。
@@ -71,11 +78,12 @@ export const PRIMARY_KEY = {
   ingredient_request: ['req_id'],
   stock_ledger:       ['ledger_id'],
   user_account:       ['user_id'],
-  role_permission:    ['role_id', 'perm_key']
+  role_permission:    ['role_id', 'perm_key'],
+  audit_log:          ['log_id']
 };
 
 // 前端主同步(pullAll)拉取的表 = 全部表扣掉帳號/權限這兩張後端專用表.
-export const AUTH_TABLES = ['user_account', 'role_permission'];
+export const AUTH_TABLES = ['user_account', 'role_permission', 'audit_log'];
 export const SYNC_TABLES = Object.keys(TABLE_COLUMNS).filter(t => AUTH_TABLES.indexOf(t) < 0);
 
 // 無界帳本:刻意不併入 listAll 批次回應(避免撐爆),前端改逐表補拉(見 db.js)。

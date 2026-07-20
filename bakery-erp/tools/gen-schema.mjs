@@ -4,6 +4,8 @@
 //   node bakery-erp/tools/gen-schema.mjs --check  → 只檢查是否過期(CI 用,過期則 exit 1)
 // 後端仍是手動貼到 Google Apps Script 部署;本工具只保證貼過去的內容和前端同一份結構.
 import { readFileSync, writeFileSync } from 'node:fs';
+// SCHEMA_SIG 直接由 schema.js import(單一雜湊實作,不在此重算)→ 前後端帶同一字面值,零漂移。
+import { SCHEMA_SIG } from '../js/schema.js';
 
 const SCHEMA_URL = new URL('../js/schema.js', import.meta.url);
 const APP_URL = new URL('../apps-script.js', import.meta.url);
@@ -66,6 +68,11 @@ next = replaceBlock(next, 'gen:batchexclude', [
 next = replaceBlock(next, 'gen:costfields', [
   'var COST_FIELDS = [' + COST_FIELDS.map(t => `'${t}'`).join(', ') + '];'
 ], '(改成本欄請改 js/schema.js)');
+
+// <<gen:sig>>:結構指紋(= schema.js 的 SCHEMA_SIG 字面值);前後端比對偵測版本偏移,勿手改此值
+next = replaceBlock(next, 'gen:sig', [
+  `var SCHEMA_SIG = '${SCHEMA_SIG}';`
+], '(此值由 js/schema.js 的 SCHEMA_SIG 產生)');
 
 function extract(name) {
   const m = schemaSrc.match(new RegExp('export const ' + name + '\\s*=\\s*(\\{[\\s\\S]*?\\n\\});'));

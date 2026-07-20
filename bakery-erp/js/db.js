@@ -7,7 +7,7 @@
 //  3) 舊資料(真實快照/本地快取)載入時自動補 location_id=LOC-A(歷史異動皆屬本店)
 //  4) 獨立 localStorage 鍵與連線設定;預設「本地模式」,避免把 v2 新結構誤寫進 v1 的 Sheet
 import { SEED_OVERRIDE } from './seed-data.js'; // 真實資料庫快照(門市A 歷史資料)
-import { TABLE_COLUMNS, SYNC_TABLES, BATCH_EXCLUDE, PRIMARY_KEY } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js);BATCH_EXCLUDE=不併入 listAll 的無界帳本;PRIMARY_KEY=各表主鍵欄(單格寫入定位列)
+import { TABLE_COLUMNS, SYNC_TABLES, BATCH_EXCLUDE, PRIMARY_KEY, SCHEMA_SIG } from './schema.js'; // 單一資料表結構來源(前後端共用,見 ./schema.js);BATCH_EXCLUDE=不併入 listAll 的無界帳本;PRIMARY_KEY=各表主鍵欄(單格寫入定位列);SCHEMA_SIG=此前端內建的結構指紋(版本偏移守衛)
 
 // SCHEMA = 主同步表(結構單一來源見 ./schema.js);帳號/權限表為後端專用,不在主同步.
 export const SCHEMA = Object.fromEntries(SYNC_TABLES.map(t => [t, TABLE_COLUMNS[t]]));
@@ -330,6 +330,10 @@ export class DB {
     this._revWake = () => this._scheduleRevPoll(true); // visibilitychange(回前景)/online/offline → 重新評估;喚醒時立即補一輪
     this.lastPullError = null; // pullAll 失敗型態:'auth'(工作階段過期)/ 'network'(整趟都沒連上可運作後端)/ null(後端有回應);呼叫端據此決定是否 migrate
     this._batchUnsupported = false; // 能力快取:此後端已確認不支援 action=listAll → 之後直接逐表,不再探測
+    // 版本偏移守衛:後端回應的 ver(=SCHEMA_SIG 指紋)與此前端內建 SCHEMA_SIG 不符 → 前端是舊快取,擋掉所有整表/單格寫入(避免舊結構 replace 砍掉新欄),交由上層 banner + cache-bust 重載
+    this.stale = false; this.staleVer = ''; this._verOk = false;
+    this.onStale = null; // (ver) => void:首次偵測到版本偏移 → 上層顯示 banner 並排程重載
+    this.onFresh = null; // () => void:版本一致(重載成功後)→ 上層清除重載迴圈守衛
     // 頁面卸載/切到背景前,把還在防抖窗、尚未送出的整表覆寫立刻補送(否則重載後 pullAll 會用 Sheet 覆蓋本地 → 防抖窗內的最後編輯遺失)。
     // 用 pagehide + visibilitychange(hidden)—— 較 beforeunload 可靠且不破壞 bfcache;keepalive 讓請求能存活到卸載後。
     if (typeof window !== 'undefined') {
@@ -350,12 +354,39 @@ export class DB {
   setAuth(a) { try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(a)); } catch (e) { } }
   clearAuth() { try { sessionStorage.removeItem(AUTH_KEY); localStorage.removeItem(AUTH_KEY); } catch (e) { } } // 也清舊版存在 localStorage 的 token
   authToken() { const a = this.getAuth(); return (a && a.token) || ''; }
+  // 登出稽核(後端記錄登出時間 + 計算在線時長)。全程 best-effort:不阻塞 UI、離線/失敗即忽略。
+  logout() { // 明確登出:fire-and-forget POST(keepalive),沿用既有 action POST 路徑
+    if (this.mode !== 'cloud') return; const tok = this.authToken(); if (!tok) return;
+    try { fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'logout', token: tok }), keepalive: true }).catch(() => { }); } catch (e) { }
+  }
+  logoutBeacon() { // 分頁關閉時盡力送出:sendBeacon + text/plain blob(後端由 e.postData.contents 讀取)
+    if (this.mode !== 'cloud') return; const tok = this.authToken(); if (!tok) return;
+    try { const b = new Blob([JSON.stringify({ action: 'logout', token: tok })], { type: 'text/plain;charset=utf-8' }); if (navigator.sendBeacon) navigator.sendBeacon(this.cfg.url, b); } catch (e) { }
+  }
+  // 版本偏移守衛:比對後端回應的 ver 與此前端內建 SCHEMA_SIG。ver 缺席(舊後端)= 視為不偏移(向後相容)。
+  checkVer(resp) {
+    if (!resp || !resp.ver) return;
+    if (resp.ver === SCHEMA_SIG) { // 版本一致(常見/重載成功後)→ 清 stale;首次一致時通知上層清重載守衛
+      this.stale = false; this.staleVer = '';
+      if (!this._verOk) { this._verOk = true; if (this.onFresh) this.onFresh(); }
+      return;
+    }
+    const first = !this.stale || this.staleVer !== resp.ver; // 每個新版本只通知一次(避免每輪輪詢重複 banner/重載)
+    this.stale = true; this.staleVer = resp.ver;
+    if (first && this.onStale) this.onStale(resp.ver);
+  }
+  // 寫入閘門:偏移時擋掉遠端寫入(讀取/輪詢照舊),並提示重新整理。回 true = 已擋。
+  _blockWrite() {
+    if (!this.stale) return false;
+    if (this.onRemote) this.onRemote(false, '系統已更新,請重新整理');
+    return true;
+  }
   // Google ID token → 後端驗證+比對 user_account 名單 → 核發工作階段 token
   async login(credential) {
     const r = await fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'login', credential }) });
     return await r.json();
   }
-  async whoami() { const j = await this.api('action=whoami'); if (j && Array.isArray(j.caps)) this.caps = new Set(j.caps); return j; } // caps 也可能來自 whoami(與 listAll 一致)
+  async whoami() { const j = await this.api('action=whoami'); if (j && Array.isArray(j.caps)) this.caps = new Set(j.caps); this.checkVer(j); return j; } // caps 也可能來自 whoami(與 listAll 一致);ver 偏移守衛
 
   // ── 方案 B:Apps Script ──
   async api(params) {
@@ -438,6 +469,7 @@ export class DB {
         .catch(() => null)));
       // 能力快取:先前已確認此後端不支援 listAll(正向舊後端回應)→ 不再探測,直接逐表.
       const batch = this._batchUnsupported ? null : await this.api('action=listAll').catch(() => null);
+      this.checkVer(batch); // ver 偏移守衛(listAll 回應帶 ver)
       if (batch && batch.ok && batch.sheets && !Array.isArray(batch.sheets)) {
         // 新後端:一次拿到所有分頁 {sheet:{rows,rev}};缺的分頁(後端略過)→ null → 列為 missing
         reached = true;
@@ -487,6 +519,7 @@ export class DB {
   // append 逐列即時送(順序重要,不併);非雲端一律略過(_send 亦再自保一次)。
   sendRemote(payload) {
     if (this.mode !== 'cloud') return;
+    if (this._blockWrite()) return; // 版本偏移 → 擋 replace/append,避免舊結構整表覆寫砍欄
     if (payload.action === 'replace' && payload.sheet) { this._enqueueReplace(payload); return; }
     this._send(payload);
   }
@@ -503,6 +536,7 @@ export class DB {
   _drainReplace(s, keepalive) {
     const st = this._repQ[s];
     if (!st || st.inflight || !st.pending) return;
+    if (this._blockWrite()) return; // 版本偏移:已排隊的整表覆寫也不得送(防抖到期/flushWrites 卸載補送)— 保留待送,重載後由 pullAll 丟棄
     st.inflight = true; st.pending = false;
     const payload = st.payload; st.payload = null;
     // SCHEMA 表在「送出當下」用最新本地狀態重建 rows:併掉這段期間的 append/連續編輯,
@@ -652,6 +686,7 @@ export class DB {
   // 多欄一次編輯(如原料編輯表單存檔):逐欄各自 CAS(不同格互不阻塞、可並行)。patch = {欄位:值,…}
   setFields(sheet, keyish, patch) { Object.keys(patch || {}).forEach(f => this.setField(sheet, keyish, f, patch[f])); }
   _enqueueCell(sheet, match, field, before, next) {
+    if (this._blockWrite()) return; // 版本偏移 → 擋 updateCell(本地樂觀值保留,重載後由 pullAll 對齊)
     const id = this._cellId(sheet, match, field);
     let e = this._cellQ[id];
     if (!e) e = this._cellQ[id] = { sheet, match, field, base: before, latest: next, sent: null, inflight: false, dirty: false, timer: null };
@@ -663,6 +698,7 @@ export class DB {
   _drainCell(id, keepalive) {
     const e = this._cellQ[id];
     if (!e || e.inflight) return;
+    if (this._blockWrite()) return; // 版本偏移:已排隊的單格寫入也不得送(防抖到期/flushWrites 卸載補送)
     if (e.base === e.latest) { delete this._cellQ[id]; return; }                 // 淨變化為零(改回原值)→ 不送
     if (this._cellInflight >= CELL_MAX_INFLIGHT) { clearTimeout(e.timer); e.timer = setTimeout(() => this._drainCell(id), 80); return; } // 併發上限 → 稍後
     e.inflight = true; e.dirty = false; e.sent = e.latest;
@@ -723,6 +759,7 @@ export class DB {
     const match = this._matchOf(sheet, keyish);
     this._dropRow(sheet, match); // 本地即時移除
     if (this.mode !== 'cloud') return;
+    if (this._blockWrite()) return; // 版本偏移 → 擋 deleteRow(含整表覆寫後備)
     if (this.caps.has('deleteRow')) {
       const tok = this.authToken();
       const payload = { action: 'deleteRow', sheet, match };
@@ -791,6 +828,7 @@ export class DB {
     if (!this._revStarted || !this._revEligible()) return; // 條件消失(隱藏/離線/登出)→ 停;恢復時 _revWake 會重排
     try {
       const j = await this.api('action=revs');
+      this.checkVer(j); // ver 偏移守衛(revs 輪詢回應帶 ver)— 背景輪詢即可觸發 banner+重載
       const rv = j && j.ok && j.revs ? j.revs : null;
       if (rv) {
         const changed = [];

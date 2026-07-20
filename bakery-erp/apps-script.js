@@ -56,7 +56,8 @@ var TABLES = {
   ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date', 'reject_note'],
   stock_ledger: ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
   user_account: ['user_id', 'name', 'email', 'role', 'location_ids', 'active', 'created_at', 'last_login'],
-  role_permission: ['role_id', 'perm_key', 'allow']
+  role_permission: ['role_id', 'perm_key', 'allow'],
+  audit_log: ['log_id', 'ts', 'user_id', 'email', 'action', 'session_id', 'duration_min']
 };
 // <</gen:tables>>
 
@@ -88,7 +89,8 @@ var PRIMARY_KEY = {
   ingredient_request: ['req_id'],
   stock_ledger: ['ledger_id'],
   user_account: ['user_id'],
-  role_permission: ['role_id', 'perm_key']
+  role_permission: ['role_id', 'perm_key'],
+  audit_log: ['log_id']
 };
 // <</gen:keys>>
 
@@ -103,6 +105,11 @@ var CAPS = ['updateCell', 'deleteRow', 'revs'];
 // <<gen:costfields>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改成本欄請改 js/schema.js)
 var COST_FIELDS = ['latest_unit_cost', 'quote_price', 'quote_price_pre', 'tax_rate', 'unit_cost'];
 // <</gen:costfields>>
+
+// 結構指紋:前後端比對偵測版本偏移(舊快取前端 × 新後端 → replace 依 client headers 重寫會掉欄)。由 gen:schema 依 js/schema.js 產生
+// <<gen:sig>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(此值由 js/schema.js 的 SCHEMA_SIG 產生)
+var SCHEMA_SIG = '1yd96fn';
+// <</gen:sig>>
 
 // 前端主同步(pullAll)與 listAll 批次讀取的分頁清單 — 由 gen:schema 依 js/schema.js 產生
 // <<gen:synctables>> — 由 `npm run gen:schema` 依 js/schema.js 自動產生;勿手改此區塊(改結構請改 js/schema.js)
@@ -440,6 +447,21 @@ function accountsSheet_() {
   if (!sh) { sh = ss_().insertSheet('user_account'); sh.appendRow(TABLES.user_account); sh.setFrozenRows(1); }
   return sh;
 }
+// 稽核日誌分頁(後端專用、append-only;不在主同步、前端不讀)。缺分頁時就地補建 —— migrate 也會建,但這裡兜底避免早期登入遺失。
+function auditSheet_() {
+  var sh = ss_().getSheetByName('audit_log');
+  if (!sh) { sh = ss_().insertSheet('audit_log'); sh.appendRow(TABLES.audit_log); sh.setFrozenRows(1); }
+  return sh;
+}
+// 追加一列稽核紀錄。append-only 且後端專用(不會被前端整表 replace 回寫),故 ts 直接寫字串即可,無需 setNumberFormat('@')。
+// 盡力而為:任何失敗都不可影響主流程(登入/登出)—— 以 try/catch 吞掉。
+function appendAudit_(action, userId, email, sessionId, durationMin) {
+  try {
+    var ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+    var row = { log_id: Utilities.getUuid(), ts: ts, user_id: userId || '', email: email || '', action: action, session_id: sessionId || '', duration_min: (durationMin === 0 || durationMin) ? durationMin : '' };
+    auditSheet_().appendRow(TABLES.audit_log.map(function (h) { return row[h] === undefined ? '' : row[h]; }));
+  } catch (err) { }
+}
 function findAccount_(email) {
   var data = accountsSheet_().getDataRange().getValues();
   if (data.length < 2) return null;
@@ -468,14 +490,20 @@ function login_(credential) {
   // 首位管理員自動開通(chicken-and-egg):AUTH.BOOTSTRAP_ADMIN 首次登入 → super_admin
   if (!acc && AUTH.BOOTSTRAP_ADMIN && email === AUTH.BOOTSTRAP_ADMIN.trim().toLowerCase()) {
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
-    accountsSheet_().appendRow(['U-001', info.name || '管理員', email, 'super_admin', 'ALL', 'TRUE', now, now]);
+    accountsSheet_().appendRow(['U-001', info.name || '管理員', email, 'super_admin', 'ALL', 'TRUE', now, '']);
     acc = findAccount_(email);
+    // last_login 以「文字」寫入 dd/MM/yyyy HH:mm:ss,避免 Sheets 自動轉成 Date 後 list 讀取被裁成日期(時間遺失)
+    try { var llc = accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1); llc.setNumberFormat('@'); llc.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss')); } catch (err) { }
   }
   if (!acc || String(acc.active).toUpperCase() !== 'TRUE') return { ok: false, error: 'not_on_list', email: email };
   var token = Utilities.getUuid();
-  // 快取只存 email — 角色/地點/停用每個請求重新解析(resolveSess_),名單變更即時生效
-  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email }), 21600);
-  try { accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1).setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')); } catch (err) { }
+  // 快取存 email + login_ts(epoch ms)— 角色/地點/停用每個請求重新解析(resolveSess_),名單變更即時生效;
+  //   login_ts 供 logout 計算 duration_min。
+  CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email, login_ts: (new Date()).getTime() }), 21600);
+  // last_login 以「文字」寫入 dd/MM/yyyy HH:mm:ss:設 setNumberFormat('@') 防 Sheets 轉 Date,
+  // 否則 list 讀取的 (v instanceof Date) 分支會把它裁成 yyyy-MM-dd、時間遺失,super_admin 檢視/存回帳號時就被覆寫。
+  try { var llc = accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1); llc.setNumberFormat('@'); llc.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss')); } catch (err) { }
+  appendAudit_('login', String(acc.user_id || ''), email, token, ''); // 稽核:登入(append-only,後端專用)
   var role = String(acc.role || '');
   return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: role, location_ids: String(acc.location_ids || ''), perms: permsOf_(role), expires_in: 21600 };
 }
@@ -585,7 +613,7 @@ function doGet(e) {
     sess = resolveSess_(e && e.parameter && e.parameter.token);
     if (!sess) return json_({ ok: false, error: 'unauthorized' });
   }
-  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role), caps: CAPS } : { ok: true, role: '', msg: '後端未啟用登入', caps: CAPS });
+  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role), caps: CAPS, ver: SCHEMA_SIG } : { ok: true, role: '', msg: '後端未啟用登入', caps: CAPS, ver: SCHEMA_SIG });
   // 輕量版號輪詢:只回「主同步表(SYNC_TABLES)」各自 rev(整數),不讀任何資料 → 前端可低成本定期輪詢偵測「有人改過」
   //   (含 super_admin 直接改 Sheet,靠安裝的觸發器 bump)。單一 property store 讀取;未寫過的表回 0(給前端完整可 diff 的 map)。
   //   只含 SYNC_TABLES(略過 user_account/role_permission,那兩張前端另以 loadAccounts 處理)。整數版號無敏感資訊,故不做 scope/role 過濾(仍需有效 token)。
@@ -593,7 +621,7 @@ function doGet(e) {
     var propsR = PropertiesService.getDocumentProperties().getProperties();
     var revs = {};
     SYNC_TABLES.forEach(function (t) { revs[t] = Number(propsR['rev:' + t] || '0'); });
-    return json_({ ok: true, revs: revs });
+    return json_({ ok: true, revs: revs, ver: SCHEMA_SIG }); // ver:結構指紋 → 前端輪詢時比對偵測版本偏移(舊快取前端 × 新後端)
   }
   if (action === 'setup') {
     if (authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
@@ -626,7 +654,7 @@ function doGet(e) {
       });
       sheets[nameA] = { rows: filterRows_(nameA, rowsA, scopeA), rev: revA };
     }
-    return json_({ ok: true, sheets: sheets, caps: CAPS }); // caps:前端 feature-detect cell-level;缺 caps=舊後端 → 退回串行化 replace
+    return json_({ ok: true, sheets: sheets, caps: CAPS, ver: SCHEMA_SIG }); // caps:前端 feature-detect cell-level;缺 caps=舊後端 → 退回串行化 replace。ver:結構指紋偵測版本偏移
   }
   if (action === 'list') {
     if ((e.parameter.sheet === 'user_account' || e.parameter.sheet === 'role_permission') && authEnabled_() && sess.role !== 'super_admin') return json_({ ok: false, error: 'forbidden' });
@@ -652,6 +680,20 @@ function doPost(e) {
 
     // 登入不需 token(它就是來換 token 的)
     if (body.action === 'login') return json_(login_(body.credential));
+
+    // 登出:冪等/盡力而為 —— 記一列 logout 稽核(含在線分鐘數)、清掉 token 快取;無效 token 也回 ok(絕不讓前端登出失敗)。
+    if (body.action === 'logout') {
+      try {
+        var ltCache = session_(body.token);          // 快取內容(email + login_ts)
+        var sessL = resolveSess_(body.token);         // 盡力取帳號(user_id);解析失敗仍照常記錄/清除
+        if (ltCache) {
+          var dur = ltCache.login_ts ? Math.round(((new Date()).getTime() - ltCache.login_ts) / 60000) : '';
+          appendAudit_('logout', sessL ? sessL.user_id : '', (sessL && sessL.email) || ltCache.email || '', body.token, dur);
+        }
+        CacheService.getScriptCache().remove('tok:' + body.token);
+      } catch (err) { }
+      return json_({ ok: true });
+    }
 
     var sess = null, scope = null;
     if (authEnabled_()) {

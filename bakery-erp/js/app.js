@@ -56,6 +56,9 @@ class Component extends DCLogic {
     this._pup = () => { this._panSt = null; };
     window.addEventListener('mousemove', this._pmv);
     window.addEventListener('mouseup', this._pup);
+    // 分頁關閉盡力送登出稽核(僅已登入且有 token 時);unload 期間絕不 throw
+    this._phide = () => { try { if (this.state.authState === 'ok' && this.db) this.db.logoutBeacon(); } catch (e) { } };
+    window.addEventListener('pagehide', this._phide);
     import('./db.js').then(m => {
       this.db = new m.DB();
       this.db.onRemote = (ok, msg) => { if (!ok && msg) this.notify('⚠ ' + msg); };
@@ -69,6 +72,18 @@ class Component extends DCLogic {
       this.db.onCellConflict = info => { this.forceUpdate(); if (info && info.msg) this.notify(info.msg); };
       // 背景版號輪詢合併後:db 已把有變動的表併回(且保留正在編輯的欄位)→ 這裡只重繪,不動焦點/caret、不提示(靜默)
       this.db.onRefresh = () => this.forceUpdate();
+      // 版本偏移守衛:後端 ver 與此前端 SCHEMA_SIG 不符(= 舊快取前端)→ 顯示 banner、擋寫(db 端已擋),並 cache-bust 重載到新程式碼。
+      // 迴圈守衛:若已為此 ver 重載過卻仍偏移(部署端還在供舊資產)→ 不再重載,改請手動,banner 常駐、寫入持續被擋。
+      this.db.onStale = ver => {
+        let mode = 'reloading';
+        try { if (sessionStorage.getItem('bakery_ver_reload') === ver) mode = 'manual'; } catch (e) { }
+        this.setState({ verStale: true, verStaleMode: mode });
+        if (mode === 'reloading') {
+          try { sessionStorage.setItem('bakery_ver_reload', ver); } catch (e) { }
+          setTimeout(() => { try { location.replace(location.pathname + '?v=' + encodeURIComponent(ver)); } catch (e) { location.reload(); } }, 3500);
+        }
+      };
+      this.db.onFresh = () => { try { sessionStorage.removeItem('bakery_ver_reload'); } catch (e) { } }; // 版本一致(重載成功)→ 清迴圈守衛,未來再偏移可再重載
       const c = this.db.cfg || {};
       this.setState({
         ready: true,
@@ -198,7 +213,7 @@ class Component extends DCLogic {
       .catch(err => { this.setState({ authBusy: false }); this.notify('✕ 登入失敗:' + err); });
   }
   doLogout(msg) {
-    if (this.db) this.db.clearAuth();
+    if (this.db) { this.db.logout(); this.db.clearAuth(); } // 先送後端登出稽核(fire-and-forget,讀 token),再清本地 token
     const g = window.google && window.google.accounts && window.google.accounts.id;
     if (g && g.disableAutoSelect) g.disableAutoSelect(); // 下次登入顯示帳號選擇器
     if (this._gsiEl) this._gsiEl.__gsiMounted = false;
@@ -1433,6 +1448,9 @@ class Component extends DCLogic {
       })(),
       ready: S.ready, toast: S.toast,
       toastStyle: 'position:fixed;right:20px;bottom:20px;z-index:50;background:#1b2330;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.25);max-width:420px;transition:opacity .3s;' + (S.toast ? 'opacity:1' : 'opacity:0;pointer-events:none'),
+      // 版本偏移 banner(非可關閉;偏移時寫入已被 db 擋下)
+      verBannerStyle: S.verStale ? 'position:fixed;top:0;left:0;right:0;z-index:100;background:#c11f28;color:#fff;padding:10px 16px;text-align:center;font-size:13px;font-weight:600;box-shadow:0 2px 10px rgba(0,0,0,.25)' : 'display:none',
+      verBannerTxt: S.verStaleMode === 'manual' ? '系統已更新,請手動重新整理(或聯絡管理員)— 為避免資料損毀,儲存已暫停' : '系統已更新,即將自動重新整理…',
       screenTitle: (SCREENS.find(s => s[0] === S.screen) || [])[1] || '',
       navOps: mkNav(0), navMaster: mkNav(1), navAna: mkNav(2),
       navStyle: navFold ? 'width:56px;padding:14px 6px' : '',
