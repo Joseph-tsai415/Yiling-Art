@@ -896,33 +896,36 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 
         <!-- 門市視角:本店備料 -->
         <sc-if value="{{ingStoreOn}}" hint-placeholder-val="{{false}}">
-          <div style="display:grid;grid-template-columns:1.1fr 1fr 320px;gap:14px;align-items:start" data-screen-label="本店備料">
+          <div style="display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:start" data-screen-label="本店備料">
             <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
               <div class="pah" style="flex:none">本店備料清單({{locShort}})<input class="inp" style="margin-left:auto;width:150px;font-weight:400" placeholder="{{smQ.ph}}" value="{{smQ.val}}" onChange="{{smQ.onQ}}"></div>
+              <div style="flex:none;padding:2px 16px 8px;font-size:11.5px;color:#66707f">配置本店要備的原料並設安全庫存;目錄沒有的向中央申請。</div>
+              <div style="display:flex;gap:6px;padding:9px 14px;border-bottom:1px solid #eef0f3;flex-wrap:wrap;flex:none">
+                <sc-for list="{{smCatTabs}}" as="c" hint-placeholder-count="4"><span class="tag3" style="{{c.style}}" onClick="{{c.go}}">{{c.name}}</span></sc-for>
+              </div>
               <div style="overflow:auto;flex:1;min-height:0">
               <table class="t3">
                 <tr><sc-for list="{{smHead}}" as="h" hint-placeholder-count="5"><th style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</th></sc-for></tr>
                 <sc-for list="{{smRows}}" as="r" hint-placeholder-count="4">
                   <tr><td style="font-weight:500">{{r.name}}</td><td style="color:#66707f">{{r.cat}}</td><td class="num">{{r.stockTxt}}</td>
                     <td class="num"><input class="inp" style="width:82px;text-align:right" type="number" value="{{r.safeVal}}" onChange="{{r.onSafe}}"></td>
-                    <td style="text-align:right;color:#c11f28;cursor:pointer;font-size:11.5px" onClick="{{r.onDrop}}">移除</td></tr>
+                    <td style="text-align:right"><span class="btn3o" style="color:#66707f" onClick="{{r.onDrop}}">移除</span></td></tr>
                 </sc-for>
               </table>
-              <div style="{{smEmpty}}">尚未配置 — 從中間「中央目錄」加入</div>
+              <div style="{{smEmpty}}">尚未配置 — 用下方「加入本店」把中央目錄的原料加進來</div>
+              </div>
+              <div style="flex:none;padding:10px 16px;border-top:1px solid #e3e6eb;background:#f9fafb;display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;gap:8px;font-size:10.5px;color:#9aa1ab">
+                  <span style="width:100px">篩選:分類</span><span style="flex:1">原料(分類・編號)</span><span style="width:82px;text-align:right">安全庫存</span><span style="width:74px"></span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <span class="inp" style="width:100px;flex:none;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none;box-sizing:border-box" onClick="{{smAddCatBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{smAddCatBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
+                  <span class="inp" style="flex:1;min-width:120px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{smAddIngBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{smAddIngBtn.txt}}<span style="color:#9aa1ab;font-size:11px">{{smAddIngBtn.meta}}</span></span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
+                  <input class="inp" style="width:82px;flex:none;text-align:right" type="number" placeholder="0" value="{{smAddSafe}}" onChange="{{onSmAddSafe}}">
+                  <span class="btn3" style="white-space:nowrap;flex:none" onClick="{{addStoreIng}}">+ 加入本店</span>
+                </div>
               </div>
               <div style="flex:none;padding:9px 16px;font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3">安全庫存每店獨立;低於此值 → 缺料預警+叫貨建議。移除為門市自主,不需中央審核。</div>
-            </div>
-            <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
-              <div class="pah" style="flex:none">中央目錄 — 可加入<input class="inp" style="margin-left:auto;width:140px;font-weight:400" placeholder="{{scQ.ph}}" value="{{scQ.val}}" onChange="{{scQ.onQ}}"></div>
-              <div style="overflow:auto;flex:1;min-height:0">
-              <table class="t3">
-                <tr><sc-for list="{{scHead}}" as="h" hint-placeholder-count="4"><th style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</th></sc-for></tr>
-                <sc-for list="{{scRows}}" as="r" hint-placeholder-count="4">
-                  <tr><td style="font-weight:500">{{r.name}}</td><td style="color:#66707f">{{r.cat}}</td><td style="color:#66707f;font-size:11.5px">{{r.convTxt}}</td><td style="text-align:right"><span class="btn3o" onClick="{{r.onAdd}}">+ 加入本店</span></td></tr>
-                </sc-for>
-              </table>
-              <div style="{{scEmpty}}">目錄品項都已加入本店 — 需要新料用右側申請</div>
-              </div>
             </div>
             <div style="display:flex;flex-direction:column;gap:14px;position:sticky;top:0;max-height:calc(100vh - 86px);overflow:auto">
               <div class="pan">
@@ -972,16 +975,18 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                   <td style="color:#66707f;font-size:11.5px">{{r.spec}}</td>
                   <td class="num">{{r.qtyTxt}}</td>
                   <td><span class="inp" style="max-width:150px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{r.mergeBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.mergeBtn.txt}}<span style="color:#9aa1ab;font-size:11px">{{r.mergeBtn.meta}}</span></span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span></td>
-                  <td style="text-align:right;white-space:nowrap"><span class="btn3o" style="color:#177a4c;border-color:#177a4c" onClick="{{r.doAccept}}">轉入目錄</span> <span class="btn3o" onClick="{{r.doMerge}}">併入</span> <span class="btn3o" style="color:#66707f" onClick="{{r.doReject}}">婉拒</span></td>
+                  <td style="text-align:right;white-space:nowrap"><span style="{{r.rejColStyle}}"><span class="btn3o" style="color:#177a4c;border-color:#177a4c" onClick="{{r.doAccept}}">轉入目錄</span> <span class="btn3o" onClick="{{r.onMergeStart}}">併入</span> <span class="btn3o" style="color:#66707f" onClick="{{r.onRejectStart}}">婉拒</span></span><span style="{{r.rejConfirmStyle}}"><input class="inp" style="width:130px;font-size:11px" placeholder="婉拒原因(選填)" value="{{r.rejectNoteVal}}" onChange="{{r.onRejectNote}}" onKeyDown="{{r.onRejectKey}}"><span class="btn3o" style="color:#c11f28;border-color:#c11f28;margin-left:5px" onClick="{{r.onRejectConfirm}}">確認婉拒</span><span class="btn3o" style="color:#66707f;margin-left:4px" onClick="{{r.onRejectCancel}}">✕</span></span><span style="{{r.mergeConfirmStyle}}"><span style="font-size:11.5px;color:#66707f;margin-right:6px">{{r.mergeConfirmTxt}}</span><span class="btn3o" style="color:#177a4c;border-color:#177a4c" onClick="{{r.onMergeConfirm}}">確認併入</span><span class="btn3o" style="color:#66707f;margin-left:4px" onClick="{{r.onMergeCancel}}">✕</span></span></td>
                 </tr>
               </sc-for>
             </table>
             <div style="{{reqEmpty}}">目前沒有待處理申請 — 門市在「本店備料」頁送出後會出現在這裡</div>
           </div>
           <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
-            <div class="pah" style="flex:none">原料目錄(中央維護)<span style="margin-left:auto;display:flex;gap:8px;align-items:center"><input class="inp" style="width:200px;font-weight:400" placeholder="{{ingQ.ph}}" value="{{ingQ.val}}" onChange="{{ingQ.onQ}}"><span class="btn3o" style="color:#c11f28;border-color:#c11f28" onClick="{{revertImport}}">還原匯入</span><span class="btn3o" onClick="{{importSemis}}">匯入半成品(Excel)</span><span class="btn3o" onClick="{{loadCommon}}">載入常用清單</span><span class="btn3o" onClick="{{addSelfIng}}">+ 自製半成品</span><span class="btn3" onClick="{{addIng}}">+ 新增原料</span></span></div>
+            <div class="pah" style="flex:none">原料目錄(中央維護)<span style="margin-left:auto;display:flex;gap:8px;align-items:center"><input class="inp" style="width:200px;font-weight:400" placeholder="{{ingQ.ph}}" value="{{ingQ.val}}" onChange="{{ingQ.onQ}}"><!-- ready-for-prod: dev-only import/restore tools hidden for production (revertImport/importSemis/loadCommon handlers kept in app.js) --><span class="btn3" onClick="{{addIng}}">+ 新增</span></span></div>
             <div style="display:flex;gap:6px;padding:9px 14px;border-bottom:1px solid #eef0f3;flex-wrap:wrap;flex:none" onDragOver="{{catBarOver}}" onDrop="{{catBarDrop}}">
-              <sc-for list="{{ingCatTabs}}" as="c" hint-placeholder-count="5"><span class="tag3" draggable="{{c.drag}}" style="{{c.style}}" onClick="{{c.go}}" onDragStart="{{c.onDragStart}}" onDragOver="{{c.onDragOver}}" onDrop="{{c.onDrop}}" onDragEnd="{{c.onDragEnd}}">{{c.name}}</span></sc-for>
+              <sc-for list="{{ingCatTabs}}" as="c" hint-placeholder-count="5"><sc-if value="{{c.editing}}"><span style="display:inline-flex;gap:4px;align-items:center"><span class="tag3" style="cursor:pointer;color:#66707f;border-color:#e3e6eb;background:#fff;user-select:none" onMouseDown="{{c.onEditBtnDown}}" onClick="{{c.onEditCancel}}">✕</span><input class="inp" ref="{{c.editRef}}" style="{{c.editInpStyle}}" value="{{c.editVal}}" onChange="{{c.onEditInput}}" onKeyDown="{{c.onEditKey}}" onBlur="{{c.onEditBlur}}"><span class="tag3" style="cursor:pointer;color:#177a4c;border-color:#177a4c;background:#fff;user-select:none" onMouseDown="{{c.onEditBtnDown}}" onClick="{{c.onEditCommit}}">✓</span></span></sc-if><sc-if value="{{c.notEditing}}"><span class="tag3" draggable="{{c.drag}}" style="{{c.style}}" onClick="{{c.go}}" onDblClick="{{c.onDbl}}" onMouseDown="{{c.onDown}}" onMouseUp="{{c.onUp}}" onMouseLeave="{{c.onUp}}" onTouchStart="{{c.onDown}}" onTouchEnd="{{c.onUp}}" onDragStart="{{c.onDragStart}}" onDragOver="{{c.onDragOver}}" onDrop="{{c.onDrop}}" onDragEnd="{{c.onDragEnd}}">{{c.name}}</span></sc-if></sc-for>
+              <span class="tag3" draggable="false" style="{{catAddPillStyle}}" onClick="{{catAddToggle}}">{{catAddPillTxt}}</span>
+              <span style="{{catAddBoxStyle}}"><input class="inp" style="width:96px;padding:2px 7px;font-size:11px" placeholder="新分類 ↵" value="{{newCatVal}}" onChange="{{onNewCat}}" onKeyDown="{{onCatKey}}"><span class="tag3" style="cursor:pointer;color:#177a4c;border-color:#177a4c;background:#fff;user-select:none" onClick="{{addCat}}">✓</span></span>
               <span style="font-size:10.5px;color:#9aa1ab;align-self:center">拖曳 pills 可調順序,寫入分類主檔</span>
             </div>
             <div style="overflow:auto;flex:1;min-height:0">
@@ -996,6 +1001,12 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
           <div class="pan" style="position:sticky;top:0;max-height:calc(100vh - 86px);overflow:auto">
             <div class="pah" style="font-size:13px">編輯 — {{dName}}</div>
             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;font-size:12.5px">
+              <div style="{{acceptedSpecStyle}}"><span class="msi" style="font-size:15px;flex:none">info</span><span style="flex:1;min-width:0">{{acceptedSpecTxt}}</span><span style="cursor:pointer;color:#7a5c00;font-weight:600;flex:none" onClick="{{dismissSpec}}">✕</span></div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span style="color:#66707f;width:84px;flex:none">類型</span>
+                <span class="tag3" style="{{dTypePurStyle}}" onClick="{{dSetPurchased}}">外購原料</span>
+                <span class="tag3" style="{{dTypeSelfStyle}}" onClick="{{dSetSelf}}">自製半成品</span>
+              </div>
               <div style="display:grid;grid-template-columns:84px 1fr;gap:8px;align-items:center">
                 <span style="color:#66707f">名稱</span><input class="inp" value="{{dName}}" onChange="{{onDName}}">
                 <span style="color:#66707f">分類</span>
@@ -1014,20 +1025,21 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                   </div>
                 </div>
                 <span style="color:#66707f">基本單位</span><input class="inp" value="{{dBase}}" onChange="{{onDBase}}">
-                <span style="color:#66707f">採購單位</span><input class="inp" value="{{dUnit}}" onChange="{{onDUnit}}">
+                <span style="{{dBuyLblStyle}}">採購單位</span><input class="inp" style="{{dBuyInpStyle}}" value="{{dUnit}}" onChange="{{onDUnit}}">
                 <span style="color:#66707f">換算率</span><input class="inp" type="number" value="{{dConv}}" onChange="{{onDConv}}">
+                <span style="{{dBatchLblStyle}}">批次產出</span><input class="inp" style="{{dBatchInpStyle}}" type="number" value="{{dBatchYield}}" onChange="{{onDBatchYield}}">
                 <span style="color:#66707f">預設安全庫存</span><input class="inp" type="number" value="{{dSafety}}" onChange="{{onDSafety}}">
                 <span style="color:#66707f">效期天數</span><input class="inp" type="number" value="{{dShelf}}" onChange="{{onDShelf}}">
-                <span style="color:#66707f">預設供應商</span><span class="inp" style="min-width:110px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{dSupBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{dSupBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
-                <span style="color:#66707f">最新單價</span><input class="inp" type="number" step="0.001" value="{{dCost}}" onChange="{{onDCost}}">
+                <span style="{{dSupLblStyle}}">預設供應商</span><span class="inp" style="{{dSupBtnStyle}}" onClick="{{dSupBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{dSupBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
+                <span style="color:#66707f">最新單價</span><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="inp" style="flex:none;min-width:80px;text-align:right;background:#f2f4f7;color:#1b2330;border-color:#e3e6eb;cursor:default">{{dCost}}</span><span style="color:#9aa1ab;font-size:11px">/ {{dCostUnit}}</span><span style="{{dCostHintStyle}}">自動 = 含稅報價 ÷ 換算率</span></span>
               </div>
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-top:1px dashed #eef0f3;padding-top:10px">
+              <div style="{{dPricingStyle}}">
                 <span style="color:#66707f">稅前報價(每採購單位)</span><input class="inp" style="width:86px;text-align:right" type="number" value="{{dQuotePre}}" onChange="{{onDQuotePre}}">
                 <span style="color:#66707f">稅率</span>
                 <span class="inp" style="min-width:150px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{dTaxBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{dTaxBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
                 <span style="color:#66707f">含稅報價</span><input class="inp" style="width:86px;text-align:right" type="number" value="{{dQuote}}" onChange="{{onDQuote}}">
               </div>
-              <div style="font-size:11.5px;color:#66707f">三欄連動:改「稅前」→ 含稅=稅前×稅率;改「含稅」(廠商常直接報含稅)→ 稅前=含稅÷稅率;改「稅率」→ 含稅不動、稅前反推。進貨單預設帶稅前報價。最新單價=每基本單位含稅成本(例:0.035/g),每次對貨入庫自動覆寫,配方成本與毛利用它計算。</div>
+              <div style="{{dPricingNoteStyle}}">三欄連動:改「稅前」→ 含稅=稅前×稅率;改「含稅」(廠商常直接報含稅)→ 稅前=含稅÷稅率;改「稅率」→ 含稅不動、稅前反推。進貨單預設帶稅前報價。最新單價=每基本單位含稅成本(例:0.035/g),每次對貨入庫自動覆寫,配方成本與毛利用它計算。</div>
               <div style="border-top:1px solid #eef0f3;padding-top:8px">
                 <div style="font-size:11px;color:#66707f;margin-bottom:6px">各地點備料配置 — 點狀態切換;安全庫存各地點獨立(缺料預警/叫貨建議用各自的值)</div>
                 <div style="display:flex;flex-direction:column;gap:6px">
@@ -1108,7 +1120,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
           <div style="display:flex;flex-direction:column;gap:14px;{{prodEditPE}}">
             <div style="{{prodRoStyle}}"><span class="msi" style="font-size:15px;vertical-align:-3px;margin-right:4px">lock</span><span>{{prodRoTxt}}</span></div>
             <div class="pan">
-              <div class="pah"><input class="inp" style="width:130px;font-weight:600" value="{{pName}}" onChange="{{onPName}}"> 配方 BOM
+              <div class="pah"><input class="inp" style="width:130px;font-weight:600" value="{{pName}}" onChange="{{onPName}}"><span style="color:#66707f;font-size:11px;margin-left:2px">{{pId}}</span> 配方 BOM
                 <span class="tag3" style="{{pIngTagStyle}}">自製半成品</span>
                 <span style="{{pIngYieldStyle}}"><span style="color:#66707f">批次產出</span><input class="inp" style="width:74px;text-align:right" type="number" value="{{pIngYield}}" onChange="{{onPIngYield}}"><span style="color:#66707f">g/ml</span></span>
                 <span style="{{pLocStyle}}"><span class="msi" style="font-size:15px;color:#66707f;margin-right:3px">storefront</span><sc-for list="{{pLocChips}}" as="c" hint-placeholder-count="3"><span style="{{c.style}}" onClick="{{c.toggle}}">{{c.name}}</span></sc-for></span>
@@ -1122,7 +1134,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
               <table class="t3">
                 <tr><th>原料</th><th>供應商</th><th>分類</th><th class="num">每批用量(g/ml)</th><th class="num" style="{{costColStyle}}">單價</th><th class="num" style="{{costColStyle}}">成本</th><th></th></tr>
                 <sc-for list="{{bomRows}}" as="r" hint-placeholder-count="3">
-                  <tr><td class="{{r.nameCls}}" style="{{r.nameCellStyle}}" onClick="{{r.onDrill}}"><span style="font-weight:500">{{r.name}}</span><span class="tag3" style="{{r.semiTagStyle}}">自製半成品</span><span class="tag3" style="{{r.cycTagStyle}}">⚠ 循環</span><span style="{{r.noRecipeStyle}}"> · 尚無配方</span><span class="msi" style="{{r.chevStyle}}">chevron_right</span></td>
+                  <tr><td class="{{r.nameCls}}" style="{{r.nameCellStyle}}" onClick="{{r.onDrill}}"><span style="font-weight:500">{{r.name}}</span><span style="color:#66707f;font-size:11px;margin-left:6px">{{r.id}}</span><span class="tag3" style="{{r.semiTagStyle}}">自製半成品</span><span class="tag3" style="{{r.cycTagStyle}}">⚠ 循環</span><span style="{{r.noRecipeStyle}}"> · 尚無配方</span><span class="msi" style="{{r.chevStyle}}">chevron_right</span></td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.supTxt}}</td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.catTxt}}</td>
                     <td class="num"><input class="inp" style="width:76px;text-align:right" type="number" value="{{r.qtyVal}}" onChange="{{r.onQty}}"></td>
@@ -1209,23 +1221,23 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
       <!-- ═══ 供應商・設備 ═══ -->
       <sc-if value="{{isSuppliers}}" hint-placeholder-val="{{false}}">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start" data-screen-label="供應商設備">
-          <div class="pan">
-            <div class="pah">供應商<input class="inp" style="margin-left:auto;width:180px;font-weight:400" placeholder="{{supQ.ph}}" value="{{supQ.val}}" onChange="{{supQ.onQ}}"><span class="btn3" style="margin-left:8px" onClick="{{addSup}}">+ 新增</span></div>
-            <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid #e3e6eb;background:#f9fafb">
+          <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
+            <div class="pah" style="flex:none">供應商<input class="inp" style="margin-left:auto;width:180px;font-weight:400" placeholder="{{supQ.ph}}" value="{{supQ.val}}" onChange="{{supQ.onQ}}"><span class="btn3" style="margin-left:8px" onClick="{{addSup}}">+ 新增</span></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid #e3e6eb;background:#f9fafb;flex:none">
               <span style="width:12px;flex:none"></span>
               <sc-for list="{{supHead}}" as="h" hint-placeholder-count="4"><span style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</span></sc-for>
               <span style="width:20px;flex:none"></span>
             </div>
-            <div style="display:flex;flex-direction:column">
+            <div style="display:flex;flex-direction:column;overflow:auto;flex:1;min-height:0">
               <sc-for list="{{supRows}}" as="r" hint-placeholder-count="2">
                 <div style="border-bottom:1px solid #eef0f3">
                   <div style="display:flex;gap:10px;align-items:center;padding:10px 16px;cursor:pointer" style-hover="background:#f9fafb" onClick="{{r.onToggle}}">
                     <span style="color:#66707f;font-size:10.5px;width:12px;flex:none">{{r.chev}}</span>
-                    <b style="font-size:13px;width:160px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.nameTxt}}</b>
+                    <span style="width:160px;flex:none;display:inline-flex;gap:6px;align-items:baseline;min-width:0"><b style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.nameTxt}}</b><span style="color:#66707f;font-size:11px;flex:none">{{r.id}}</span></span>
                     <span style="color:#66707f;font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.contactTxt}}</span>
                     <span style="color:#66707f;font-size:11.5px;width:110px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.termsTxt}}</span>
                     <span style="width:74px;flex:none;text-align:right;font-size:12px">{{r.cntTxt}}</span>
-                    <span style="color:#c11f28;cursor:pointer;font-weight:600;width:20px;flex:none;text-align:right" onClick="{{r.onDel}}">✕</span>
+                    <span style="width:20px;flex:none"></span>
                   </div>
                   <div style="{{r.editStyle}}">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -1236,11 +1248,14 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                       <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#66707f;min-width:0">付款方式<input class="inp" style="width:100%;min-width:0;box-sizing:border-box" placeholder="月結 30 天" value="{{r.termsVal}}" onChange="{{r.onTerms}}"></label>
                       <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#66707f;min-width:0">地址<input class="inp" style="width:100%;min-width:0;box-sizing:border-box" placeholder="送貨/發票地址" value="{{r.addrVal}}" onChange="{{r.onAddr}}"></label>
                     </div>
+                    <div style="display:flex;justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px dashed #eef0f3">
+                      <span class="btn3o" style="color:#c11f28;border-color:#c11f28" onClick="{{r.onDel}}">刪除供應商</span>
+                    </div>
                   </div>
                 </div>
               </sc-for>
             </div>
-            <div style="padding:8px 16px;font-size:11.5px;color:#66707f">點欄名排序(↑↓,再點一次還原);點列展開編輯,直接改即存檔。被原料設為預設供應商時不可刪除。</div>
+            <div style="padding:8px 16px;font-size:11.5px;color:#66707f;flex:none">點欄名排序(↑↓,再點一次還原);點列展開編輯,直接改即存檔。被原料設為預設供應商時不可刪除。</div>
           </div>
           <div class="pan">
             <div class="pah">設備產能(排程負載檢查依據)<span class="btn3" style="margin-left:auto" onClick="{{addEq}}">+ 新增</span></div>

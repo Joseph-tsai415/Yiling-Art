@@ -31,7 +31,7 @@ export const TABLE_COLUMNS = {
   stocktake:          ['stocktake_id', 'target_type', 'target_id', 'counted_qty', 'date', 'location_id'],
   transfer_order:     ['to_id', 'from_loc', 'to_loc', 'status', 'request_date', 'ship_date', 'receive_date', 'need_date', 'urgent'],
   transfer_line:      ['tl_id', 'to_id', 'item_type', 'item_id', 'qty'],
-  ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date'],
+  ingredient_request: ['req_id', 'location_id', 'name', 'spec', 'weekly_qty', 'urgent', 'status', 'ingredient_id', 'request_date', 'done_date', 'reject_note'],
   stock_ledger:       ['ledger_id', 'item_type', 'item_id', 'direction', 'qty', 'source_type', 'source_id', 'unit_cost', 'txn_date', 'location_id'],
 
   // ── 帳號 / 權限(super_admin 專用;不在主同步,前端以 loadAccounts 另外讀取)──

@@ -665,6 +665,30 @@ class Component extends DCLogic {
       onDragEnd: () => this.catCommit()
     };
   }
+  // ── 分類 pill 就地改名(雙擊 / 長按觸發;僅原料目錄中央列,「全部」不可改;刪除仍只在右側面板)──
+  enterCatEdit(name) { if (!name || name === '全部') return; this.setState({ catEditName: name, catEditVal: name }); }
+  catLpDown(name) { // 長按起始:清抑制旗標,設 500ms 計時器 → 進入編輯
+    if (!name || name === '全部') return;
+    this._catLpFired = false;
+    clearTimeout(this._catPressTimer);
+    this._catPressTimer = setTimeout(() => { this._catLpFired = true; this.enterCatEdit(name); }, 500);
+  }
+  catLpUp() { clearTimeout(this._catPressTimer); }
+  commitCatRename() {
+    const S = this.state, oldName = S.catEditName;
+    if (!oldName) return;
+    const nv = String(S.catEditVal || '').trim();
+    if (!nv) { this.notify('請輸入分類名稱'); return; }                       // 空 → 保持編輯
+    if (nv === oldName) { this.setState({ catEditName: '', catEditVal: '' }); return; } // 無變更 → 關閉
+    if (this.t('category').some(x => x.name === nv)) { this.notify('「' + nv + '」已存在'); return; } // 重複 → 保持編輯
+    // 改名只動 category 主檔的 name;ingredient 以 category_id 參照,gcat/catName 自動連動,無需改料件列
+    this.db.replace('category', this.t('category').map(x => x.name === oldName ? Object.assign({}, x, { name: nv }) : x));
+    const patch = { catEditName: '', catEditVal: '' };
+    if ((S.ingCatFilter || '全部') === oldName) patch.ingCatFilter = nv; // 維持當前篩選選取
+    this.setState(patch);
+    this.notify('✓ 已更名「' + oldName + '」→「' + nv + '」');
+  }
+  cancelCatEdit() { this.setState({ catEditName: '', catEditVal: '' }); }
   // ── 全域可搜尋下拉(取代所有原生 select):一次只開一個,fixed 定位不被卡片裁切 ──
   // 用法:模板放觸發器(X.txt/X.meta/X.open),邏輯給 X = this.ddBtn(options, value, onPick, placeholder?)
   // options: [{id, name, meta?}] — meta 淡灰小字(如 廠商・分類)
@@ -936,6 +960,8 @@ class Component extends DCLogic {
     const nm = (this.state.reqName || '').trim();
     if (!nm) { this.notify('請輸入原料名稱'); return; }
     if (this.t('ingredient').some(g => g.name === nm)) { this.notify('目錄已有「' + nm + '」— 直接在「中央目錄」加入本店即可'); return; }
+    // B1:同店同名的待處理申請不得重複送(不同門市可各自申請同一新品 = 真實需求,不跨店擋)
+    if (this.t('ingredient_request').some(rr => rr.location_id === this.THIS_LOC && rr.status === '待處理' && String(rr.name || '').trim() === nm)) { this.notify('「' + nm + '」已在申請中,勿重複'); return; }
     const urg = this.state.reqUrgent;
     this.db.append('ingredient_request', { req_id: this.db.nextId('ingredient_request', 'req_id', 'REQ-', 3), location_id: this.THIS_LOC, name: nm, spec: this.state.reqSpec || '', weekly_qty: this.n(this.state.reqQty) || '', urgent: urg ? 'TRUE' : '', status: '待處理', ingredient_id: '', request_date: this.NOW, done_date: '' });
     this.setState({ reqName: '', reqSpec: '', reqQty: '', reqUrgent: false });
@@ -943,22 +969,32 @@ class Component extends DCLogic {
   }
   setReqStatus(id, patch) { this.db.replace('ingredient_request', this.t('ingredient_request').map(r => r.req_id === id ? Object.assign({}, r, patch) : r)); }
   acceptReq(r) {
+    const nm = String(r.name || '').trim();
+    // B1:點擊當下再查目錄 — 若同名原料已存在(例:另一店的同品項已先轉入),不重複建,改走併入把本店也配置上
+    const existing = this.t('ingredient').find(g => String(g.name || '').trim() === nm);
+    if (existing) { this.mergeReq(r, existing.ingredient_id); return; }
     const id = this.db.nextId('ingredient', 'ingredient_id', 'ING-', 3);
     this.db.replace('ingredient', this.t('ingredient').concat([{ ingredient_id: id, name: r.name, category: this.catIdOf('其他'), base_unit: 'g', purchase_unit: '包', conversion_rate: '1000', safety_stock: '0', latest_unit_cost: '0', quote_price: '0', tax_rate: '1.05', shelf_life_days: '90', default_supplier_id: (this.t('supplier')[0] || {}).supplier_id || '' }]));
-    this.setLocStock(this.CENTRAL, id, true, 0);
-    this.setLocStock(r.location_id, id, true, 0);
+    this.setLocStock(this.CENTRAL, id, true, 0);                          // 中央依訂單採購,安全庫存留 0
+    this.setLocStock(r.location_id, id, true, this.n(r.weekly_qty) || 0); // G1:申請門市安全庫存以每週約用量為種子
     this.setReqStatus(r.req_id, { status: '已加入', ingredient_id: id, done_date: this.TODAY });
-    this.setState({ selIng: id, draft: null });
+    // G2:把申請的 spec(規格/品牌/建議供應商)帶到編輯面板當提示,供操作者補供應商/換算
+    this.setState({ selIng: id, draft: null, acceptedSpec: { iid: id, spec: r.spec || '' } });
     this.notify('✓ 已轉入目錄 ' + id + ':' + r.name + ' — 請在下方編輯補供應商/換算/單價;已自動配置到' + this.locName(r.location_id));
   }
   mergeReq(r, iid) {
     if (!iid) { this.notify('先在「併入現有…」下拉選要併入的原料'); return; }
     const g = this.ing(iid) || {};
-    this.setLocStock(r.location_id, iid, true, this.safetyAt(r.location_id, iid) || this.n(g.safety_stock) || 0);
+    // G1:店端安全庫存以每週約用量為種子,但不調降既有較高值
+    const store = Math.max(this.n(r.weekly_qty), this.safetyAt(r.location_id, iid), this.n(g.safety_stock)) || 0;
+    this.setLocStock(r.location_id, iid, true, store);
+    // B2:併入的外購原料 → 中央也要配置(冪等;自製半成品無中央備料)
+    if (g.purchase_unit !== '自製') this.setLocStock(this.CENTRAL, iid, true, this.safetyAt(this.CENTRAL, iid) || this.n(g.safety_stock) || 0);
     this.setReqStatus(r.req_id, { status: '併入', ingredient_id: iid, done_date: this.TODAY });
     this.notify('✓ 已併入現有「' + (g.name || iid) + '」並配置到' + this.locName(r.location_id) + '(品名以目錄為準)');
   }
-  rejectReq(r) { this.setReqStatus(r.req_id, { status: '婉拒', done_date: this.TODAY }); this.notify('已婉拒:' + r.name); }
+  // U2/G3:婉拒改兩段式(inline 確認 + 選填原因),原因寫入 reject_note
+  rejectReq(r, note) { this.setReqStatus(r.req_id, { status: '婉拒', done_date: this.TODAY, reject_note: String(note || '').trim() }); this.setState({ rejectOpen: '', rejectNote: '' }); this.notify('已婉拒:' + r.name); }
   // 一鍵載入常用烘焙原料(只補目錄沒有的;供應商/單價之後補)
   loadCommon() {
     const L = [['高筋麵粉', '麵粉', 'g', '袋', 25000, 10000, 180], ['中筋麵粉', '麵粉', 'g', '袋', 22000, 5000, 180], ['低筋麵粉', '麵粉', 'g', '袋', 22000, 5000, 180], ['裸麥粉 T130', '麵粉', 'g', '袋', 25000, 0, 180], ['全麥粉', '麵粉', 'g', '袋', 25000, 0, 180], ['細砂糖', '糖', 'g', '包', 10000, 3000, 365], ['糖粉', '糖', 'g', '包', 3000, 0, 365], ['蜂蜜', '糖', 'g', '桶', 3000, 0, 365], ['無鹽發酵奶油', '油脂', 'g', '箱', 10000, 5000, 60], ['片狀奶油', '油脂', 'g', '箱', 10000, 0, 60], ['橄欖油', '油脂', 'ml', '瓶', 1000, 0, 365], ['全脂鮮奶', '乳品', 'ml', '瓶', 1000, 4000, 10], ['動物性鮮奶油', '乳品', 'ml', '瓶', 1000, 0, 14], ['雞蛋', '蛋', 'g', '箱', 10000, 3000, 21], ['法國海鹽', '鹽', 'g', '包', 1000, 500, 730], ['速發酵母', '發酵種', 'g', '包', 500, 200, 365], ['魯邦種(老麵)', '發酵種', 'g', '自製', 1, 0, 3], ['杏仁粒', '堅果果乾', 'g', '包', 1000, 0, 180], ['核桃', '堅果果乾', 'g', '包', 1000, 0, 180], ['70% 巧克力', '其他', 'g', '箱', 5000, 0, 365]];
@@ -2282,10 +2318,32 @@ class Component extends DCLogic {
     // ── ingredient master ──
     const catFilter = S.ingCatFilter || '全部';
     const catsInUse = []; for (const g of this.t('ingredient')) { const cn = this.gcat(g); if (cn && catsInUse.indexOf(cn) < 0) catsInUse.push(cn); }
-    const ingCatTabs = ['全部'].concat(this.catSorted(catsInUse)).map(c => Object.assign(
-      this.catPill(c, c === catFilter, () => this.setState({ ingCatFilter: c })),
-      { name: c === '全部' ? '全部 ' + this.t('ingredient').length : c }
-    ));
+    const catEditing = S.catEditName || '';
+    const ingCatTabs = ['全部'].concat(this.catSorted(catsInUse)).map(c => {
+      // 點擊篩選:若剛完成長按(已進入編輯)則抑制這次 click,避免誤觸篩選
+      const base = this.catPill(c, c === catFilter, () => { if (this._catLpFired) { this._catLpFired = false; return; } this.setState({ ingCatFilter: c }); });
+      const origDrag = base.onDragStart;
+      base.onDragStart = e => { this.catLpUp(); origDrag(e); }; // 開始拖曳即取消長按改名意圖(兩者互斥)
+      const editing = c !== '全部' && catEditing === c;
+      return Object.assign(base, {
+        name: c === '全部' ? '全部 ' + this.t('ingredient').length : c,
+        editing, notEditing: !editing,
+        onDbl: c === '全部' ? null : () => this.enterCatEdit(c),   // 雙擊進入編輯(「全部」不可改)
+        onDown: c === '全部' ? null : () => this.catLpDown(c),     // 長按起始(mousedown / touchstart)
+        onUp: c === '全部' ? null : () => this.catLpUp(),          // 放開 / 移出即取消計時
+        editVal: editing ? (S.catEditVal !== undefined ? S.catEditVal : c) : '',
+        editInpStyle: 'width:88px;padding:2px 7px;font-size:11px',
+        onEditInput: e => this.setState({ catEditVal: e.target.value }),
+        onEditKey: e => { if (e.key === 'Enter') this.commitCatRename(); else if (e.key === 'Escape') this.cancelCatEdit(); },
+        // 明確 ✓/✕ 控制(比照 + 分類 盒)
+        onEditCommit: () => this.commitCatRename(),
+        onEditCancel: () => this.cancelCatEdit(),
+        // 點輸入框以外 → blur 取消(不存);✓/✕ 用 mousedown preventDefault 不搶焦點,故其 click 先於 blur 生效(✓ 才不會被 blur-cancel 搶先清掉編輯態)
+        onEditBlur: () => this.cancelCatEdit(),
+        onEditBtnDown: e => e.preventDefault(),
+        editRef: editing ? (el => { if (el && document.activeElement !== el) { el.focus(); el.select && el.select(); } }) : undefined
+      });
+    });
     const supNmI = {}; for (const s2 of this.t('supplier')) supNmI[s2.supplier_id] = s2.name;
     const ingSortV = { id: g => g.ingredient_id, name: g => g.name || '', cat: g => this.gcat(g), quote: g => this.n(g.quote_price) > 0 ? this.n(g.quote_price) : this.n(g.quote_price_pre) * (this.n(g.tax_rate) || 1), cost: g => this.n(g.latest_unit_cost), sup: g => supNmI[g.default_supplier_id] || '' };
     const ingRows = this.lsort('lsIng', this.lfilter('lsIng', this.t('ingredient').filter(g => catFilter === '全部' || this.gcat(g) === catFilter), ['ingredient_id', 'name', g => this.gcat(g), g => supNmI[g.default_supplier_id]]), ingSortV).map(g => ({
@@ -2299,13 +2357,55 @@ class Component extends DCLogic {
       onSel: () => this.setState({ selIng: g.ingredient_id, draft: null })
     }));
     const selG = this.ing(S.selIng) || {};
-    const d = S.draft || { name: selG.name, category: selG.category, base_unit: selG.base_unit, safety_stock: selG.safety_stock, conversion_rate: selG.conversion_rate, purchase_unit: selG.purchase_unit, shelf_life_days: selG.shelf_life_days, default_supplier_id: selG.default_supplier_id, latest_unit_cost: selG.latest_unit_cost, quote_price: selG.quote_price, tax_rate: selG.tax_rate };
+    const d = S.draft || { name: selG.name, category: selG.category, base_unit: selG.base_unit, safety_stock: selG.safety_stock, conversion_rate: selG.conversion_rate, purchase_unit: selG.purchase_unit, shelf_life_days: selG.shelf_life_days, default_supplier_id: selG.default_supplier_id, latest_unit_cost: selG.latest_unit_cost, quote_price: selG.quote_price, quote_price_pre: selG.quote_price_pre || '', tax_rate: selG.tax_rate, batch_yield: selG.batch_yield || '' };
     const setD = k => e => this.setState({ draft: Object.assign({}, d, { [k]: e.target.value }) });
+    // 類型切換:外購原料 ↔ 自製半成品(唯一依據 purchase_unit==='自製',不新增 is_semi 欄)
+    const dIsSelf = d.purchase_unit === '自製';
+    const pillActive = 'background:#0e7490;border-color:#0e7490;color:#fff;cursor:pointer;user-select:none;min-width:76px;text-align:center';
+    const pillIdle = 'color:#66707f;border-color:#e3e6eb;background:#fff;cursor:pointer;user-select:none;min-width:76px;text-align:center';
+    const typeVals = {
+      dTypeSelfStyle: dIsSelf ? pillActive : pillIdle,
+      dTypePurStyle: dIsSelf ? pillIdle : pillActive,
+      // 只填空值/預設值,不覆寫使用者已輸入的有效資料(名稱、非預設換算率等)
+      dSetSelf: () => {
+        const nd = Object.assign({}, d, { purchase_unit: '自製' });
+        if (!nd.conversion_rate || nd.conversion_rate === '1000' || this.n(nd.conversion_rate) === 0) nd.conversion_rate = '1';
+        if (!nd.shelf_life_days) nd.shelf_life_days = '3';
+        if (!nd.batch_yield) nd.batch_yield = '1000';
+        nd.tax_rate = '1.0';
+        nd.default_supplier_id = ''; nd.quote_price = ''; nd.quote_price_pre = ''; // 自製無採購價
+        this.setState({ draft: nd });
+        this.notify('已切為自製半成品 — 供應商/報價已清除,批次產出以 g 計');
+      },
+      dSetPurchased: () => {
+        const nd = Object.assign({}, d);
+        if (nd.purchase_unit === '自製' || !nd.purchase_unit) nd.purchase_unit = '包';
+        this.setState({ draft: nd });
+      },
+      // 條件顯示(display:none 於 grid 中不佔位;後置屬性覆寫前置 display)
+      dBuyLblStyle: 'color:#66707f' + (dIsSelf ? ';display:none' : ''),
+      dBuyInpStyle: dIsSelf ? 'display:none' : '',
+      dSupLblStyle: 'color:#66707f' + (dIsSelf ? ';display:none' : ''),
+      dSupBtnStyle: 'min-width:110px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none' + (dIsSelf ? ';display:none' : ''),
+      dPricingStyle: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-top:1px dashed #eef0f3;padding-top:10px' + (dIsSelf ? ';display:none' : ''),
+      dPricingNoteStyle: 'font-size:11.5px;color:#66707f' + (dIsSelf ? ';display:none' : ''),
+      dBatchLblStyle: 'color:#66707f' + (dIsSelf ? '' : ';display:none'),
+      dBatchInpStyle: dIsSelf ? '' : 'display:none',
+      dBatchYield: d.batch_yield || '', onDBatchYield: setD('batch_yield')
+    };
     const ingUsage = this.t('bom').filter(b => b.ingredient_id === S.selIng).map(b => (this.prod(b.product_id) || {}).name).join('、');
     // 分類主檔(可增刪)
     const cats = this.t('category');
     const catOptions = cats.map(c => c.name);
     const dCatN = this.catName(d.category); if (dCatN && catOptions.indexOf(dCatN) < 0) catOptions.unshift(dCatN);
+    const addCatFn = () => {
+      const nm = String(S.newCat || '').trim();
+      if (!nm) { this.notify('請輸入分類名稱'); return; }
+      if (catOptions.indexOf(nm) >= 0) { this.notify('「' + nm + '」已存在'); return; }
+      db.replace('category', cats.concat([{ category_id: db.nextId('category', 'category_id', 'CAT-', 2), name: nm }]));
+      this.setState({ newCat: '' });
+      this.notify('✓ 已新增分類「' + nm + '」');
+    };
     const catVals = {
       catOptions,
       catPanelStyle: S.catOpen ? 'grid-column:1 / -1;border:1px solid #e3e6eb;border-radius:8px;padding:10px;background:#f7f8fa' : 'display:none',
@@ -2321,14 +2421,14 @@ class Component extends DCLogic {
         }
       })),
       newCatVal: S.newCat, onNewCat: e => this.setState({ newCat: e.target.value }),
-      addCat: () => {
-        const nm = S.newCat.trim();
-        if (!nm) { this.notify('請輸入分類名稱'); return; }
-        if (catOptions.indexOf(nm) >= 0) { this.notify('「' + nm + '」已存在'); return; }
-        db.replace('category', cats.concat([{ category_id: db.nextId('category', 'category_id', 'CAT-', 2), name: nm }]));
-        this.setState({ newCat: '' });
-        this.notify('✓ 已新增分類「' + nm + '」');
-      }
+      addCat: addCatFn,
+      // 分類 tabs 列的內嵌「＋」新增(直接在標籤列建分類,不必開右側編輯面板);重用 newCat/onNewCat/addCatFn
+      catAddOpen: !!S.catAddOpen,
+      catAddToggle: () => this.setState({ catAddOpen: !S.catAddOpen, newCat: '' }),
+      catAddPillTxt: S.catAddOpen ? '✕' : '＋ 分類',
+      catAddPillStyle: (S.catAddOpen ? 'border-style:solid;color:#66707f;border-color:#e3e6eb' : 'border-style:dashed;color:#0e7490;border-color:#8fc7d6') + ';background:#fff;cursor:pointer;user-select:none',
+      catAddBoxStyle: S.catAddOpen ? 'display:inline-flex;gap:4px;align-items:center' : 'display:none',
+      onCatKey: e => { if (e.key === 'Enter') addCatFn(); } // Enter 送出(輸入框每次按鍵已同步 newCat)
     };
 
     // ── products / bom ──
@@ -2349,11 +2449,11 @@ class Component extends DCLogic {
     const pickSel = id => () => this.setState({ selProd: id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' });
     const scrollSel = matches => matches ? (el => { if (this._bomScrollWanted) { this._bomScrollWanted = false; requestAnimationFrame(() => el && el.scrollIntoView({ block: 'nearest' })); } }) : null;
     const prodListRows = this.lfilter('lsProd', this.t('product').filter(inProdScope), ['product_id', 'name', 'type']).map(p => ({
-      name: p.name, sub: (atCentral ? (this.prodShared(p) ? '共用 · ' : this.prodLocList(p).map(x => this.locName(x)).join('、') + ' · ') : '') + (this.leadOf(p.product_id) ? '跨 ' + this.leadOf(p.product_id) + ' 天' : '當日') + ' · NT$' + p.sale_price,
+      name: p.name, sub: p.product_id + ' · ' + (atCentral ? (this.prodShared(p) ? '共用 · ' : this.prodLocList(p).map(x => this.locName(x)).join('、') + ' · ') : '') + (this.leadOf(p.product_id) ? '跨 ' + this.leadOf(p.product_id) + ' 天' : '當日') + ' · NT$' + p.sale_price,
       rowStyle: S.selProd === p.product_id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
       onSel: pickSel(p.product_id), selRef: scrollSel(S.selProd === p.product_id)
     })).concat(selfIngs.map(g => ({
-      name: '🫙 ' + g.name, sub: '自製半成品' + (prodScope !== 'all' ? (this.stocksAt(prodScope, g.ingredient_id) ? ' · 已備料' : ' · 共用(未備料)') : '') + ' · 批產 ' + this.fmt(this.n(g.batch_yield) || 1) + ' g · ' + this.n(g.latest_unit_cost).toFixed(2) + '/g',
+      name: '🫙 ' + g.name, sub: g.ingredient_id + ' · 自製半成品' + (prodScope !== 'all' ? (this.stocksAt(prodScope, g.ingredient_id) ? ' · 已備料' : ' · 共用(未備料)') : '') + ' · 批產 ' + this.fmt(this.n(g.batch_yield) || 1) + ' g · ' + this.n(g.latest_unit_cost).toFixed(2) + '/g',
       rowStyle: S.selProd === g.ingredient_id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
       onSel: pickSel(g.ingredient_id), selRef: scrollSel(S.selProd === g.ingredient_id)
     })));
@@ -2372,7 +2472,7 @@ class Component extends DCLogic {
       const hasOwnBom = isSemi && this.bomOf(b.ingredient_id).length > 0;
       const isCycle = isSemi && (b.ingredient_id === S.selProd || trail.indexOf(b.ingredient_id) >= 0);
       return {
-        name: g.name, qtyVal: b.qty_per_yield,
+        name: g.name, id: b.ingredient_id, qtyVal: b.qty_per_yield,
         // 整個名稱格是點擊熱區；pointer-events:auto 覆寫唯讀外層的 none → 店端角色可瀏覽進子配方（不可編輯不變）
         nameCls: isSemi ? 'bomdrill' : '',
         nameCellStyle: isSemi ? 'cursor:pointer;pointer-events:auto' : '',
@@ -3011,8 +3111,14 @@ class Component extends DCLogic {
       // 清單搜尋框+可排序欄頭
       ingQ: this.lq('lsIng'), ingHead: this.lhead('lsIng', [['id', '編號'], ['name', '名稱'], ['cat', '分類'], ['', '換算'], ['', '備料地點'], ['quote', '含稅報價', 'text-align:right'], ['cost', '最新單價', 'text-align:right'], ['sup', '預設供應商']]),
       invQ: this.lq('lsInv'), invHead: this.lhead('lsInv', [['id', '編號'], ['name', '名稱'], ['cat', '分類'], ['stock', '即時庫存', 'text-align:right'], ['', '包裝換算'], ['safe', '安全庫存', 'text-align:right'], ['st', '狀態']]),
-      smQ: this.lq('lsSm', '搜尋'), smHead: this.lhead('lsSm', [['name', '原料'], ['cat', '分類'], ['stock', '現有庫存', 'text-align:right'], ['safe', '安全庫存', 'text-align:right'], ['', '']]),
-      scQ: this.lq('lsSc', '搜尋'), scHead: this.lhead('lsSc', [['name', '原料'], ['cat', '分類'], ['', '換算'], ['', '']]),
+      smQ: this.lq('lsSm', '搜尋'),
+      smHead: this.lhead('lsSm', [['name', '原料'], ['cat', '分類'], ['stock', '現有庫存', 'text-align:right'], ['safe', '安全庫存', 'text-align:right'], ['', '']]).map(h => Object.assign({}, h, { arrow: h.arrow || (h.style.indexOf('cursor:pointer') >= 0 ? ' ⇅' : '') })), // 可排序欄常駐灰 ⇅;點擊後換 ↑/↓
+      smCatTabs: (() => { // 分類篩選 pills(只篩選;拖曳/改名/新增分類為中央維護,店端不提供)
+        const f = S.smCatFilter || '全部';
+        const stocked = this.t('location_stock').filter(r => r.location_id === this.THIS_LOC);
+        const cats = []; for (const r of stocked) { const cn = this.gcat(this.ing(r.ingredient_id)); if (cn && cats.indexOf(cn) < 0) cats.push(cn); }
+        return ['全部'].concat(this.catSorted(cats)).map(c => { const p = this.catPill(c, c === f, () => this.setState({ smCatFilter: c })); return { name: c === '全部' ? '全部 ' + stocked.length : c, style: p.style.replace('cursor:grab', 'cursor:pointer'), go: p.go }; });
+      })(),
       supQ: this.lq('lsSup'),
       prodQ: this.lq('lsProd', '搜尋'),
       ordQ: this.lq('lsOrd', '搜尋:單號/產品/狀態'), ordHead: this.lhead('lsOrd', [['id', '單號(點擊追溯)'], ['prod', '產品'], ['qty', '計畫', 'text-align:right'], ['date', '日期'], ['st', '狀態'], ['', '負責人']]),
@@ -3054,7 +3160,7 @@ class Component extends DCLogic {
       tsUrgentVal: !!S.tsUrgent, onTsUrgent: e => this.setState({ tsUrgent: e.target.checked }),
       // ── 本店備料(門市視角)──
       ingStoreOn: !atCentral, ingCentralOn: atCentral,
-      smRows: this.lsort('lsSm', this.lfilter('lsSm', this.t('location_stock').filter(r => r.location_id === this.THIS_LOC), ['ingredient_id', r => (this.ing(r.ingredient_id) || {}).name, r => this.gcat(this.ing(r.ingredient_id))]), { name: r => (this.ing(r.ingredient_id) || {}).name || '', cat: r => this.gcat(this.ing(r.ingredient_id)), stock: r => this.stock('ingredient', r.ingredient_id), safe: r => this.n(r.safety_stock) }).map(r => {
+      smRows: this.lsort('lsSm', this.lfilter('lsSm', this.t('location_stock').filter(r => r.location_id === this.THIS_LOC && ((S.smCatFilter || '全部') === '全部' || this.gcat(this.ing(r.ingredient_id)) === (S.smCatFilter || '全部'))), ['ingredient_id', r => (this.ing(r.ingredient_id) || {}).name, r => this.gcat(this.ing(r.ingredient_id))]), { name: r => (this.ing(r.ingredient_id) || {}).name || '', cat: r => this.gcat(this.ing(r.ingredient_id)), stock: r => this.stock('ingredient', r.ingredient_id), safe: r => this.n(r.safety_stock) }).map(r => {
         const g = this.ing(r.ingredient_id) || {};
         return {
           name: g.name || r.ingredient_id, cat: this.gcat(g) || '', stockTxt: kg(this.stock('ingredient', r.ingredient_id)),
@@ -3064,18 +3170,34 @@ class Component extends DCLogic {
         };
       }),
       smEmpty: this.t('location_stock').some(r => r.location_id === this.THIS_LOC) ? 'display:none' : 'padding:14px 16px;font-size:12px;color:#66707f',
-      scRows: this.lsort('lsSc', this.lfilter('lsSc', this.t('ingredient').filter(g => !this.stocksAt(this.THIS_LOC, g.ingredient_id)), ['ingredient_id', 'name', g => this.gcat(g)]), { name: g => g.name || '', cat: g => this.gcat(g) }).map(g => ({
-        name: g.name, cat: this.gcat(g), convTxt: '1 ' + (g.purchase_unit || '單位') + ' = ' + kg(this.n(g.conversion_rate) || 1),
-        onAdd: () => { this.setLocStock(this.THIS_LOC, g.ingredient_id, true, this.n(g.safety_stock) || 0); this.notify('✓ 已加入本店:' + g.name + '(安全庫存帶預設值,可在左側改)'); }
-      })),
-      scEmpty: this.t('ingredient').some(g => !this.stocksAt(this.THIS_LOC, g.ingredient_id)) ? 'display:none' : 'padding:14px 16px;font-size:12px;color:#66707f',
+      // 底部加料列(比照配方「加佐料」):分類篩選 + 只列尚未加入本店的目錄原料 + 安全庫存 + 加入本店
+      ...(() => {
+        const catF = S.smAddCatFilter || '';
+        const notStocked = this.t('ingredient').filter(g => !this.stocksAt(this.THIS_LOC, g.ingredient_id));
+        const catsAvail = this.catSorted(notStocked.map(g => this.gcat(g)).filter((c, i, a) => c && a.indexOf(c) === i));
+        const cf = catsAvail.indexOf(catF) >= 0 ? catF : '';
+        const pool = notStocked.filter(g => !cf || this.gcat(g) === cf);
+        const effAddIng = pool.some(g => g.ingredient_id === S.smAddIng) ? S.smAddIng : ((pool[0] || {}).ingredient_id || '');
+        return {
+          smAddCatBtn: this.ddBtn([{ id: '', name: '全部分類' }].concat(catsAvail.map(c => ({ id: c, name: c }))), cf, v => this.setState({ smAddCatFilter: v })),
+          smAddIngBtn: this.ddBtn(pool.map(g => ({ id: g.ingredient_id, name: g.name, meta: [this.gcat(g), g.ingredient_id].filter(Boolean).join(' · ') })), effAddIng, v => this.setState({ smAddIng: v }), '(目錄品項都已加入)'),
+          addStoreIng: () => {
+            if (!effAddIng) { this.notify('目錄品項都已加入本店 — 需要新料請用右側「申請新原料」'); return; }
+            const g = this.ing(effAddIng) || {};
+            this.setLocStock(this.THIS_LOC, effAddIng, true, this.n(S.smAddSafe) || 0);
+            this.setState({ smAddIng: '', smAddSafe: '' });
+            this.notify('✓ 已加入本店:' + (g.name || effAddIng));
+          }
+        };
+      })(),
+      smAddSafe: S.smAddSafe || '', onSmAddSafe: e => this.setState({ smAddSafe: e.target.value }),
       reqName: S.reqName || '', onReqName: e => this.setState({ reqName: e.target.value }),
       reqSpec: S.reqSpec || '', onReqSpec: e => this.setState({ reqSpec: e.target.value }),
       reqQty: S.reqQty || '', onReqQty: e => this.setState({ reqQty: e.target.value }),
       reqUrgentVal: !!S.reqUrgent, onReqUrgent: e => this.setState({ reqUrgent: e.target.checked }),
       doReq: () => this.submitReq(),
       myReqRows: this.t('ingredient_request').filter(r => r.location_id === this.THIS_LOC).slice().reverse().slice(0, 6).map(r => {
-        const st = { '待處理': ['待中央處理', C.amb], '已加入': ['已加入 ' + r.ingredient_id, C.grn], '併入': ['已併入 ' + ((this.ing(r.ingredient_id) || {}).name || r.ingredient_id), C.grn], '婉拒': ['婉拒', C.mut] }[r.status] || [r.status, C.mut];
+        const st = { '待處理': ['待中央處理', C.amb], '已加入': ['已加入 ' + r.ingredient_id, C.grn], '併入': ['已併入 ' + ((this.ing(r.ingredient_id) || {}).name || r.ingredient_id), C.grn], '婉拒': ['婉拒' + (r.reject_note ? ':' + r.reject_note : ''), C.mut] }[r.status] || [r.status, C.mut];
         return { name: r.name + (r.urgent === 'TRUE' ? ' ⚡' : ''), tag: st[0], tagStyle: this.tag(st[1]), date: String(r.request_date).slice(5, 10) };
       }),
       myReqEmpty: this.t('ingredient_request').some(r => r.location_id === this.THIS_LOC) ? 'display:none' : 'padding:12px 16px;font-size:12px;color:#66707f',
@@ -3087,8 +3209,24 @@ class Component extends DCLogic {
         urgStyle: r.urgent === 'TRUE' ? this.tag(C.red) : 'display:none',
         mergeVal: (S.mergePick || {})[r.req_id] || '',
         onMerge: e => { const m = Object.assign({}, S.mergePick || {}); m[r.req_id] = e.target.value; this.setState({ mergePick: m }); },
-        mergeBtn: this.ddBtn(this.t('ingredient').map(g => ({ id: g.ingredient_id, name: g.name, meta: this.gcat(g) || '' })), (S.mergePick || {})[r.req_id] || '', v => { const m = Object.assign({}, S.mergePick || {}); m[r.req_id] = v; this.setState({ mergePick: m }); }, '併入現有…'),
-        doAccept: () => this.acceptReq(r), doMerge: () => this.mergeReq(r, (S.mergePick || {})[r.req_id]), doReject: () => this.rejectReq(r)
+        mergeBtn: this.ddBtn(this.t('ingredient').filter(g => g.purchase_unit !== '自製').map(g => ({ id: g.ingredient_id, name: g.name, meta: this.gcat(g) || '' })), (S.mergePick || {})[r.req_id] || '', v => { const m = Object.assign({}, S.mergePick || {}); m[r.req_id] = v; this.setState({ mergePick: m }); }, '併入現有…'), // B2:不可併入自製半成品
+        doAccept: () => this.acceptReq(r),
+        // 正常按鈕組(轉入/併入/婉拒)只在該列沒有任何 inline 確認開啟時顯示;婉拒與併入確認互斥,同列同時只開一個
+        rejColStyle: (S.rejectOpen === r.req_id || S.mergeConfirmOpen === r.req_id) ? 'display:none' : '',
+        // U2:兩段式婉拒 — 先展開 inline 原因輸入,再「確認婉拒」;Enter 確認、Esc 取消(不用 confirm() 以免凍結擴充功能)
+        rejConfirmStyle: S.rejectOpen === r.req_id ? 'display:inline-flex;align-items:center' : 'display:none',
+        onRejectStart: () => this.setState({ rejectOpen: r.req_id, rejectNote: '', mergeConfirmOpen: '' }),
+        rejectNoteVal: S.rejectOpen === r.req_id ? (S.rejectNote || '') : '',
+        onRejectNote: e => this.setState({ rejectNote: e.target.value }),
+        onRejectKey: e => { if (e.key === 'Enter') this.rejectReq(r, S.rejectNote); else if (e.key === 'Escape') this.setState({ rejectOpen: '', rejectNote: '' }); },
+        onRejectConfirm: () => this.rejectReq(r, S.rejectNote),
+        onRejectCancel: () => this.setState({ rejectOpen: '', rejectNote: '' }),
+        // 併入:兩段式確認(mergeReq 不變,前置 interstitial)— 空選不開確認、仍給提示;確認前秀申請名⟶目錄品項,避免選錯
+        mergeConfirmStyle: S.mergeConfirmOpen === r.req_id ? 'display:inline-flex;align-items:center' : 'display:none',
+        onMergeStart: () => { const pick = (S.mergePick || {})[r.req_id]; if (!pick) { this.notify('先在「併入現有…」下拉選要併入的原料'); return; } this.setState({ mergeConfirmOpen: r.req_id, rejectOpen: '' }); },
+        mergeConfirmTxt: (() => { const pick = (S.mergePick || {})[r.req_id]; return '將〈' + r.name + '〉併入〈' + ((this.ing(pick) || {}).name || pick || '') + '〉?'; })(),
+        onMergeConfirm: () => { this.mergeReq(r, (S.mergePick || {})[r.req_id]); this.setState({ mergeConfirmOpen: '' }); },
+        onMergeCancel: () => this.setState({ mergeConfirmOpen: '' })
       })),
       mergeOptions: this.t('ingredient').map(g => ({ id: g.ingredient_id, name: g.name })),
       reqCountTxt: pendReqCount2 + ' 筆', reqCountStyle: this.tag(pendReqCount2 ? C.red : C.mut),
@@ -3133,6 +3271,7 @@ class Component extends DCLogic {
         this.notify('✓ 已新增 ' + id + ',請在右側編輯名稱與參數後儲存');
       },
       ...catVals,
+      ...typeVals,
       locCfgRows: !S.selIng ? [] : this.t('location').map(l => {
         const r = this.locRow(l.location_id, S.selIng);
         const on = !!r;
@@ -3154,7 +3293,9 @@ class Component extends DCLogic {
       dConv: d.conversion_rate, onDConv: setD('conversion_rate'), dUnit: d.purchase_unit, onDUnit: setD('purchase_unit'),
       dShelf: d.shelf_life_days, onDShelf: setD('shelf_life_days'),
       saveIng: () => {
-        db.replace('ingredient', this.t('ingredient').map(g => g.ingredient_id === S.selIng ? Object.assign({}, g, d) : g));
+        // 外購:最新單價寫入導出值(含稅報價÷換算率),讓配方成本/毛利在入庫前即用報價估算;自製維持既存值。入庫時仍由到貨實價覆寫(見對貨寫回)
+        const sv = dIsSelf ? d : Object.assign({}, d, { latest_unit_cost: String(+(this.n(d.quote_price) / (this.n(d.conversion_rate) || 1)).toFixed(4)) });
+        db.replace('ingredient', this.t('ingredient').map(g => g.ingredient_id === S.selIng ? Object.assign({}, g, sv) : g));
         // 主檔報價改了 → 進貨單草稿裡同品項的行同步新價(稅前+稅率,含稅自動推導;會覆蓋該行手改價)
         const ng = this.ing(S.selIng);
         if (ng && (S.poLines || []).some(l => l.iid === S.selIng)) {
@@ -3209,6 +3350,7 @@ class Component extends DCLogic {
         return chips;
       })(),
       pName: selP.name !== undefined ? selP.name : ((this.ing(S.selProd) || {}).name || ''),
+      pId: S.selProd, // 選取項的 id(成品 PROD-xx / 自製半成品 ING-xx),顯示在配方編輯器頂端
       onPName: setP('name'),
       pHeadStyle: isIngSel ? 'display:none' : 'margin-left:auto;display:flex;gap:10px;font-size:12.5px;font-weight:400;align-items:center',
       pIngTagStyle: isIngSel ? this.tag(C.amb) : 'display:none',
@@ -3292,7 +3434,14 @@ class Component extends DCLogic {
       })),
       dSup: d.default_supplier_id || '', onDSup: setD('default_supplier_id'),
       dSupBtn: this.ddBtn(supOptions2, d.default_supplier_id || '', v => this.setState({ draft: Object.assign({}, d, { default_supplier_id: v }) })),
-      dCost: d.latest_unit_cost, onDCost: setD('latest_unit_cost'),
+      // 最新單價:外購 → 由含稅報價 ÷ 換算率即時導出(唯讀,隨報價/換算率連動);自製 → 顯示既存值(來自配方/生產,非報價)
+      dCost: dIsSelf ? String(this.n(d.latest_unit_cost).toFixed(4)) : String(+(this.n(d.quote_price) / (this.n(d.conversion_rate) || 1)).toFixed(4)),
+      dCostUnit: d.base_unit || 'g',
+      dCostHintStyle: dIsSelf ? 'display:none' : 'color:#9aa1ab;font-size:11px;align-self:center',
+      // G2:轉入申請後,把申請單的 spec 帶到編輯面板頂端當提示(規格/品牌/建議供應商),可關閉
+      acceptedSpecTxt: (S.acceptedSpec && S.acceptedSpec.iid === S.selIng && S.acceptedSpec.spec) ? '申請備註:' + S.acceptedSpec.spec : '',
+      acceptedSpecStyle: (S.acceptedSpec && S.acceptedSpec.iid === S.selIng && S.acceptedSpec.spec) ? 'display:flex;gap:8px;align-items:center;background:#fef6e0;border:1px solid #f5e0a3;border-radius:8px;padding:8px 10px;font-size:12px;color:#7a5c00' : 'display:none',
+      dismissSpec: () => this.setState({ acceptedSpec: null }),
       // 報價三欄連動:稅前×稅率=含稅;改含稅 → 稅前反推;改稅率 → 含稅不動、稅前反推
       dQuotePre: d.quote_price_pre !== undefined && d.quote_price_pre !== '' ? d.quote_price_pre : (this.n(d.quote_price) > 0 ? String(+(this.n(d.quote_price) / (this.n(d.tax_rate) || 1)).toFixed(2)) : ''),
       onDQuotePre: e => { const v = this.n(e.target.value); const rate = this.n(d.tax_rate) || 1; this.setState({ draft: Object.assign({}, d, { quote_price_pre: e.target.value, quote_price: v > 0 ? String(+(v * rate).toFixed(2)) : '' }) }); },
