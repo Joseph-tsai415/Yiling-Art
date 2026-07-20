@@ -1101,7 +1101,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <div style="display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start" data-screen-label="產品與配方">
           <!-- 左側清單自成捲動容器(sticky):鑽入時 scrollIntoView 只捲清單本身,右側編輯器不被帶走 -->
           <div class="pan" style="display:flex;flex-direction:column;position:sticky;top:0;max-height:calc(100vh - 86px)">
-            <div class="pah" style="font-size:13px;flex:none">產品<input class="inp" style="margin-left:auto;width:92px;min-width:0;font-weight:400" placeholder="{{prodQ.ph}}" value="{{prodQ.val}}" onChange="{{prodQ.onQ}}"><span class="btn3" style="margin-left:6px;{{addProdShow}}" onClick="{{addProd}}">+ 新增</span></div>
+            <div class="pah" style="font-size:13px;flex:none"><span style="flex:none;white-space:nowrap">產品</span><input class="inp" style="flex:1;min-width:0;font-weight:400" placeholder="{{prodQ.ph}}" value="{{prodQ.val}}" onChange="{{prodQ.onQ}}"><span class="btn3" style="margin-left:6px;flex:none;{{addProdShow}}" onClick="{{addProd}}">+ 新增</span></div>
             <div style="{{prodLocBarStyle}}"><sc-for list="{{prodLocTabs}}" as="t" hint-placeholder-count="3"><span style="{{t.style}}" onClick="{{t.go}}">{{t.name}}</span></sc-for></div>
             <div style="overflow:auto;flex:1;min-height:0">
             <table class="t3">
