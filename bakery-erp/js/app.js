@@ -62,7 +62,7 @@ class Component extends DCLogic {
     import('./db.js').then(m => {
       this.db = new m.DB();
       this.db.onRemote = (ok, msg) => { if (!ok && msg) this.notify('⚠ ' + msg); };
-      this.db.onAuthFail = () => this.doLogout('⚠ 登入已過期,請重新登入');
+      this.db.onAuthFail = () => this.trySilentReauth(); // token 失效 → 先試 Google 靜默續期,失敗才掉回登入
       // 樂觀鎖 conflict:整表覆寫被拒(他人先改過)→ 重新載入最新版,使用者再重做剛才的變更
       this.db.onConflict = sheet => {
         if (sheet === 'user_account' || sheet === 'role_permission') this.loadAccounts(true);
@@ -176,23 +176,49 @@ class Component extends DCLogic {
       .catch(() => this.notify('✕ Sheet 同步失敗,先用本地快取(到「資料連線」檢查)'));
   }
   // Google Sign-In 按鈕:GIS 腳本非同步載入 → 輪詢到可用才 render;morph-skip 保住注入的 iframe
+  // GSI 一次性初始化(登入按鈕與靜默續期共用)。auto_select:true 讓 g.prompt() 能在單一已授權帳號下靜默續期(免 UI);renderButton 不受影響。
+  _ensureGsiInit() {
+    const g = window.google && window.google.accounts && window.google.accounts.id;
+    if (!g) return null;
+    if (!this._gsiInit) { this._gsiInit = true; g.initialize({ client_id: this.DEF.clientId, auto_select: true, callback: r => this.handleCredential(r) }); }
+    return g;
+  }
   mountGsi(el) {
     if (el) this._gsiEl = el;
     if (!this._gsiEl || this.state.authState !== 'login') return;
-    const g = window.google && window.google.accounts && window.google.accounts.id;
+    const g = this._ensureGsiInit();
     if (!g) { clearTimeout(this._gsiT); this._gsiT = setTimeout(() => this.mountGsi(), 300); return; }
     if (this._gsiEl.__gsiMounted) return;
     this._gsiEl.__gsiMounted = true;
-    if (!this._gsiInit) { this._gsiInit = true; g.initialize({ client_id: this.DEF.clientId, callback: r => this.handleCredential(r) }); }
     g.renderButton(this._gsiEl, { theme: 'outline', size: 'large', width: 320, text: 'signin_with', locale: 'zh_TW' });
+  }
+  // token 失效(6h 過期/被驅逐)→ 先試 Google 靜默續期(One-Tap auto-select),失敗才掉回登入畫面。
+  trySilentReauth() {
+    if (this._reauthing) return; // 併發 unauthorized 去重(平行請求/輪詢會同時觸發多次)
+    const g = this._ensureGsiInit();
+    if (!g || !g.prompt || this._autoSelectOff) { this.doLogout('⚠ 登入已過期,請重新登入'); return; } // GSI 不可用 / 曾明確登出 → 不靜默,直接掉回登入
+    this._reauthing = true;
+    // FedCM 下 notification.isNotDisplayed()/isSkippedMoment()/isDismissedMoment() 已廢棄/no-op → 以 ~4s 逾時為可靠後備(不依賴那些回呼)
+    clearTimeout(this._reauthT);
+    this._reauthT = setTimeout(() => { if (this._reauthing) { this._reauthing = false; this.doLogout('⚠ 登入已過期,請重新登入'); } }, 4000);
+    try { g.prompt(); } catch (e) { clearTimeout(this._reauthT); this._reauthing = false; this.doLogout('⚠ 登入已過期,請重新登入'); }
   }
   handleCredential(resp) {
     if (!resp || !resp.credential) return;
-    this.setState({ authBusy: true });
+    const reauth = !!this._reauthing; // 靜默續期(不動畫面/視角) vs 登入畫面登入(落地 + 設起始視角)
+    if (reauth) clearTimeout(this._reauthT); else this.setState({ authBusy: true });
     this.db.login(resp.credential)
       .then(j => {
         if (j && j.ok) {
           this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role, locs: j.location_ids || '', perms: j.perms || null });
+          this._autoSelectOff = false; // 成功登入 → 允許未來靜默續期
+          if (reauth) {
+            // 靜默續期成功:只換 token + 身分,保留使用者當前 screen/loc(不打斷操作);背景輪詢/下一個動作會用新 token 續跑
+            this._reauthing = false;
+            this.setState({ authState: 'ok', authName: j.name || '', authEmail: j.email || '', authRole: j.role || '', authLocs: j.location_ids || '', authPerms: j.perms || null });
+            this.notify('已自動延續登入');
+            return;
+          }
           // 剛登入 → 依角色落在第一個允許的畫面 + 帳號對應的起始視角(中央/全域帳號→中央倉,門市帳號→其門市);
           // 重新整理維持原畫面/視角由 renderVals 守門。loc 於此處權威設定,自癒(renderVals)僅作後備。
           const perms = j.perms || null;
@@ -204,18 +230,24 @@ class Component extends DCLogic {
           this.notify('✓ 歡迎,' + (j.name || j.email));
           this.startCloud();
         } else if (j && j.error === 'not_on_list') {
+          if (reauth) { this._reauthing = false; this.doLogout('⚠ 登入已過期,請重新登入'); return; } // 續期時帳號已被移除 → 掉回登入
           this.setState({ authState: 'blocked', authBusy: false, blockedEmail: j.email || '' });
         } else {
+          if (reauth) { this._reauthing = false; this.doLogout('⚠ 登入已過期,請重新登入'); return; }
           this.setState({ authBusy: false });
           this.notify('✕ 登入失敗:' + ((j && j.error) || '未知錯誤'));
         }
       })
-      .catch(err => { this.setState({ authBusy: false }); this.notify('✕ 登入失敗:' + err); });
+      .catch(err => {
+        if (reauth) { this._reauthing = false; this.doLogout('⚠ 登入已過期,請重新登入'); return; }
+        this.setState({ authBusy: false }); this.notify('✕ 登入失敗:' + err);
+      });
   }
   doLogout(msg) {
     if (this.db) { this.db.logout(); this.db.clearAuth(); } // 先送後端登出稽核(fire-and-forget,讀 token),再清本地 token
     const g = window.google && window.google.accounts && window.google.accounts.id;
     if (g && g.disableAutoSelect) g.disableAutoSelect(); // 下次登入顯示帳號選擇器
+    this._autoSelectOff = true; this._reauthing = false; clearTimeout(this._reauthT); // 明確登出 → 停用自動選取(不靜默續期),清掉任何進行中的續期
     if (this._gsiEl) this._gsiEl.__gsiMounted = false;
     try { localStorage.removeItem('bakery_loc_v2'); } catch (e) { } // 清掉裝置層殘留的操作視角 — 共用/門市機不把上一位使用者的門市帶給下一位(下次登入由 loginLoc 重設)
     this.setState({ authState: this.authRequired() ? 'login' : 'off', authName: '', authEmail: '', authRole: '', authLocs: '', authPerms: null, authBusy: false, accUsers: null, accPerms: null, loc: 'LOC-A' });
@@ -323,6 +355,66 @@ class Component extends DCLogic {
   // 依地點結存:未帶 loc 時 = 本店;歷史資料(無 location_id)一律視為本店
   stock(type, id, loc) { const L = loc || this.THIS_LOC; let s = 0; for (const l of this.t('stock_ledger')) if (l.item_type === type && l.item_id === id && (l.location_id || 'LOC-A') === L) s += (l.direction === 'in' ? 1 : -1) * this.n(l.qty); return s; }
   bomOf(pid) { return this.t('bom').filter(b => b.product_id === pid); }
+  // 反查:targetId 往上到「成品根」(finished product)。半成品父層繼續往上遞迴;去重、防環。
+  // 無成品根(只到孤兒半成品/純環)→ 後備列最頂半成品祖先,再退回直接父層,避免「用於配方」空白。
+  rootProductsUsing(targetId) {
+    const parentsOf = x => [...new Set(this.t('bom').filter(b => b.ingredient_id === x).map(b => b.product_id))];
+    const roots = [], seenRoot = {}, visited = {}; visited[targetId] = 1;
+    const semiTops = [], seenTop = {};
+    const directParents = parentsOf(targetId);
+    const q = directParents.slice();
+    while (q.length) {
+      const p = q.shift();
+      if (this.prod(p)) { if (!seenRoot[p]) { seenRoot[p] = 1; roots.push(p); } continue; } // 成品根
+      if (visited[p]) continue; visited[p] = 1;                                              // 半成品:去重防環
+      const pps = parentsOf(p);
+      if (!pps.length) { if (!seenTop[p]) { seenTop[p] = 1; semiTops.push(p); } }            // 頂端半成品(無更上層)
+      else for (const pp of pps) q.push(pp);
+    }
+    return roots.length ? roots : (semiTops.length ? semiTops : directParents);
+  }
+  // 向下檢查:rootId 的配方樹(只鑽半成品)是否含 targetId。防環。用於「⊃ 含此料」路徑標記。
+  bomContains(rootId, targetId) {
+    const visited = {}, stack = this.bomOf(rootId).map(b => b.ingredient_id);
+    while (stack.length) {
+      const x = stack.pop();
+      if (x === targetId) return true;
+      if (visited[x]) continue; visited[x] = 1;
+      const g = this.ing(x);
+      if (g && g.purchase_unit === '自製') for (const b of this.bomOf(x)) stack.push(b.ingredient_id);
+    }
+    return false;
+  }
+  // 從 rootId 往下找「直接含 targetId 的那一層」→ { selProd, trail }。trail=祖先鏈(給麵包屑),selProd=落地層。
+  // 直接子含 target → selProd=root、trail=[]。多路徑時取第一條(最短優先,DFS 先深先回);防環。
+  _drillPathTo(rootId, targetId) {
+    const visited = {};
+    const dfs = (node, trail) => {
+      if (visited[node]) return null; visited[node] = 1;
+      const kids = this.bomOf(node);
+      if (kids.some(b => b.ingredient_id === targetId)) return { selProd: node, trail }; // node 直接含 target
+      for (const b of kids) { // 否則鑽入「含 target 的半成品子層」
+        const g = this.ing(b.ingredient_id);
+        if (g && g.purchase_unit === '自製' && this.bomContains(b.ingredient_id, targetId)) {
+          const r = dfs(b.ingredient_id, trail.concat([node]));
+          if (r) return r;
+        }
+      }
+      return null;
+    };
+    return dfs(rootId, []) || { selProd: rootId, trail: [] };
+  }
+  // 導覽到某配方並自動下鑽到「該原料所在的那一層」,凸顯目標原料(product › semi › … 由麵包屑呈現)。
+  goToRecipe(productId, targetIngId) {
+    return () => {
+      const p = this._drillPathTo(productId, targetIngId);
+      this._bomScrollWanted = true;
+      this.setState({ screen: 'products', selProd: p.selProd, bomTrail: p.trail, bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '', bomHi: targetIngId });
+      // 凸顯只閃現一下:~2.5s 後自動清除(繼續瀏覽不殘留);連點先清舊計時器避免殘留
+      clearTimeout(this._bomHiT);
+      this._bomHiT = setTimeout(() => this.setState({ bomHi: '' }), 2500);
+    };
+  }
   routingOf(pid) { return this.t('routing').filter(r => r.product_id === pid).sort((a, b) => this.n(a.step_no) - this.n(b.step_no)); }
   unitCost(pid) {
     const p = this.prod(pid); if (!p) return 0; let c = 0;
@@ -877,6 +969,13 @@ class Component extends DCLogic {
   isPackaged(g, type) { if (type === 'product') return false; return !!g && g.purchase_unit !== '自製' && this.n(g.conversion_rate) > 1; }
   pkgCeil(g, q, type) { if (!this.isPackaged(g, type)) return Math.max(1, Math.ceil(this.n(q))); const c = this.n(g.conversion_rate); return Math.max(1, Math.ceil((this.n(q) - 1e-9) / c)) * c; }
   pkgTxt(g, q, type) { if (!this.isPackaged(g, type)) return ''; const c = this.n(g.conversion_rate); const n0 = this.n(q) / c; return this.fmt(n0, n0 % 1 ? 1 : 0) + ' ' + (g.purchase_unit || '包'); }
+  // ── 採購單位安全庫存/盤點:儲存一律 base(g/ml),僅 UI 層換算。包裝品(isPackaged)以採購單位輸入/顯示,非包裝(自製/conv<=1)維持 g/ml 1:1,永不除以 0。
+  toPU(g, base) { return this.isPackaged(g) ? this.n(base) / this.n(g.conversion_rate) : this.n(base); }   // base → 採購單位(顯示)
+  toBase(g, pu) { const b = this.isPackaged(g) ? this.n(pu) * this.n(g.conversion_rate) : this.n(pu); return Math.round(b * 10000) / 10000; } // 採購單位 → base(儲存);去浮點雜訊(1.2×25000=30000,非 30000.0000000004)
+  unitOf(g) { return this.isPackaged(g) ? (g.purchase_unit || '包') : ((g && g.base_unit) || 'g'); }        // 單位標籤:袋 vs g
+  puVal(g, base) { const v = this.toPU(g, base); if (!this.isPackaged(g)) return v; return v % 1 ? Math.round(v * 10) / 10 : v; } // 輸入框值:包裝品整數不帶小數、否則 1dp;非包裝回原始 g/ml 值(不套 1dp,避免截斷小數)
+  puFmt(g, base) { return this.puVal(g, base) + ' ' + this.unitOf(g); }                                     // 顯示字串「1.2 袋」/「30 g」
+  puHint(g, base) { return this.isPackaged(g) ? '(= ' + this.fmt(this.n(base)) + ' ' + (g.base_unit || 'g') + ')' : ''; } // 換算後 base 提示,讓 conv 改動可見
   addDraft(iid, qty, stay) {
     const g = this.ing(iid) || {};
     if (this.state.toDraft.some(l => l.iid === iid)) {
@@ -1226,14 +1325,25 @@ class Component extends DCLogic {
     this.notify('✓ ' + soid + ' 已過帳 NT$' + this.fmt(total) + ',成品已自動扣庫');
   }
   doCount() {
-    const v = this.state.countQty; if (v === '') { this.notify('請先輸入實盤數量'); return; }
     const type = this.state.invTab, id = this.state.selItem;
-    const cur = this.stock(type, id); const diff = this.n(v) - cur;
-    if (!diff) { this.setState({ countQty: '' }); this.notify('實盤與帳上一致,無需調整'); return; }
+    const g = this.ing(id) || {};
+    // 包裝原料:兩欄(未開封整袋 × 換算率 + 開封剩餘 g)→ base;非包裝(自製/成品/conv≤1)= 單一 g/個 欄。counted_qty 與流水一律存 base。
+    const packaged = type === 'ingredient' && this.isPackaged(g);
+    let entered;
+    if (packaged) {
+      const whole = this.state.countWhole, rem = this.state.countRem;
+      if ((whole === '' || whole === undefined) && (rem === '' || rem === undefined)) { this.notify('請先輸入實盤數量'); return; }
+      entered = this.n(whole) * this.n(g.conversion_rate) + this.n(rem);
+    } else {
+      const v = this.state.countQty; if (v === '') { this.notify('請先輸入實盤數量'); return; }
+      entered = this.n(v);
+    }
+    const cur = this.stock(type, id); const diff = entered - cur;
+    if (!diff) { this.setState({ countQty: '', countWhole: '', countRem: '' }); this.notify('實盤與帳上一致,無需調整'); return; }
     const stid = this.db.nextId('stocktake', 'stocktake_id', 'ST-', 3);
-    this.db.append('stocktake', { stocktake_id: stid, target_type: type, target_id: id, counted_qty: this.n(v), date: this.NOW, location_id: this.THIS_LOC });
+    this.db.append('stocktake', { stocktake_id: stid, target_type: type, target_id: id, counted_qty: entered, date: this.NOW, location_id: this.THIS_LOC });
     this.db.append('stock_ledger', { ledger_id: this.db.nextId('stock_ledger', 'ledger_id', 'L-', 4), item_type: type, item_id: id, direction: diff > 0 ? 'in' : 'out', qty: Math.abs(diff), source_type: 'stocktake', source_id: stid, unit_cost: type === 'ingredient' ? (this.ing(id) || {}).latest_unit_cost || 0 : this.unitCost(id).toFixed(2), txn_date: this.NOW, location_id: this.THIS_LOC });
-    this.setState({ countQty: '' });
+    this.setState({ countQty: '', countWhole: '', countRem: '' });
     this.notify('✓ 盤點完成:' + (diff > 0 ? '盤盈 +' : '盤虧 −') + Math.abs(diff) + ',已寫入調整流水');
   }
   // 下單:只建採購單(已下單),不動庫存;到貨後 receivePO 對貨入庫
@@ -1414,7 +1524,7 @@ class Component extends DCLogic {
       }
       if (S.screen === 'accounts' && this.hasPerm('screen.accounts') && !S.accUsers && !S.accBusy) setTimeout(() => this.loadAccounts(), 0);
     }
-    if (db && atCentral && S.invTab === 'product') setTimeout(() => this.setState({ invTab: 'ingredient', selItem: (this.t('ingredient')[0] || {}).ingredient_id || '' }), 0);
+    if (db && atCentral && S.invTab === 'product') setTimeout(() => this.setState({ invTab: 'ingredient', selItem: (this.t('ingredient')[0] || {}).ingredient_id || '', countQty: '', countWhole: '', countRem: '' }), 0);
     const draftCount = db ? this.lt('production_order').filter(o => o.status === '草稿').length : 0;
     const lowCount = db && !atCentral ? this.shortages().length : 0;
     const openTOCount = db ? this.t('transfer_order').filter(t => atCentral ? t.status === '叫貨' : (t.to_loc === this.THIS_LOC && (t.status === '叫貨' || t.status === '已出貨'))).length : 0;
@@ -2091,11 +2201,11 @@ class Component extends DCLogic {
         stockTxt: isIng ? kg(st) : this.fmt(st) + ' 個',
         pkgTxt: isIng ? pkgOf(r, st) : '—',
         stockStyle: needGap || low ? 'color:#c11f28;font-weight:600' : warnAmb ? 'color:#946800;font-weight:600' : '',
-        safeTxt: isIng ? kg(safe) : '—',
+        safeTxt: isIng ? (this.isPackaged(r) ? this.puFmt(r, safe) : kg(safe)) : '—',
         tagTxt: needGap ? '需求缺口 ' + kg(nd0 - st) : low ? '低庫存' : warnAmb ? '接近下限' : '正常',
         tagStyle: this.tag(needGap || low ? C.red : warnAmb ? C.amb : C.grn),
         rowStyle: S.selItem === id ? 'background:#e0f0f4;cursor:pointer' : 'cursor:pointer',
-        onSel: () => this.setState({ selItem: id })
+        onSel: () => this.setState({ selItem: id, countQty: '', countWhole: '', countRem: '' }) // 換盤點品項 → 清空實盤欄,避免上一品項殘留值誤送
       };
     });
     const selRow = isIng ? this.ing(S.selItem) : this.prod(S.selItem);
@@ -2417,7 +2527,8 @@ class Component extends DCLogic {
       dBatchInpStyle: dIsSelf ? '' : 'display:none',
       dBatchYield: d.batch_yield || '', onDBatchYield: setD('batch_yield')
     };
-    const ingUsage = this.t('bom').filter(b => b.ingredient_id === S.selIng).map(b => (this.prod(b.product_id) || {}).name).join('、');
+    // 用於配方:反查到成品根(而非中介半成品),去重,做成可點連結 → 導覽並凸顯此原料
+    const ingUsageRows = (S.selIng ? this.rootProductsUsing(S.selIng) : []).map((pid, i, a) => ({ id: pid, name: this.nameOf(pid), sep: i < a.length - 1 ? '、' : '', onClick: this.goToRecipe(pid, S.selIng) }));
     // 分類主檔(可增刪)
     const cats = this.t('category');
     const catOptions = cats.map(c => c.name);
@@ -2470,7 +2581,7 @@ class Component extends DCLogic {
     }));
     const prodLocBarStyle = atCentral ? 'display:flex;gap:5px;padding:8px 12px;border-bottom:1px solid #eef0f3;flex-wrap:wrap;align-items:center' : 'display:none';
     // 左側清單選取 = 全新情境（清 trail + 加料篩選）；鑽入/鑽出/點麵包屑時把選中列捲入可視範圍（block:nearest）
-    const pickSel = id => () => this.setState({ selProd: id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' });
+    const pickSel = id => () => this.setState({ selProd: id, bomTrail: [], bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '', bomHi: '' }); // 從左側清單重選 → 清除導覽凸顯
     const scrollSel = matches => matches ? (el => { if (this._bomScrollWanted) { this._bomScrollWanted = false; requestAnimationFrame(() => el && el.scrollIntoView({ block: 'nearest' })); } }) : null;
     const prodListRows = this.lfilter('lsProd', this.t('product').filter(inProdScope), ['product_id', 'name', 'type']).map(p => ({
       name: p.name, sub: p.product_id + ' · ' + (atCentral ? (this.prodShared(p) ? '共用 · ' : this.prodLocList(p).map(x => this.locName(x)).join('、') + ' · ') : '') + (this.leadOf(p.product_id) ? '跨 ' + this.leadOf(p.product_id) + ' 天' : '當日') + ' · NT$' + p.sale_price,
@@ -2495,8 +2606,11 @@ class Component extends DCLogic {
       const isSemi = g.purchase_unit === '自製';
       const hasOwnBom = isSemi && this.bomOf(b.ingredient_id).length > 0;
       const isCycle = isSemi && (b.ingredient_id === S.selProd || trail.indexOf(b.ingredient_id) >= 0);
+      // 導覽凸顯:此列即目標原料 → 高亮(goToRecipe 已自動下鑽到此層,不再標「含此料」)
+      const isHi = !!S.bomHi && b.ingredient_id === S.bomHi;
       return {
         name: g.name, id: b.ingredient_id, qtyVal: b.qty_per_yield,
+        rowHiStyle: isHi ? 'background:#fff7ed;box-shadow:inset 3px 0 0 #f59e0b;animation:bomHiPulse .7s ease-in-out 2' : '',
         // 整個名稱格是點擊熱區；pointer-events:auto 覆寫唯讀外層的 none → 店端角色可瀏覽進子配方（不可編輯不變）
         nameCls: isSemi ? 'bomdrill' : '',
         nameCellStyle: isSemi ? 'cursor:pointer;pointer-events:auto' : '',
@@ -2529,7 +2643,10 @@ class Component extends DCLogic {
       sepStyle: 'color:#9aa1ab;flex:none', onPick: null
     }]);
     // 「用於」反查：半成品是共用主檔，改它的配方會影響所有引用它的上層 — central 顯示影響面（純文字）
-    const usedInParents = [...new Set(this.t('bom').filter(x => x.ingredient_id === S.selProd).map(x => x.product_id))].map(pid => this.nameOf(pid));
+    // 「用於」反查:半成品共用主檔 → 反查到成品根,前 3 個做成可點連結(導覽並凸顯此半成品),其餘以「+N 項」表示
+    const usedInRoots = this.rootProductsUsing(S.selProd);
+    const pUsedInRows = usedInRoots.slice(0, 3).map((pid, i, a) => ({ id: pid, name: this.nameOf(pid), sep: (i < a.length - 1 || usedInRoots.length > 3) ? '、' : '', onClick: this.goToRecipe(pid, S.selProd) }));
+    const pUsedInMore = usedInRoots.length > 3 ? '+' + (usedInRoots.length - 3) + ' 項' : '';
     const selfG = this.ing(S.selProd) || {};
     const yieldN = Math.max(this.n(isIngSel ? selfG.batch_yield : selP.default_yield), 0) || 1; // 0/空/負 → 1
     const bCost = this.bomOf(S.selProd).reduce((a, b) => a + this.n(b.qty_per_yield) * this.n((this.ing(b.ingredient_id) || {}).latest_unit_cost), 0);
@@ -2930,8 +3047,8 @@ class Component extends DCLogic {
       orderRows, wipRows,
       tiles, cartRows, cartTotal, doCheckout: () => this.checkout(), comingRows,
       invIngStyle: isIng ? 'background:#0e7490;color:#fff;font-weight:500' : '', invProdStyle: (!isIng ? 'background:#0e7490;color:#fff;font-weight:500' : '') + (atCentral ? ';display:none' : ''),
-      goInvIng: () => this.setState({ invTab: 'ingredient', selItem: 'ING-001' }),
-      goInvProd: () => this.setState({ invTab: 'product', selItem: 'PRD-01' }),
+      goInvIng: () => this.setState({ invTab: 'ingredient', selItem: 'ING-001', countQty: '', countWhole: '', countRem: '' }),
+      goInvProd: () => this.setState({ invTab: 'product', selItem: 'PRD-01', countQty: '', countWhole: '', countRem: '' }),
       invRows, invCatTabs,
       invCatBarStyle: isIng ? 'display:flex;gap:6px;padding:9px 14px;border-bottom:1px solid #eef0f3;flex-wrap:wrap' : 'display:none',
       catBarOver: e => e.preventDefault(),
@@ -2956,7 +3073,7 @@ class Component extends DCLogic {
           rsPanStyle: '',
           rsPendStyle: atCentral ? '' : 'display:none', rsPendTxt: kg(pend),
           rsTransitLabel: atCentral ? '採購在途' : '叫貨在途', rsTransitTxt: transit > 0 ? kg(transit) : '—',
-          rsSafeTxt: kg(safe),
+          rsSafeTxt: pk ? this.puFmt(selRow, safe) : kg(safe),
           rsUnit: pk ? (selRow.purchase_unit || '包') + ' · 每' + (selRow.purchase_unit || '包') + ' ' + kg(conv) + ' · 共 ' + kg(Math.max(1, Math.ceil(this.n(eff))) * conv) : (selRow.base_unit || 'g'),
           rsQtyVal: String(eff),
           onRsQty: e => this.setState({ rsQty: e.target.value, rsQtyItem: iid }),
@@ -2989,6 +3106,12 @@ class Component extends DCLogic {
       selPkgTxt: (() => { if (!isIng || !selRow) return ''; const p = pkgOf(selG, curStock); return p === '—' ? '' : ' = ' + p; })(),
       ledgerRows, countVal: S.countQty, onCount: e => this.setState({ countQty: e.target.value }), doCount: () => this.doCount(),
       countUnit: isIng ? (selG.base_unit || 'g') : '個',
+      // 盤點:包裝原料 → 兩欄(未開封整袋 + 開封剩餘 g);其餘(自製半成品/成品/conv≤1)→ 單一欄
+      countOneStyle: (isIng && this.isPackaged(selG)) ? 'display:none' : 'display:inline-flex;gap:6px;align-items:center',
+      countTwoStyle: (isIng && this.isPackaged(selG)) ? 'display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap' : 'display:none',
+      countPuUnit: this.unitOf(selG), countBaseUnit: selG.base_unit || 'g',
+      countWholeVal: S.countWhole || '', onCountWhole: e => this.setState({ countWhole: e.target.value }),
+      countRemVal: S.countRem || '', onCountRem: e => this.setState({ countRem: e.target.value }),
       sugRows, poGroups, poSubmitTxt, poEmptyStyle, poTotal, supOptions,
       sugEmpty: sugRows.length ? 'display:none' : 'padding:14px 16px;font-size:12px;color:#66707f',
       addAllSug: () => {
@@ -3188,8 +3311,8 @@ class Component extends DCLogic {
         const g = this.ing(r.ingredient_id) || {};
         return {
           name: g.name || r.ingredient_id, cat: this.gcat(g) || '', stockTxt: kg(this.stock('ingredient', r.ingredient_id)),
-          safeVal: r.safety_stock,
-          onSafe: e => this.setLocStock(this.THIS_LOC, r.ingredient_id, true, e.target.value),
+          safeVal: this.puVal(g, this.n(r.safety_stock)), safeUnit: this.unitOf(g), safeStep: this.isPackaged(g) ? '0.1' : 'any',
+          onSafe: e => this.setLocStock(this.THIS_LOC, r.ingredient_id, true, this.toBase(g, e.target.value)),
           onDrop: () => { this.setLocStock(this.THIS_LOC, r.ingredient_id, false, 0); this.notify('已移除本店備料:' + (g.name || r.ingredient_id)); }
         };
       }),
@@ -3205,10 +3328,11 @@ class Component extends DCLogic {
         return {
           smAddCatBtn: this.ddBtn([{ id: '', name: '全部分類' }].concat(catsAvail.map(c => ({ id: c, name: c }))), cf, v => this.setState({ smAddCatFilter: v })),
           smAddIngBtn: this.ddBtn(pool.map(g => ({ id: g.ingredient_id, name: g.name, meta: [this.gcat(g), g.ingredient_id].filter(Boolean).join(' · ') })), effAddIng, v => this.setState({ smAddIng: v }), '(目錄品項都已加入)'),
+          smAddUnit: this.unitOf(this.ing(effAddIng) || {}), smAddStep: this.isPackaged(this.ing(effAddIng) || {}) ? '0.1' : 'any',
           addStoreIng: () => {
             if (!effAddIng) { this.notify('目錄品項都已加入本店 — 需要新料請用右側「申請新原料」'); return; }
             const g = this.ing(effAddIng) || {};
-            this.setLocStock(this.THIS_LOC, effAddIng, true, this.n(S.smAddSafe) || 0);
+            this.setLocStock(this.THIS_LOC, effAddIng, true, this.toBase(g, this.n(S.smAddSafe) || 0));
             this.setState({ smAddIng: '', smAddSafe: '' });
             this.notify('✓ 已加入本店:' + (g.name || effAddIng));
           }
@@ -3304,16 +3428,19 @@ class Component extends DCLogic {
           tagTxt: on ? '✓ 備料' : '不備',
           tagStyle: (on ? this.tag(C.grn) : 'color:#66707f;border-color:#e3e6eb') + ';cursor:pointer;min-width:48px;text-align:center',
           onToggle: () => this.setLocStock(l.location_id, S.selIng, !on, r ? r.safety_stock : selG.safety_stock),
-          safeVal: r ? r.safety_stock : '',
-          inpStyle: 'width:78px;text-align:right' + (on ? '' : ';visibility:hidden'),
+          safeVal: r ? this.puVal(selG, this.n(r.safety_stock)) : '',
+          inpStyle: 'width:64px;text-align:right' + (on ? '' : ';visibility:hidden'),
           unitStyle: 'color:#66707f;font-size:11px' + (on ? '' : ';visibility:hidden'),
-          onSafe: e => this.setLocStock(l.location_id, S.selIng, true, e.target.value)
+          safeUnit: this.unitOf(selG), safeStep: this.isPackaged(selG) ? '0.1' : 'any',
+          safeUnitStyle: 'color:#66707f;font-size:11px' + (on ? '' : ';visibility:hidden'),
+          onSafe: e => this.setLocStock(l.location_id, S.selIng, true, this.toBase(selG, e.target.value)) // 顯示換算,存 base;onToggle 種子仍傳 base(不變)
         };
       }),
       ingRows, ingCatTabs, ingSupBtn, dName: d.name, onDName: setD('name'),
       dCat: this.catName(d.category), onDCat: setD('category'), dBase: d.base_unit, onDBase: setD('base_unit'),
       dCatBtn: this.ddBtn(this.t('category').map(c => ({ id: c.category_id, name: c.name })), this.catIdOf(this.catName(d.category)), v => this.setState({ draft: Object.assign({}, d, { category: v }) })),
-      dSafety: d.safety_stock, onDSafety: setD('safety_stock'),
+      dSafety: this.puVal(d, this.n(d.safety_stock)), onDSafety: e => this.setState({ draft: Object.assign({}, d, { safety_stock: String(this.toBase(d, e.target.value)) }) }),
+      dSafetyUnit: this.unitOf(d), dSafetyStep: this.isPackaged(d) ? '0.1' : 'any', dSafetyHint: this.puHint(d, this.n(d.safety_stock)),
       dConv: d.conversion_rate, onDConv: setD('conversion_rate'), dUnit: d.purchase_unit, onDUnit: setD('purchase_unit'),
       dShelf: d.shelf_life_days, onDShelf: setD('shelf_life_days'),
       saveIng: () => {
@@ -3335,7 +3462,9 @@ class Component extends DCLogic {
         this.setState({ selIng: next ? next.ingredient_id : '', draft: null });
         this.notify('✓ 已刪除原料 ' + S.selIng);
       },
-      ingUsage: ingUsage ? '用於配方:' + ingUsage : '尚未用於任何配方',
+      ingUsageRows,
+      ingUsageLabelStyle: ingUsageRows.length ? '' : 'display:none',
+      ingUsageEmptyStyle: ingUsageRows.length ? 'display:none' : '',
       selIngCost: this.n(selG.latest_unit_cost).toFixed(3) + ' /' + (selG.base_unit || 'g'),
       addProd: () => {
         if (!atCentral) { this.notify('產品與配方由中央維護,門市無法新增(請切換到中央倉)'); return; }
@@ -3402,8 +3531,8 @@ class Component extends DCLogic {
       bomBack: () => { if (!trail.length) return; this._bomScrollWanted = true; this.setState({ selProd: trail[trail.length - 1], bomTrail: trail.slice(0, -1), bomSupFilter: '', bomCatFilter: '', bomAddIng: '', bomAddQty: '' }); },
       bomEmptyStyle: bomRows.length ? 'display:none' : 'padding:14px 16px;color:#66707f;font-size:12px;border-top:1px solid #eef0f3;background:#fbfcfd',
       bomEmptyTxt: atCentral ? '尚無配方 — 從下方「加入」原料開始建立' : '尚無配方(尚未建立)',
-      pUsedInStyle: (isIngSel && atCentral && usedInParents.length) ? 'padding:7px 16px;border-bottom:1px solid #eef0f3;font-size:11.5px;color:#66707f;background:#fbfcfd' : 'display:none',
-      pUsedInTxt: usedInParents.length ? '用於 ' + usedInParents.slice(0, 3).join('、') + (usedInParents.length > 3 ? ' +' + (usedInParents.length - 3) + ' 項' : '') : '',
+      pUsedInStyle: (isIngSel && atCentral && usedInRoots.length) ? 'padding:7px 16px;border-bottom:1px solid #eef0f3;font-size:11.5px;color:#66707f;background:#fbfcfd' : 'display:none',
+      pUsedInRows, pUsedInMore,
       // 加原料:先用 廠商/分類 縮小原料清單(目錄大時好找)
       ...(() => {
         const supF = S.bomSupFilter || '';

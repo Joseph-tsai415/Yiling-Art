@@ -33,6 +33,15 @@ jobs:
             echo "  -> $file"
             sed -i "s/__APP_VERSION__/$VERSION/g" "$file"
           done
+      - name: Inject cache-bust build id (commit SHA — busts JS module cache every deploy)
+        run: |
+          BUILD=${GITHUB_SHA::7}
+          echo "Injecting build id: $BUILD"
+          # Per-deploy token stamped into each app's import map + module entry (see the __BUILD__ loader in index.html).
+          grep -rl --include='index.html' --exclude-dir='.git' --exclude-dir='node_modules' '__BUILD__' . | while read -r file; do
+            echo "  -> $file"
+            sed -i "s/__BUILD__/$BUILD/g" "$file"
+          done
       - name: Inject Google API credentials (from repo secrets)
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}

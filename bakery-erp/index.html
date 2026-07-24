@@ -11,6 +11,7 @@
 <style>
 body{margin:0;font-family:'Noto Sans TC',sans-serif;background:#f7f8fa;color:#1b2330}
 @keyframes scrFade{from{opacity:0}to{opacity:1}}
+@keyframes bomHiPulse{0%,100%{background:#fff7ed}50%{background:#ffe0b8}}
 input[type=number]{-moz-appearance:textfield;appearance:textfield}
 input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .htop{display:flex;align-items:center;gap:14px;height:50px;padding:0 20px;background:#fff;border-bottom:1px solid #e3e6eb;flex:none}
@@ -632,8 +633,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
               <div class="pah" style="font-size:13px">盤點 — {{selName}}</div>
               <div style="display:flex;gap:8px;align-items:center;padding:12px 16px">
                 <span style="color:#66707f;font-size:12.5px">實盤數量</span>
-                <input class="inp" style="width:90px;text-align:right" type="number" value="{{countVal}}" onChange="{{onCount}}">
-                <span style="color:#66707f;font-size:12.5px">{{countUnit}}</span>
+                <span style="{{countOneStyle}}"><input class="inp" style="width:90px;text-align:right" type="number" value="{{countVal}}" onChange="{{onCount}}"><span style="color:#66707f;font-size:12.5px">{{countUnit}}</span></span>
+                <span style="{{countTwoStyle}}"><input class="inp" style="width:60px;text-align:right" type="number" step="1" placeholder="未開封" value="{{countWholeVal}}" onChange="{{onCountWhole}}"><span style="color:#66707f;font-size:12px">{{countPuUnit}}(整袋)</span><input class="inp" style="width:74px;text-align:right" type="number" placeholder="0" value="{{countRemVal}}" onChange="{{onCountRem}}"><span style="color:#66707f;font-size:12px">{{countBaseUnit}}(開封剩餘)</span></span>
                 <span class="btn3" style="margin-left:auto" onClick="{{doCount}}">執行盤點</span>
               </div>
               <div style="padding:0 16px 12px;font-size:11.5px;color:#66707f">與帳上差異自動產生「盤盈/盤虧」調整流水</div>
@@ -908,7 +909,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <tr><sc-for list="{{smHead}}" as="h" hint-placeholder-count="5"><th style="{{h.style}}" onClick="{{h.onSort}}">{{h.label}}{{h.arrow}}</th></sc-for></tr>
                 <sc-for list="{{smRows}}" as="r" hint-placeholder-count="4">
                   <tr><td style="font-weight:500">{{r.name}}</td><td style="color:#66707f">{{r.cat}}</td><td class="num">{{r.stockTxt}}</td>
-                    <td class="num"><input class="inp" style="width:82px;text-align:right" type="number" value="{{r.safeVal}}" onChange="{{r.onSafe}}"></td>
+                    <td class="num"><span style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end"><input class="inp" style="width:64px;text-align:right" type="number" step="{{r.safeStep}}" value="{{r.safeVal}}" onChange="{{r.onSafe}}"><span style="color:#66707f;font-size:11px">{{r.safeUnit}}</span></span></td>
                     <td style="text-align:right"><span class="btn3o" style="color:#66707f" onClick="{{r.onDrop}}">移除</span></td></tr>
                 </sc-for>
               </table>
@@ -921,7 +922,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <div style="display:flex;gap:8px;align-items:center">
                   <span class="inp" style="width:100px;flex:none;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none;box-sizing:border-box" onClick="{{smAddCatBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{smAddCatBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
                   <span class="inp" style="flex:1;min-width:120px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;background:#fff;user-select:none" onClick="{{smAddIngBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{smAddIngBtn.txt}}<span style="color:#9aa1ab;font-size:11px">{{smAddIngBtn.meta}}</span></span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
-                  <input class="inp" style="width:82px;flex:none;text-align:right" type="number" placeholder="0" value="{{smAddSafe}}" onChange="{{onSmAddSafe}}">
+                  <input class="inp" style="width:56px;flex:none;text-align:right" type="number" step="{{smAddStep}}" placeholder="0" value="{{smAddSafe}}" onChange="{{onSmAddSafe}}"><span style="color:#66707f;font-size:11px;flex:none;width:24px">{{smAddUnit}}</span>
                   <span class="btn3" style="white-space:nowrap;flex:none" onClick="{{addStoreIng}}">+ 加入本店</span>
                 </div>
               </div>
@@ -1028,7 +1029,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <span style="{{dBuyLblStyle}}">採購單位</span><input class="inp" style="{{dBuyInpStyle}}" value="{{dUnit}}" onChange="{{onDUnit}}">
                 <span style="color:#66707f">換算率</span><input class="inp" type="number" value="{{dConv}}" onChange="{{onDConv}}">
                 <span style="{{dBatchLblStyle}}">批次產出</span><input class="inp" style="{{dBatchInpStyle}}" type="number" value="{{dBatchYield}}" onChange="{{onDBatchYield}}">
-                <span style="color:#66707f">預設安全庫存</span><input class="inp" type="number" value="{{dSafety}}" onChange="{{onDSafety}}">
+                <span style="color:#66707f">預設安全庫存</span><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input class="inp" style="width:90px;text-align:right" type="number" step="{{dSafetyStep}}" value="{{dSafety}}" onChange="{{onDSafety}}"><span style="color:#66707f;font-size:11.5px">{{dSafetyUnit}}</span><span style="color:#9aa1ab;font-size:11px">{{dSafetyHint}}</span></span>
                 <span style="color:#66707f">效期天數</span><input class="inp" type="number" value="{{dShelf}}" onChange="{{onDShelf}}">
                 <span style="{{dSupLblStyle}}">預設供應商</span><span class="inp" style="{{dSupBtnStyle}}" onClick="{{dSupBtn.open}}"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{dSupBtn.txt}}</span><span style="color:#66707f;font-size:9px;flex:none">▾</span></span>
                 <span style="color:#66707f">最新單價</span><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="inp" style="flex:none;min-width:80px;text-align:right;background:#f2f4f7;color:#1b2330;border-color:#e3e6eb;cursor:default">{{dCost}}</span><span style="color:#9aa1ab;font-size:11px">/ {{dCostUnit}}</span><span style="{{dCostHintStyle}}">自動 = 含稅報價 ÷ 換算率</span></span>
@@ -1048,7 +1049,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                       <span class="tag3" style="{{lc.tagStyle}}" onClick="{{lc.onToggle}}">{{lc.tagTxt}}</span>
                       <span style="flex:1;font-size:12px">{{lc.name}}</span>
                       <span style="{{lc.unitStyle}}">安全庫存</span>
-                      <input class="inp" style="{{lc.inpStyle}}" type="number" value="{{lc.safeVal}}" onChange="{{lc.onSafe}}">
+                      <input class="inp" style="{{lc.inpStyle}}" type="number" step="{{lc.safeStep}}" value="{{lc.safeVal}}" onChange="{{lc.onSafe}}"><span style="{{lc.safeUnitStyle}}">{{lc.safeUnit}}</span>
                     </div>
                   </sc-for>
                 </div>
@@ -1057,7 +1058,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <span class="btn3" style="flex:1;text-align:center" onClick="{{saveIng}}">儲存</span>
                 <span class="btn3o" style="text-align:center;color:#c11f28;border-color:#c11f28" onClick="{{deleteIng}}">刪除</span>
               </div>
-              <div style="font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3;padding-top:8px">{{ingUsage}}</div>
+              <div style="font-size:11.5px;color:#66707f;border-top:1px solid #eef0f3;padding-top:8px"><span style="{{ingUsageEmptyStyle}}">尚未用於任何配方</span><span style="{{ingUsageLabelStyle}}">用於配方:<sc-for list="{{ingUsageRows}}" as="u"><span style="color:#0e7490;cursor:pointer" onClick="{{u.onClick}}">{{u.name}}</span><span style="color:#9aa1ab">{{u.sep}}</span></sc-for></span></div>
             </div>
           </div>
         </div>
@@ -1130,11 +1131,11 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                   <span style="color:#66707f">標準產出</span><input class="inp" style="width:64px;text-align:right" type="number" value="{{pYield}}" onChange="{{onPYield}}">
                 </span>
               </div>
-              <div style="{{pUsedInStyle}}"><span class="msi" style="font-size:14px;vertical-align:-2px;margin-right:3px">account_tree</span>{{pUsedInTxt}}</div>
+              <div style="{{pUsedInStyle}}"><span class="msi" style="font-size:14px;vertical-align:-2px;margin-right:3px">account_tree</span>用於 <sc-for list="{{pUsedInRows}}" as="u"><span style="color:#0e7490;cursor:pointer" onClick="{{u.onClick}}">{{u.name}}</span><span style="color:#9aa1ab">{{u.sep}}</span></sc-for>{{pUsedInMore}}</div>
               <table class="t3">
                 <tr><th>原料</th><th>供應商</th><th>分類</th><th class="num">每批用量(g/ml)</th><th class="num" style="{{costColStyle}}">單價</th><th class="num" style="{{costColStyle}}">成本</th><th></th></tr>
                 <sc-for list="{{bomRows}}" as="r" hint-placeholder-count="3">
-                  <tr><td class="{{r.nameCls}}" style="{{r.nameCellStyle}}" onClick="{{r.onDrill}}"><span style="font-weight:500">{{r.name}}</span><span style="color:#66707f;font-size:11px;margin-left:6px">{{r.id}}</span><span class="tag3" style="{{r.semiTagStyle}}">自製半成品</span><span class="tag3" style="{{r.cycTagStyle}}">⚠ 循環</span><span style="{{r.noRecipeStyle}}"> · 尚無配方</span><span class="msi" style="{{r.chevStyle}}">chevron_right</span></td>
+                  <tr style="{{r.rowHiStyle}}"><td class="{{r.nameCls}}" style="{{r.nameCellStyle}}" onClick="{{r.onDrill}}"><span style="font-weight:500">{{r.name}}</span><span style="color:#66707f;font-size:11px;margin-left:6px">{{r.id}}</span><span class="tag3" style="{{r.semiTagStyle}}">自製半成品</span><span class="tag3" style="{{r.cycTagStyle}}">⚠ 循環</span><span style="{{r.noRecipeStyle}}"> · 尚無配方</span><span class="msi" style="{{r.chevStyle}}">chevron_right</span></td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.supTxt}}</td>
                     <td style="color:#66707f;font-size:11.5px;white-space:nowrap">{{r.catTxt}}</td>
                     <td class="num"><input class="inp" style="width:76px;text-align:right" type="number" value="{{r.qtyVal}}" onChange="{{r.onQty}}"></td>
@@ -1552,6 +1553,15 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
   };
 </script>
 <script src="google-config.local.js"></script>
-<script type="module" src="js/app.js"></script>
+<script type="importmap">
+{ "imports": {
+  "./js/app.js": "./js/app.js?v=__BUILD__",
+  "./js/db.js": "./js/db.js?v=__BUILD__",
+  "./js/schema.js": "./js/schema.js?v=__BUILD__",
+  "./js/runtime.js": "./js/runtime.js?v=__BUILD__",
+  "./js/seed-data.js": "./js/seed-data.js?v=__BUILD__"
+}}
+</script>
+<script type="module" src="js/app.js?v=__BUILD__"></script>
 </body>
 </html>
