@@ -600,7 +600,7 @@ function login_(credential) {
   // last_login 以「文字」寫入 dd/MM/yyyy HH:mm:ss:設 setNumberFormat('@') 防 Sheets 轉 Date,
   // 否則 list 讀取的 (v instanceof Date) 分支會把它裁成 yyyy-MM-dd、時間遺失,super_admin 檢視/存回帳號時就被覆寫。
   try { var llc = accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1); llc.setNumberFormat('@'); llc.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss')); } catch (err) { }
-  appendAudit_('login', String(acc.user_id || ''), email, token, ''); // 稽核:登入(append-only,後端專用)
+  appendAudit_('login', String(acc.user_id || ''), email, sid, ''); // 稽核:登入(append-only,後端專用)。session_id 用 sid(非 live token)→ 與 session 分頁可 join
   var role = String(acc.role || '');
   return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: role, location_ids: String(acc.location_ids || ''), perms: permsOf_(role), expires_in: 21600 };
 }
@@ -803,7 +803,7 @@ function doPost(e) {
         if (ltCache) {
           var nowL = (new Date()).getTime();
           var dur = ltCache.login_ts ? Math.round((nowL - ltCache.login_ts) / 60000) : '';
-          appendAudit_('logout', sessL ? sessL.user_id : '', (sessL && sessL.email) || ltCache.email || '', body.token, dur);
+          appendAudit_('logout', sessL ? sessL.user_id : '', (sessL && sessL.email) || ltCache.email || '', ltCache.sid || '', dur); // session_id 用 sid(與 login/session 分頁一致 → 可 join;絕不把 live token 寫進 sheet)
           if (ltCache.sid) sessionEnd_(ltCache.sid, nowL, ltCache.login_ts); // session 分頁:收尾 logout_ts + duration + active=FALSE(doPost ScriptLock 下)
         }
         CacheService.getScriptCache().remove('tok:' + body.token);
@@ -844,10 +844,41 @@ function doPost(e) {
           }
         }
       }
+      // user_account:last_login 由後端(login_)維護,不容前端整表 replace 覆寫 ——
+      //   前端 saveAccounts 帶的是可能過期的快取快照,且 login_ 不 bump user_account 的 rev,
+      //   故 baseRev 檢查抓不到登入寫入 → 若照抄 incoming,super_admin 存回帳號會把 last_login 還原成舊值。
+      //   對策:清表前以 user_id 為鍵讀出現有 last_login,覆寫每筆 incoming 的 last_login(新帳號:user_id 不在 map → 保留 incoming,通常為空)。
+      //   super_admin-only、scope=ALL(上方 out-of-scope 保留區塊不會執行),故不分 scope 一律套用。
+      if (body.sheet === 'user_account') {
+        var iInUid = headersR.indexOf('user_id');
+        var iInLL = headersR.indexOf('last_login');
+        if (iInUid >= 0 && iInLL >= 0 && shR.getLastRow() > 1) {
+          var oldU = shR.getDataRange().getValues();
+          var ohU = oldU[0].map(String);
+          var oUid = ohU.indexOf('user_id');
+          var oLL = ohU.indexOf('last_login');
+          if (oUid >= 0 && oLL >= 0) {
+            var existLL = {};
+            for (var rU = 1; rU < oldU.length; rU++) {
+              var kU = String(oldU[rU][oUid]);
+              if (kU !== '') existLL[kU] = oldU[rU][oLL];
+            }
+            for (var iU = 0; iU < incoming.length; iU++) {
+              var uidU = String(incoming[iU][iInUid]);
+              if (Object.prototype.hasOwnProperty.call(existLL, uidU)) incoming[iU][iInLL] = existLL[uidU];
+            }
+          }
+        }
+      }
       shR.clearContents();
       var data = [headersR].concat(incoming);
       shR.getRange(1, 1, data.length, headersR.length).setValues(data);
       shR.setFrozenRows(1);
+      // user_account:重申 last_login 欄為文字格式,防被 Sheets 重新解讀成 Date(login_ 以文字寫入,list 讀取靠此保留完整時分秒)。
+      if (body.sheet === 'user_account') {
+        var iFmtLL = headersR.indexOf('last_login');
+        if (iFmtLL >= 0 && data.length > 1) shR.getRange(2, iFmtLL + 1, data.length - 1, 1).setNumberFormat('@');
+      }
       return json_({ ok: true, replaced: data.length - 1, rev: bumpRev_(body.sheet) });
     }
 

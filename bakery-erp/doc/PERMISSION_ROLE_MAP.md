@@ -69,6 +69,9 @@ perm_key 格式:`screen.<畫面id>`;`allow=TRUE` 才可見。super_admin 不需�
 - **每個請求都重新讀取帳號**:停用帳號 / 改角色 / 改地點範圍即時生效,不用等 token 過期
 - 第一個管理員:`AUTH.BOOTSTRAP_ADMIN` 的 Google 帳號首次登入自動建立 `super_admin`
 - 本地示範模式(無雲端連線設定)不需登入,全部畫面可用(示範資料)
+- **稽核 / 線上時間**(後端專用 sheet,前端不讀不顯示):
+  - `audit_log`(append-only):登入 / 登出事件流水 — `log_id, ts, user_id, email, action, session_id, duration_min`
+  - `session`(每工作階段一列 upsert):`session_id, user_id, email, login_ts, last_seen, logout_ts, duration_min, active`;線上時間 =(`logout_ts` ‖ `last_seen`)− `login_ts`,`last_seen` 由 revs 輪詢節流更新
 
 ## 如何調整
 
@@ -80,4 +83,4 @@ perm_key 格式:`screen.<畫面id>`;`allow=TRUE` 才可見。super_admin 不需�
 
 - ✅ Phase 1(#69,已上線):Google 登入 + email 名單、封鎖畫面、6h 工作階段、登出
 - 🚧 Phase 2(#70,本文件):角色×畫面矩陣、地點範圍資料過濾、成本隱藏、帳號與角色管理畫面
-- 📋 Phase 3(#71):人員(staff)綁定門市、共用平板 PIN 換人、audit log、登出清本地快取
+- 🚧 Phase 3(#71):登入 / 登出 audit log ✅、工作階段線上時間統計 ✅;人員(staff)綁定門市、共用平板 PIN 換人、登出清本地快取(規劃中)

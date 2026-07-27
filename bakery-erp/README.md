@@ -14,7 +14,7 @@
 - [營運模型](#營運模型)
 - [功能總覽(依畫面)](#功能總覽依畫面)
 - [角色與權限](#角色與權限)
-- [資料模型(26 表)](#資料模型26-表)
+- [資料模型(28 表)](#資料模型28-表)
 - [設計不變式](#設計不變式)
 - [近期新增](#近期新增)
 - [架構與檔案](#架構與檔案)
@@ -95,7 +95,7 @@
 
 ---
 
-## 資料模型(26 表)
+## 資料模型(28 表)
 
 單一結構來源:[`js/schema.js`](js/schema.js) 的 `TABLE_COLUMNS`。**任何持久化資料的新功能都必須在這裡登錄它的表與欄位**(見 CLAUDE.md 反漂移規則)。前端 `SCHEMA`(db.js)直接 import;後端 `apps-script.js` 的 `TABLES` 由 `npm run gen:schema` 產生。
 
@@ -105,7 +105,9 @@
 - 生產 / 採購 / 銷售 / 調撥:`assignment`、`plan_draft`、`production_order`、`po_draft`、`purchase_line`、`sales_line`、`waste`、`stocktake`、`transfer_order`、`transfer_line`、`ingredient_request`
 - 核心流水:`stock_ledger`
 
-**2 張帳號 / 權限表**(後端專用,不進主同步):`user_account`、`role_permission`
+**4 張後端專用表**(不進主同步,前端另外讀取或完全不讀):
+- 帳號 / 權限:`user_account`、`role_permission`(super_admin 專用,前端以 `loadAccounts` 另外讀取)
+- 稽核 / 工作階段:`audit_log`(登入 / 登出流水,append-only)、`session`(每個工作階段一列 upsert,用於線上時間統計)— 皆後端專用,前端不讀不顯示
 
 **多型品項欄位**:`stock_ledger` 與 `transfer_line` 都用 `item_type`(`ingredient` | `product`)+ `item_id` 這組欄位描述「品項」— 自製半成品是 `ingredient` 列(以 `purchase_unit==='自製'` 區分),不需第三種型別。
 
@@ -123,6 +125,8 @@
 
 ## 近期新增
 
+- **工作階段線上時間** — 每次登入寫一列 `session`(`login_ts` / `last_seen` / `logout_ts`),線上時間 =(登出時間 ‖ 最後輪詢)− 登入時間;`last_seen` 由 revs 輪詢節流更新,故即使沒有顯式登出(關分頁 / 斷線)也能算到最後一次輪詢為止(後端專用表,前端不顯示)。
+- **登入 / 登出稽核** — `audit_log` append-only 記錄登入 / 登出事件(`user_id` / `email` / `action` / `session_id`);搭配結構指紋 `SCHEMA_SIG` 的前後端版本偏移防呆(staleness guard)。
 - **配方多階下鑽** — 配方編輯器裡點自製半成品原料 → 跳進它自己的 BOM,麵包屑可多階 / 退回;半成品標頭顯示「用於 X、Y…」反查;門市唯讀可瀏覽。設計見 [`doc/bom-drilldown-ux.md`](doc/bom-drilldown-ux.md)。
 - **調撥結構彈性化** — `transfer_line` 由 `ingredient_id` 泛化為 `item_type` / `item_id`,為未來「配送成品 / 半成品」預留;UI 目前維持原料限定,休眠於旗標 `FLAGS.transferItemTypes`(預設關,`js/app.js`)。設計見 [`doc/flexible-delivery-ux.md`](doc/flexible-delivery-ux.md)。
 - **後端寫入 ACL** — 預設拒絕的 `APPEND_ACL` / `REPLACE_ACL`;鎖定 `role_permission` 寫入(防提權)、稽核表不可整表覆寫、`transfer_line` append 綁父單範圍(防跨店注入)。
