@@ -1545,11 +1545,12 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <script>
   // Google Sheets 連線預設值:部署時由 GitHub Actions 以 repo secrets 取代這些佔位符;
   // 本機開發用 google-config.local.js(gitignored)覆蓋。留空 = 本地示範模式,「資料連線」頁仍可手動填。
+  // 註:gasUrl 已改為硬編後端 /exec 網址(公開端點,授權仍靠 Google token + 名單);換新部署時直接改這行即可。
   window.BAKERY_CFG = {
     sheetId: '__BAKERY_SHEET_ID__',
     apiKey: '__GOOGLE_API_KEY__',
     clientId: '__GOOGLE_CLIENT_ID__',
-    gasUrl: '__BAKERY_GAS_URL__'
+    gasUrl: 'https://script.google.com/macros/s/AKfycbzYIzGge94DV56FtzlC7xaxHGZZpvzENVl_6PC4Io7uVobWLvhDviupfNPnZ16xGZ3c/exec'
   };
 </script>
 <script src="google-config.local.js"></script>

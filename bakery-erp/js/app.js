@@ -280,11 +280,15 @@ class Component extends DCLogic {
       const h = j.rows[0].map(String);
       return j.rows.slice(1).map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] === undefined || r[i] === null ? '' : String(r[i])); return o; });
     };
-    Promise.all([this.db.api('action=list&sheet=user_account'), this.db.api('action=list&sheet=role_permission')])
-      .then(([a, b]) => {
+    Promise.all([this.db.api('action=list&sheet=user_account'), this.db.api('action=list&sheet=role_permission'), this.db.api('action=list&sheet=session')])
+      .then(([a, b, s]) => {
         if (a && a.rev != null) this.db.rev['user_account'] = a.rev; // 記住版號:之後 saveAccounts 的整表覆寫帶 baseRev 給後端比對
         if (b && b.rev != null) this.db.rev['role_permission'] = b.rev;
-        this.setState({ accUsers: objs(a), accPerms: objs(b), accBusy: false, accErr: (a && a.ok) ? '' : (a && a.error || '讀取失敗') });
+        // 最後登入以 session 分頁為準:每次登入可靠 append 一列 → 取每位使用者最後一列的 login_ts = 最新登入時間。
+        //   (user_account.last_login 的後端寫入受部署版本影響不穩,故改讀 session;last_login 僅當備援。)
+        const sessLast = {};
+        for (const r of objs(s)) { if (r.user_id) sessLast[r.user_id] = r.login_ts || sessLast[r.user_id] || ''; }
+        this.setState({ accUsers: objs(a), accPerms: objs(b), accSessLast: sessLast, accBusy: false, accErr: (a && a.ok) ? '' : (a && a.error || '讀取失敗') });
       })
       .catch(err => this.setState({ accBusy: false, accErr: String(err) }));
   }
@@ -3665,7 +3669,7 @@ class Component extends DCLogic {
                 if (isSelf) { this.notify('✕ 不能停用自己的帳號 — 請由另一位 super_admin 操作'); return; }
                 setAcc(i, 'active', String(u.active).toUpperCase() === 'TRUE' ? 'FALSE' : 'TRUE');
               },
-              lastLogin: u.last_login || '—',
+              lastLogin: (S.accSessLast || {})[u.user_id] || u.last_login || '—', // 最後登入:優先 session 分頁最新 login_ts,退回 user_account.last_login
               onDel: () => {
                 if (isSelf) { this.notify('✕ 不能刪除自己的帳號'); return; }
                 const arr = (S.accUsers || []).filter((_, j) => j !== i);
