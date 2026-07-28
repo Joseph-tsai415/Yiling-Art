@@ -383,8 +383,24 @@ export class DB {
   }
   // Google ID token → 後端驗證+比對 user_account 名單 → 核發工作階段 token
   async login(credential) {
-    const r = await fetch(this.cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'login', credential }) });
-    return await r.json();
+    const opts = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'login', credential }) };
+    try {
+      const r = await fetch(this.cfg.url, opts);
+      return await r.json();
+    } catch (e) {
+      // 自癒:cfg.url 連不上(舊部署被刪 / 網址已變 → 404 / CORS / net error,fetch 直接 reject)。
+      //   若有內建預設網址(部署注入或 google-config.local.js)且與目前存的不同 → 改試預設;成功就採用並
+      //   寫回 localStorage 覆蓋舊網址,使用者不必進 DevTools 手動清快取(bakery_remote_cfg_v2)。
+      //   只在「預設真的連得到」時才切換(下面若也 reject 就往外丟)→ 不會誤清使用者手設的有效網址。
+      if (DEFAULT_GAS_URL && this.cfg.url !== DEFAULT_GAS_URL) {
+        const r2 = await fetch(DEFAULT_GAS_URL, opts);
+        const j2 = await r2.json();
+        this.saveCfg({ kind: 'gas', url: DEFAULT_GAS_URL }); // 採用可用的預設網址並持久化(蓋掉舊的 stale cfg.url)
+        if (this.onRemote) this.onRemote(false, '⚠ 後端網址已更新 — 已自動切換到最新網址');
+        return j2;
+      }
+      throw e;
+    }
   }
   async whoami() { const j = await this.api('action=whoami'); if (j && Array.isArray(j.caps)) this.caps = new Set(j.caps); this.checkVer(j); return j; } // caps 也可能來自 whoami(與 listAll 一致);ver 偏移守衛
 
