@@ -210,6 +210,10 @@ class Component extends DCLogic {
     this.db.login(resp.credential)
       .then(j => {
         if (j && j.ok) {
+          // 後端診斷回傳(console-only,不打擾使用者):build = /exec 實際供的後端版本;ll = 本次 last_login 寫入結果。
+          //   j.build 缺席 = 部署的仍是舊程式碼(先重新部署再談 last_login);ll !== 'ok' = 新碼有跑但寫入被擋(代碼見 setLastLogin_)。
+          console.info('[bakery] backend build =', j.build || '(舊版後端,未回報 build)', '| last_login =', j.ll || '(未回報)');
+          if (j.build && j.ll && j.ll !== 'ok') console.warn('[bakery] last_login 未寫入:' + j.ll);
           this.db.setAuth({ token: j.token, name: j.name, email: j.email, role: j.role, locs: j.location_ids || '', perms: j.perms || null });
           this._autoSelectOff = false; // 成功登入 → 允許未來靜默續期
           if (reauth) {

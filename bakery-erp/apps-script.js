@@ -101,6 +101,12 @@ var PRIMARY_KEY = {
 //   'revs' = 支援 action=revs 輕量輪詢(只回各表版號、無資料)+ 直接編輯 Sheet 的觸發器偵測;缺此旗標則前端不輪詢。
 var CAPS = ['updateCell', 'deleteRow', 'revs'];
 
+// 後端建置標記 —— 「貼上的程式碼到底有沒有部署出去」的唯一可靠證據。
+//   SCHEMA_SIG 只在 TABLE_COLUMNS 改動時才變,純後端邏輯修正(如 last_login 寫入)不會改到它,
+//   於是「編輯器已存新碼、但 /exec 仍供舊版本」這種偏移在前端完全看不出來(本 case 卡住的原因)。
+//   規則:每次要重新部署的後端修正,手動改這個字串;前端 login/whoami 回應會帶回來 → 一眼看出跑的是哪一版。
+var BUILD = '2026-07-28-lastlogin-3';
+
 // COST_FIELDS = 成本敏感欄位正規清單。目前後端「無消費者」—— 保留待 IAM 階段的欄位級定價授權(edit.pricing 允許清單,見 #8)。
 // 今天刻意「無寫入閘」:寫入由 canWrite_/REPLACE_ACL + 地點範圍治理;成本「顯示」隱藏是前端較粗的 canCost/feature.cost,不是這份清單。
 // 切勿重加 feature.cost 寫入 DENY(會打斷 store_kitchen finish() / store_admin 原料設定)。由 gen:schema 依 js/schema.js 產生
@@ -567,18 +573,20 @@ function logErr_(msg) {
 //   ③ 以文字寫入 dd/MM/yyyy HH:mm:ss(setNumberFormat('@') 先於 setValue):防 Sheets 轉 Date 後 list 讀取時分秒遺失。
 //   ④ flush() 立即落盤 → 寫入若被拒(受保護範圍等)就在這裡丟例外,不會等到請求結束才無聲消失。
 //   ⑤ 失敗一律 logErr_ —— 舊版是 `catch (err) { }` 靜默吞掉,導致這個寫入壞掉數週都看不見(本 case 的根因之所以難查)。
-// 回傳 true/false;任何失敗都不影響登入主流程。
+//   ⑥ 失敗原因同時「回傳」給呼叫端(login_ 放進登入回應的 ll 欄)—— 只寫執行紀錄仍需要有人去開 Apps Script 才看得到,
+//      而最常見的兩種失敗(舊版本仍在服役 / 寫入被拒)剛好都是「使用者在瀏覽器端就該看見」的訊號。
+// 回傳 { ok: true|false, why: '<短代碼>' };任何失敗都不影響登入主流程。
 function setLastLogin_(userId, email) {
   try {
     var sh = accountsSheet_();
     var last = sh.getLastRow(), lastCol = sh.getLastColumn();
-    if (last < 2 || lastCol < 1) { logErr_('setLastLogin_: user_account 無資料列 (rows=' + last + ', cols=' + lastCol + ')'); return false; }
+    if (last < 2 || lastCol < 1) { logErr_('setLastLogin_: user_account 無資料列 (rows=' + last + ', cols=' + lastCol + ')'); return { ok: false, why: 'no_rows' }; }
     var head = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
     var iLL = head.indexOf('last_login'), iUid = head.indexOf('user_id'), iEmail = head.indexOf('email');
-    if (iLL < 0) { logErr_('setLastLogin_: user_account 表頭找不到 last_login 欄 [' + head.join(',') + ']'); return false; }
+    if (iLL < 0) { logErr_('setLastLogin_: user_account 表頭找不到 last_login 欄 [' + head.join(',') + ']'); return { ok: false, why: 'no_col' }; }
     var byUid = (iUid >= 0 && String(userId || '') !== '');
     var keyCol = byUid ? iUid : iEmail;                       // 主鍵 user_id;舊列缺 user_id 才退回 email
-    if (keyCol < 0) { logErr_('setLastLogin_: user_account 表頭找不到 user_id/email 欄 [' + head.join(',') + ']'); return false; }
+    if (keyCol < 0) { logErr_('setLastLogin_: user_account 表頭找不到 user_id/email 欄 [' + head.join(',') + ']'); return { ok: false, why: 'no_key_col' }; }
     var want = byUid ? String(userId).trim() : String(email || '').trim().toLowerCase();
     var keys = sh.getRange(2, keyCol + 1, last - 1, 1).getValues();
     var row = 0;
@@ -587,15 +595,16 @@ function setLastLogin_(userId, email) {
       if (!byUid) v = v.toLowerCase();
       if (v === want) { row = i + 2; break; }
     }
-    if (!row) { logErr_('setLastLogin_: 找不到帳號列 (user_id=' + userId + ', email=' + email + ')'); return false; }
+    if (!row) { logErr_('setLastLogin_: 找不到帳號列 (user_id=' + userId + ', email=' + email + ')'); return { ok: false, why: 'no_row' }; }
     var c = sh.getRange(row, iLL + 1);
     c.setNumberFormat('@');
     c.setValue(tsText_(new Date()));
     SpreadsheetApp.flush();
-    return true;
+    return { ok: true, why: 'r' + row };
   } catch (err) {
     logErr_('setLastLogin_ 寫入失敗: ' + err + ' (user_id=' + userId + ', email=' + email + ')');
-    return false;
+    // 受保護範圍 / 以存取者身分執行而無編輯權 → 會走到這裡(session/audit 用 append 不一定同時失敗,故不能以「session 有寫成功」推論此處也成功)
+    return { ok: false, why: 'err:' + String(err).slice(0, 120) };
   }
 }
 
@@ -603,23 +612,33 @@ function setLastLogin_(userId, email) {
 //   即時測試 last_login 寫入能不能成功;結果與真正的失敗原因(受保護範圍 / 權限 / 找不到列…)都印在「執行紀錄」。
 //   用途:分辨「寫入本身壞了」還是「部署版本沒更新 / Web App 以存取者身分執行導致無權寫 user_account」。
 //   確認 last_login 修好後可刪除本函式。
+// ⚠ 測試對象一律「從 Sheet 現有第一列讀出來」,不寫死 —— 寫死的 uid 只要和實際值差一個字元
+//   (實際資料是 U001,不是 U-001)就會回報 no_row,把「診斷用錯 key」誤判成「寫入壞掉」。
 function debugLastLogin() {
-  var uid = 'U-001', email = 'bingjun.cai@gmail.com'; // 需要的話改成你要測的帳號
-  Logger.log('== debugLastLogin 開始:寫入 ' + uid + ' / ' + email + ' ==');
-  var ok = setLastLogin_(uid, email);
-  Logger.log('setLastLogin_ 回傳 = ' + ok + '(true=寫入成功)');
+  Logger.log('== debugLastLogin 開始(BUILD=' + BUILD + ')==');
+  var uid = '', email = '';
+  try {
+    var sh0 = accountsSheet_();
+    var d0 = sh0.getDataRange().getValues();
+    if (d0.length < 2) { Logger.log('user_account 沒有資料列 → 無從測試'); return; }
+    var h0 = d0[0].map(function (h) { return String(h).trim(); });
+    uid = String(d0[1][h0.indexOf('user_id')] || '').trim();
+    email = String(d0[1][h0.indexOf('email')] || '').trim();
+    Logger.log('表頭 = [' + h0.join(',') + ']');
+    Logger.log('測試對象(第一列)= user_id "' + uid + '" / email "' + email + '"');
+  } catch (e) { Logger.log('讀取 user_account 失敗:' + e); return; }
+  var res = setLastLogin_(uid, email);
+  Logger.log('setLastLogin_ = ' + JSON.stringify(res) + '(ok:true=寫入成功;why 為失敗代碼)');
   try {
     var sh = accountsSheet_();
     var data = sh.getDataRange().getValues();
     var head = data[0].map(String);
     var iU = head.indexOf('user_id'), iLL = head.indexOf('last_login');
-    var found = false;
     for (var r = 1; r < data.length; r++) {
-      if (String(data[r][iU]).trim() === uid) { Logger.log('寫入後讀回 last_login = "' + data[r][iLL] + '"(應為現在時間)'); found = true; break; }
+      if (String(data[r][iU]).trim() === uid) { Logger.log('寫入後讀回 last_login = "' + data[r][iLL] + '"(應為現在時間)'); break; }
     }
-    if (!found) Logger.log('讀回:user_account 找不到 ' + uid + ' 這一列');
-  } catch (e) { Logger.log('讀回失敗:' + e); }
-  Logger.log('== debugLastLogin 結束(若回傳 false,上面會有 setLastLogin_ 的錯誤原因)==');
+  } catch (e2) { Logger.log('讀回失敗:' + e2); }
+  Logger.log('== debugLastLogin 結束 ==');
 }
 
 function findAccount_(email) {
@@ -665,10 +684,11 @@ function login_(credential) {
   sessionStart_(sid, String(acc.user_id || ''), email, nowMs);
   // last_login:改用 setLastLogin_ —— 重找該帳號列(不信可能過期的 acc._row)+ 失敗會 logErr_ 不靜默。
   //   原 inline 寫入在 session 功能上線後靜默失敗(數週看不見),本 case 的根因。session/audit 用 append 才一直正常。
-  setLastLogin_(String(acc.user_id || ''), email);
+  var ll = setLastLogin_(String(acc.user_id || ''), email);
   appendAudit_('login', String(acc.user_id || ''), email, sid, ''); // 稽核:登入(append-only,後端專用)。session_id 用 sid(非 live token)→ 與 session 分頁可 join
   var role = String(acc.role || '');
-  return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: role, location_ids: String(acc.location_ids || ''), perms: permsOf_(role), expires_in: 21600 };
+  // build / ll:診斷用回傳(前端 console)。build 證明 /exec 供的是哪一版程式碼;ll 是這次 last_login 寫入的結果/失敗代碼。
+  return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: role, location_ids: String(acc.location_ids || ''), perms: permsOf_(role), expires_in: 21600, build: BUILD, ll: (ll && ll.ok ? 'ok' : (ll && ll.why) || 'unknown') };
 }
 
 // ─── 讀取:GET ?action=list&sheet=ingredient&token=… ───
@@ -776,7 +796,7 @@ function doGet(e) {
     sess = resolveSess_(e && e.parameter && e.parameter.token);
     if (!sess) return json_({ ok: false, error: 'unauthorized' });
   }
-  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role), caps: CAPS, ver: SCHEMA_SIG } : { ok: true, role: '', msg: '後端未啟用登入', caps: CAPS, ver: SCHEMA_SIG });
+  if (action === 'whoami') return json_(sess ? { ok: true, email: sess.email, name: sess.name, role: sess.role, location_ids: sess.locs, perms: permsOf_(sess.role), caps: CAPS, ver: SCHEMA_SIG, build: BUILD } : { ok: true, role: '', msg: '後端未啟用登入', caps: CAPS, ver: SCHEMA_SIG, build: BUILD });
   // 輕量版號輪詢:只回「主同步表(SYNC_TABLES)」各自 rev(整數),不讀任何資料 → 前端可低成本定期輪詢偵測「有人改過」
   //   (含 super_admin 直接改 Sheet,靠安裝的觸發器 bump)。單一 property store 讀取;未寫過的表回 0(給前端完整可 diff 的 map)。
   //   只含 SYNC_TABLES(略過 user_account/role_permission,那兩張前端另以 loadAccounts 處理)。整數版號無敏感資訊,故不做 scope/role 過濾(仍需有效 token)。
