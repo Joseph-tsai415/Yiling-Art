@@ -599,6 +599,29 @@ function setLastLogin_(userId, email) {
   }
 }
 
+// ── 診斷:在 Apps Script 編輯器直接 Run 這個函式(不需走登入流程、以擁有者身分執行)──
+//   即時測試 last_login 寫入能不能成功;結果與真正的失敗原因(受保護範圍 / 權限 / 找不到列…)都印在「執行紀錄」。
+//   用途:分辨「寫入本身壞了」還是「部署版本沒更新 / Web App 以存取者身分執行導致無權寫 user_account」。
+//   確認 last_login 修好後可刪除本函式。
+function debugLastLogin() {
+  var uid = 'U-001', email = 'bingjun.cai@gmail.com'; // 需要的話改成你要測的帳號
+  Logger.log('== debugLastLogin 開始:寫入 ' + uid + ' / ' + email + ' ==');
+  var ok = setLastLogin_(uid, email);
+  Logger.log('setLastLogin_ 回傳 = ' + ok + '(true=寫入成功)');
+  try {
+    var sh = accountsSheet_();
+    var data = sh.getDataRange().getValues();
+    var head = data[0].map(String);
+    var iU = head.indexOf('user_id'), iLL = head.indexOf('last_login');
+    var found = false;
+    for (var r = 1; r < data.length; r++) {
+      if (String(data[r][iU]).trim() === uid) { Logger.log('寫入後讀回 last_login = "' + data[r][iLL] + '"(應為現在時間)'); found = true; break; }
+    }
+    if (!found) Logger.log('讀回:user_account 找不到 ' + uid + ' 這一列');
+  } catch (e) { Logger.log('讀回失敗:' + e); }
+  Logger.log('== debugLastLogin 結束(若回傳 false,上面會有 setLastLogin_ 的錯誤原因)==');
+}
+
 function findAccount_(email) {
   var data = accountsSheet_().getDataRange().getValues();
   if (data.length < 2) return null;
