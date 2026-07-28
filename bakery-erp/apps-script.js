@@ -555,6 +555,50 @@ function sessionFinalizeStale_(sh, userId, email) {
   } catch (err) { }
 }
 
+// 例外記錄(兩種 runtime 都安全):V8 有 console、Rhino 只有 Logger —— 各自包 try,
+//   避免「記錄失敗」反而把呼叫端的 catch 再炸一次。
+function logErr_(msg) {
+  try { console.error(msg); } catch (e1) { }
+  try { Logger.log(msg); } catch (e2) { }
+}
+// last_login 寫回 user_account —— 後端唯一「更新既有列」的登入寫入,故不共用 findAccount_ 的快照:
+//   ① 列:寫入前重新讀一次 user_id(或 email)欄定位,不信可能過期的 acc._row(前端整表 replace 會重排列序);
+//   ② 欄:索引取自「Sheet 自己的表頭」而非 TABLES 常數 —— 若有人在 Sheet 手動插欄,常數索引會靜靜寫到隔壁欄(created_at)。
+//   ③ 以文字寫入 dd/MM/yyyy HH:mm:ss(setNumberFormat('@') 先於 setValue):防 Sheets 轉 Date 後 list 讀取時分秒遺失。
+//   ④ flush() 立即落盤 → 寫入若被拒(受保護範圍等)就在這裡丟例外,不會等到請求結束才無聲消失。
+//   ⑤ 失敗一律 logErr_ —— 舊版是 `catch (err) { }` 靜默吞掉,導致這個寫入壞掉數週都看不見(本 case 的根因之所以難查)。
+// 回傳 true/false;任何失敗都不影響登入主流程。
+function setLastLogin_(userId, email) {
+  try {
+    var sh = accountsSheet_();
+    var last = sh.getLastRow(), lastCol = sh.getLastColumn();
+    if (last < 2 || lastCol < 1) { logErr_('setLastLogin_: user_account 無資料列 (rows=' + last + ', cols=' + lastCol + ')'); return false; }
+    var head = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
+    var iLL = head.indexOf('last_login'), iUid = head.indexOf('user_id'), iEmail = head.indexOf('email');
+    if (iLL < 0) { logErr_('setLastLogin_: user_account 表頭找不到 last_login 欄 [' + head.join(',') + ']'); return false; }
+    var byUid = (iUid >= 0 && String(userId || '') !== '');
+    var keyCol = byUid ? iUid : iEmail;                       // 主鍵 user_id;舊列缺 user_id 才退回 email
+    if (keyCol < 0) { logErr_('setLastLogin_: user_account 表頭找不到 user_id/email 欄 [' + head.join(',') + ']'); return false; }
+    var want = byUid ? String(userId).trim() : String(email || '').trim().toLowerCase();
+    var keys = sh.getRange(2, keyCol + 1, last - 1, 1).getValues();
+    var row = 0;
+    for (var i = 0; i < keys.length; i++) {
+      var v = String(keys[i][0]).trim();
+      if (!byUid) v = v.toLowerCase();
+      if (v === want) { row = i + 2; break; }
+    }
+    if (!row) { logErr_('setLastLogin_: 找不到帳號列 (user_id=' + userId + ', email=' + email + ')'); return false; }
+    var c = sh.getRange(row, iLL + 1);
+    c.setNumberFormat('@');
+    c.setValue(tsText_(new Date()));
+    SpreadsheetApp.flush();
+    return true;
+  } catch (err) {
+    logErr_('setLastLogin_ 寫入失敗: ' + err + ' (user_id=' + userId + ', email=' + email + ')');
+    return false;
+  }
+}
+
 function findAccount_(email) {
   var data = accountsSheet_().getDataRange().getValues();
   if (data.length < 2) return null;
@@ -585,8 +629,7 @@ function login_(credential) {
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
     accountsSheet_().appendRow(['U-001', info.name || '管理員', email, 'super_admin', 'ALL', 'TRUE', now, '']);
     acc = findAccount_(email);
-    // last_login 以「文字」寫入 dd/MM/yyyy HH:mm:ss,避免 Sheets 自動轉成 Date 後 list 讀取被裁成日期(時間遺失)
-    try { var llc = accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1); llc.setNumberFormat('@'); llc.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss')); } catch (err) { }
+    setLastLogin_(String(acc.user_id || ''), email); // last_login:改用重找列 + 記錄錯誤的 setLastLogin_,不倚賴可能過期的 acc._row
   }
   if (!acc || String(acc.active).toUpperCase() !== 'TRUE') return { ok: false, error: 'not_on_list', email: email };
   var token = Utilities.getUuid();
@@ -597,9 +640,9 @@ function login_(credential) {
   CacheService.getScriptCache().put('tok:' + token, JSON.stringify({ email: email, login_ts: nowMs, sid: sid, seen: nowMs }), 21600);
   // session 分頁:此使用者殘留的 active session 先收尾,再開一筆新 session(login 在 doPost ScriptLock 下 → append 不與 revs touch 併發)。
   sessionStart_(sid, String(acc.user_id || ''), email, nowMs);
-  // last_login 以「文字」寫入 dd/MM/yyyy HH:mm:ss:設 setNumberFormat('@') 防 Sheets 轉 Date,
-  // 否則 list 讀取的 (v instanceof Date) 分支會把它裁成 yyyy-MM-dd、時間遺失,super_admin 檢視/存回帳號時就被覆寫。
-  try { var llc = accountsSheet_().getRange(acc._row, TABLES.user_account.indexOf('last_login') + 1); llc.setNumberFormat('@'); llc.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss')); } catch (err) { }
+  // last_login:改用 setLastLogin_ —— 重找該帳號列(不信可能過期的 acc._row)+ 失敗會 logErr_ 不靜默。
+  //   原 inline 寫入在 session 功能上線後靜默失敗(數週看不見),本 case 的根因。session/audit 用 append 才一直正常。
+  setLastLogin_(String(acc.user_id || ''), email);
   appendAudit_('login', String(acc.user_id || ''), email, sid, ''); // 稽核:登入(append-only,後端專用)。session_id 用 sid(非 live token)→ 與 session 分頁可 join
   var role = String(acc.role || '');
   return { ok: true, token: token, name: String(acc.name || info.name || ''), email: email, role: role, location_ids: String(acc.location_ids || ''), perms: permsOf_(role), expires_in: 21600 };
